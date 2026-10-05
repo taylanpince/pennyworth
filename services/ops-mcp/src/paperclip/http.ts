@@ -78,6 +78,13 @@ export class HttpPaperclipApi implements PaperclipApi {
     await this.request("PATCH", `/api/issues/${encodeURIComponent(issueId)}`, { status });
   }
 
+  async runRoutine(title: string): Promise<void> {
+    const routines = await this.request<{ id: string; title: string }[]>("GET", `/api/companies/${this.companyId}/routines`);
+    const routine = routines.find((r) => r.title === title);
+    if (!routine) throw new Error(`routine "${title}" not found`);
+    await this.request("POST", `/api/routines/${routine.id}/run`, { source: "api" });
+  }
+
   async ping(): Promise<boolean> {
     try {
       await this.request("GET", `/api/companies/${this.companyId}/labels`);

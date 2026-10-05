@@ -73,7 +73,12 @@ http.listen(cfg.server.port, cfg.server.host, () => log.info({ port: cfg.server.
 if (app.paperclip) {
   setInterval(() => {
     app.meetings.syncReviews().then(
-      (n) => n && log.info({ applied: n }, "applied review replies"),
+      async (n) => {
+        if (!n) return;
+        log.info({ applied: n }, "applied review replies");
+        // Only an agent run may close the review tasks in Paperclip: start one now.
+        await app.paperclip!.runRoutine(cfg.paperclip.meeting_scan_routine).catch((err) => log.warn({ err: String(err) }, "could not start the meeting scan"));
+      },
       (err) => log.warn({ err: String(err) }, "review sync failed"),
     );
   }, 60_000).unref();

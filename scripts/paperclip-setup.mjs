@@ -213,7 +213,9 @@ function agentBody(key, a) {
     title: a.title ?? null,
     adapterType: "codex_local",
     adapterConfig,
-    runtimeConfig: { heartbeat: { enabled: false, intervalSec: 0, wakeOnDemand: true, maxConcurrentRuns: 1 } },
+    // dispatch: runner → never woken by Paperclip (assignments and comments are handled by
+    // pennyworth-runner on the host instead).
+    runtimeConfig: { heartbeat: { enabled: false, intervalSec: 0, wakeOnDemand: a.dispatch !== "runner", maxConcurrentRuns: 1 } },
     metadata: { setupKey: `pennyworth:${key}` },
   };
 }

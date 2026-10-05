@@ -85,6 +85,8 @@ const PaperclipSchema = z.object({
   //   mine_and_unclear: also actions with no clear owner
   //   all: also other people's actions, as "waiting-on" tasks
   meeting_action_tasks: z.enum(["mine", "mine_and_unclear", "all"]).default("mine"),
+  // Routine started after applying review replies, so the agent closes those tasks promptly.
+  meeting_scan_routine: z.string().default("Meeting scan"),
 });
 
 export const ConfigSchema = z.object({

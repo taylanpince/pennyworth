@@ -32,13 +32,16 @@ async function poll() {
   const now = new Date().toISOString();
   // Overlap the window so comments landing during a poll are never missed (handled IDs dedupe).
   const updatedSince = since ? new Date(Date.parse(since) - 120_000).toISOString() : undefined;
-  const issues = await pc.labelledIssues(cfg.label, updatedSince);
-  for (const issue of issues) await handleIssue(issue).catch((err) => reportError(issue, err));
+  // Tasks labelled "engineer" or assigned to the Engineer agent.
+  const byId = new Map((await pc.labelledIssues(cfg.label, updatedSince)).map((i) => [i.id, i]));
+  const engineer = await pc.engineerAgentId().catch(() => undefined);
+  if (engineer) for (const i of await pc.assignedIssues(engineer, updatedSince)) byId.set(i.id, i);
+  for (const issue of byId.values()) await handleIssue(issue, engineer).catch((err) => reportError(issue, err));
   state.set("last_poll", now);
   drainQueue();
 }
 
-async function handleIssue(issue) {
+async function handleIssue(issue, engineerId) {
   const known = state.task(issue.id);
   const task = known ?? state.ensureTask(issue.id, issue.identifier);
   // Comments written before the runner first saw the task only count if they are recent
@@ -47,7 +50,18 @@ async function handleIssue(issue) {
   const comments = (await pc.comments(issue.id)).filter((c) => Paperclip.isUserInstruction(c) && !state.handled(c.id));
   const fresh = comments.filter((c) => known || Date.parse(c.createdAt) >= horizon);
   for (const c of comments.filter((x) => !fresh.includes(x))) state.markHandled(c.id, issue.id);
-  if (!fresh.length) return;
+  if (!fresh.length) {
+    // Newly assigned to the Engineer without instructions: say what's needed, once.
+    if (engineerId && issue.assigneeAgentId === engineerId && !state.get(`greeted:${issue.id}`) && !running.has(issue.id)) {
+      state.set(`greeted:${issue.id}`, new Date().toISOString());
+      const repos = findRepos(`${issue.title}\n${issue.description ?? ""}`, cfg.allowed_orgs);
+      await pc.comment(
+        issue.id,
+        `Ready. Comment with what you'd like done${repos.length === 1 ? ` (I'll use \`${repos[0].slug}\`)` : ", including a line `repo: org/name`"}. Optional lines: \`mode: implement\`, \`engine: glm\`, \`shells: go,pulumi\`.`,
+      );
+    }
+    return;
+  }
 
   const instructions = [];
   let directives = {};

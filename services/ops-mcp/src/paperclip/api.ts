@@ -28,6 +28,8 @@ export interface PaperclipApi {
   addComment(issueId: string, body: string): Promise<void>;
   setStatus(issueId: string, status: "todo" | "in_progress" | "in_review" | "done" | "cancelled" | "blocked"): Promise<void>;
   ping(): Promise<boolean>;
+  /** Start a run of one of this agent's routines now (by title). */
+  runRoutine(title: string): Promise<void>;
 }
 
 export class PaperclipUnavailableError extends Error {}

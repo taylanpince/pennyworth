@@ -35,6 +35,22 @@ export class Paperclip {
     return this.api("GET", `/api/companies/${this.company}/issues?${q}`);
   }
 
+  /** The Engineer agent (assignment target for coding jobs), if provisioned. */
+  async engineerAgentId() {
+    if (this.engineerId === undefined) {
+      const agents = await this.api("GET", `/api/companies/${this.company}/agents`);
+      const a = agents.find((x) => x.metadata?.setupKey === "pennyworth:engineer" && x.status !== "terminated") ?? agents.find((x) => x.name === "Engineer");
+      this.engineerId = a?.id ?? null;
+    }
+    return this.engineerId ?? undefined;
+  }
+
+  async assignedIssues(agentId, updatedSince) {
+    const q = new URLSearchParams({ assigneeAgentId: agentId, status: "backlog,todo,in_progress,in_review,blocked", limit: "200" });
+    if (updatedSince) q.set("updatedSince", updatedSince);
+    return this.api("GET", `/api/companies/${this.company}/issues?${q}`);
+  }
+
   issue(id) {
     return this.api("GET", `/api/issues/${encodeURIComponent(id)}`);
   }
@@ -58,14 +74,16 @@ export class Paperclip {
     return this.userId;
   }
 
-  /** Mark a task in progress (Paperclip requires an assignee for that: the user). */
+  /**
+   * Mark a task in progress. Paperclip requires an assignee for that: tasks assigned to the
+   * Engineer keep it; anything else is assigned to the user.
+   */
   async startWork(issueId, comment) {
-    return this.api("PATCH", `/api/issues/${encodeURIComponent(issueId)}`, {
-      status: "in_progress",
-      assigneeUserId: await this.me(),
-      assigneeAgentId: null,
-      comment: `${comment}\n\n${RUNNER_MARKER}`,
-    });
+    const issue = await this.issue(issueId);
+    const engineer = await this.engineerAgentId();
+    const body = { status: "in_progress", comment: `${comment}\n\n${RUNNER_MARKER}` };
+    if (!(engineer && issue.assigneeAgentId === engineer)) Object.assign(body, { assigneeUserId: await this.me(), assigneeAgentId: null });
+    return this.api("PATCH", `/api/issues/${encodeURIComponent(issueId)}`, body);
   }
 
   setStatus(issueId, status, comment) {

@@ -53,6 +53,10 @@ export class FakePaperclip implements PaperclipApi {
   async ping(): Promise<boolean> {
     return this.up;
   }
+  routineRuns: string[] = [];
+  async runRoutine(title: string): Promise<void> {
+    this.routineRuns.push(title);
+  }
   byLabel(label: string): (IssueRef & { input: CreateIssueInput })[] {
     return [...this.issues.values()].filter((i) => i.input.labels.includes(label));
   }

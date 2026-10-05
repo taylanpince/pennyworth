@@ -144,7 +144,7 @@ Each agent sees only the MCP servers and tools listed for it in `config/papercli
 
 Comment on a task and the work happens in a repository on this machine, the way you'd run Codex in a terminal tab, but tracked in Paperclip.
 
-1. Add the label **engineer** to a task.
+1. Assign the task to **Engineer**, or add the label **engineer**. If you assign it without instructions, it replies "Ready" and tells you what it needs.
 2. Comment with what you want. Optional `key: value` lines anywhere in the comment control the run:
 
    ```text

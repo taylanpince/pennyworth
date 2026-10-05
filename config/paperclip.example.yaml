@@ -99,6 +99,15 @@ agents:
     enabled_tools:
       paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status]
 
+  engineer:
+    name: Engineer
+    title: Coding jobs on this machine (pennyworth-runner)
+    instructions: config/agents/engineer.md
+    adapter: codex_local
+    # Assignment target only: Paperclip never wakes it; the host runner does the work.
+    dispatch: runner
+    mcp_servers: []
+
 routines:
   meeting-scan:
     title: Meeting scan
