@@ -184,8 +184,21 @@ async function ensureLabels(companyId) {
 
 function agentBody(key, a) {
   if (a.adapter !== "codex_local") fail(`agent ${key}: only codex_local agents receive Paperclip tool connections`);
-  const extraArgs = cfg.codex_args ?? ["--sandbox", "read-only"];
-  if (!extraArgs.includes("--sandbox")) fail("codex_args must include --sandbox (never run agents without Codex's sandbox)");
+  const base = cfg.codex_args ?? ["--sandbox", "read-only"];
+  if (!base.includes("--sandbox")) fail("codex_args must include --sandbox (never run agents without Codex's sandbox)");
+  // Per-agent tool scoping: every MCP server in the shared Codex config is disabled
+  // for this agent unless listed in its mcp_servers; enabled_tools narrows further.
+  const allowed = a.mcp_servers;
+  if (!Array.isArray(allowed)) fail(`agent ${key}: mcp_servers must list the MCP servers it may use`);
+  const known = Object.keys(cfg.mcp_servers ?? {});
+  for (const n of allowed) if (!known.includes(n)) fail(`agent ${key}: unknown MCP server ${n}`);
+  const scoping = [];
+  for (const n of known) if (!allowed.includes(n)) scoping.push("-c", `mcp_servers.${n}.enabled=false`);
+  for (const [n, tools] of Object.entries(a.enabled_tools ?? {})) {
+    if (!allowed.includes(n)) fail(`agent ${key}: enabled_tools for ${n}, which is not in its mcp_servers`);
+    scoping.push("-c", `mcp_servers.${n}.enabled_tools=${JSON.stringify(tools)}`);
+  }
+  const extraArgs = [...base, ...scoping];
   const adapterConfig = {
     engine: "cli",
     dangerouslyBypassApprovalsAndSandbox: false,

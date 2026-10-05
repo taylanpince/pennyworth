@@ -11,6 +11,7 @@ labels:
   - { name: waiting-on, color: "#7c3aed" }
   - { name: system-error, color: "#dc2626" }
   - { name: daily-brief, color: "#059669" }
+  - { name: todo, color: "#0891b2" }
 
 # MCP servers given to Codex agents directly through the shared Codex config
 # (/paperclip/.codex/config.toml). Not registered as Paperclip Tool Connections: the
@@ -64,6 +65,22 @@ agents:
     model: ""                  # empty = Paperclip's Codex default
     reasoning_effort: medium
     timeout_sec: 1800
+    # Only these MCP servers (and tools) are visible to this agent.
+    mcp_servers: [ops_mcp, google_workspace, paperclip_tasks]
+    enabled_tools:
+      paperclip_tasks: [task_current, task_get, task_comment, task_set_status]
+
+  chief-of-staff:
+    name: Chief of Staff
+    title: Daily attention brief
+    instructions: config/agents/chief-of-staff.md
+    adapter: codex_local
+    model: ""
+    reasoning_effort: medium
+    timeout_sec: 1200
+    mcp_servers: [google_workspace, paperclip_tasks]
+    enabled_tools:
+      google_workspace: [calendar_list_events, calendar_get_event]
 
 routines:
   meeting-scan:
@@ -79,3 +96,14 @@ routines:
     schedules:
       # Backstop for missed file events, review decisions and Drive documents.
       - { cron: "*/15 8-20 * * 1-5", timezone: Europe/Madrid, label: "work hours" }
+
+  daily-brief:
+    title: Prepare daily brief
+    agent: chief-of-staff
+    description: |
+      Today is {{date}}. Prepare today's daily brief following your instructions: gather open tasks and
+      today's calendar, create or update today's "Daily Brief" task, close yesterday's,
+      then close this task with a one-line summary.
+    concurrency: skip_if_active
+    schedules:
+      - { cron: "30 8 * * 1-5", timezone: Europe/Madrid, label: "weekday morning" }

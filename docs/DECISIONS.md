@@ -101,7 +101,7 @@ Also:
   Each entry has `default_tools_approval_mode = "approve"`. Bearer tokens come from env vars set from secret files at container start, and never appear in config.
 - **Cost:**
   - Paperclip's per-tool policies and tool-call audit UI don't cover these servers. ops-mcp's own run log (`processing_runs`, structured logs with run IDs) is the audit trail.
-  - All Codex agents in this Paperclip instance see the same servers. Phase 3 agents need per-agent scoping, via a per-agent `CODEX_HOME` with its own config.
+  - Per-agent scoping is done with Codex config overrides in each agent's arguments. `mcp_servers.<name>.enabled=false` covers servers the agent isn't granted, and `mcp_servers.<name>.enabled_tools=[…]` narrows the tool list. Both come from `mcp_servers` / `enabled_tools` in `config/paperclip.yaml`. Paperclip's API shows these arguments as `***REDACTED***`, but they are stored and applied intact (verified in the database and in runs).
 - **Revisit:** when Paperclip's gateway forwards annotations.
 
 ## D-9: Google access: own read-only sidecar, native connector optional
@@ -126,3 +126,15 @@ Also:
 ## D-11: Security approval
 
 The AI Tool Hub page lists Paperclip as "Security team only". The user cleared using it with the Security team lead, who runs Paperclip himself, before implementation started (2026-10-04).
+
+## D-12: Todo list = Paperclip tasks
+
+- **Decision:** there is no separate todo store. Your todos are Paperclip tasks:
+  - manual items get the `todo` label;
+  - meeting actions get `meeting-action`;
+  - priority is Paperclip's priority field.
+- **Interfaces:**
+  - `scripts/todo.mjs`, which acts as you through the board key;
+  - the Paperclip UI;
+  - the Chief of Staff's daily brief, which ranks items and suggests changes but never edits your tasks.
+- **Supporting tool:** `task_create` in the paperclip-tasks bridge is idempotent by marker (Paperclip `idempotencyKey`), so re-running the brief updates "Daily Brief — <date>" instead of creating a second one.

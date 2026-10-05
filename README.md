@@ -37,6 +37,7 @@ host (NixOS)
 | Backup / restore | `scripts/backup.sh` / `scripts/restore.sh <archive>` (restore refuses while running) |
 | Re-apply Paperclip config | `node scripts/paperclip-setup.mjs` (idempotent) |
 | Wake the Meeting Librarian now | `scripts/trigger-meeting-scan.sh` |
+| Your todo list | `scripts/todo.mjs` (see [Todo list](#todo-list)) |
 | Logs | `docker compose logs -f ops-mcp` (structured; no transcript text, no secrets) |
 | Tests | `npm test --prefix services/ops-mcp` and `npm test --prefix services/google-workspace-mcp` |
 
@@ -110,6 +111,32 @@ Comment on the task in Paperclip, then wait for the next scan, or click **Run no
 ### Routing rules
 
 Edit `config/routing.yaml` (examples inside). Explicit regex rules always win. Targets must be existing notes in the mounted vault folders.
+
+## Todo list
+
+Your todo list lives in Paperclip. It contains your own items (label `todo`) plus action items from meetings (`meeting-action`). The Chief of Staff ranks it every weekday at 08:30 in the **Daily Brief** task. It only *suggests* priority changes; you decide.
+
+```sh
+todo                                 # open todos + meeting actions, by priority
+todo add "Draft OMS roadmap" -p high -n "for Thursday's review"
+todo prio PEN-12 critical            # critical | high | medium | low
+todo done PEN-12 "sent to Alice"
+todo show PEN-12
+todo waiting                         # what other people owe you
+todo brief                           # today's daily brief
+todo --all                           # include reviews and briefs
+```
+
+`todo` is `scripts/todo.mjs`; alias or symlink it onto your PATH. You can also add and edit tasks in the Paperclip UI. Give them the `todo` label so they show up here and in the brief.
+
+## Agents
+
+| Agent | Runs | Can use |
+|---|---|---|
+| Meeting Librarian | file watcher + every 15 min, weekdays 08–20 | ops-mcp; Calendar/Drive read; close or comment on its own tasks |
+| Chief of Staff | weekdays 08:30 → "Daily Brief — date" | Calendar read (list/get events only); Paperclip task list/create/update |
+
+Each agent sees only the MCP servers and tools listed for it in `config/paperclip.yaml` (`mcp_servers`, `enabled_tools`). Everything else is disabled in its Codex arguments. Run a routine on demand with "Run now" in Paperclip.
 
 ## Google
 

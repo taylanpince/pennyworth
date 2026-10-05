@@ -35,9 +35,32 @@ const brief = (i) => ({
   identifier: i.identifier,
   title: i.title,
   status: i.status,
+  priority: i.priority,
   labels: (i.labels ?? []).map((l) => l.name),
+  assignee: i.assigneeAgentId ? "agent" : i.assigneeUserId ? "user" : null,
+  createdAt: i.createdAt,
   updatedAt: i.updatedAt,
 });
+
+const PRIORITIES = ["critical", "high", "medium", "low"];
+const OPEN_STATUSES = "backlog,todo,in_progress,in_review,blocked";
+
+let labelCache;
+async function labelIds(names) {
+  if (!COMPANY) throw new Error("PAPERCLIP_COMPANY_ID not set");
+  labelCache ??= new Map((await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/labels`)).map((l) => [l.name, l.id]));
+  return names.map((n) => {
+    const id = labelCache.get(n);
+    if (!id) throw new Error(`unknown label "${n}" (labels are created by scripts/paperclip-setup.mjs)`);
+    return id;
+  });
+}
+
+// Marker → idempotency key, mirroring ops-mcp, so re-runs never duplicate tasks.
+async function idempotencyKey(marker) {
+  const { createHash } = await import("node:crypto");
+  return `pw-${createHash("sha256").update(marker).digest("hex").slice(0, 32)}`;
+}
 
 const issueRef = (v) => {
   const s = String(v ?? "").trim();
@@ -80,6 +103,88 @@ const TOOLS = {
       if (status) q.set("status", String(status));
       const list = await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/issues?${q}`);
       return { tasks: list.map(brief) };
+    },
+  },
+  task_list: {
+    description: "List Paperclip tasks, newest first. Defaults to open tasks (backlog, todo, in_progress, in_review, blocked). Routine run tasks are excluded.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        status: { type: "string", description: "comma-separated statuses; default: all open statuses" },
+        label: { type: "string", description: "only tasks with this label name" },
+        updated_since: { type: "string", description: "ISO-8601; only tasks updated after this" },
+        limit: { type: "number", description: "default 100, max 200" },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+    run: async ({ status, label, updated_since, limit }) => {
+      if (!COMPANY) throw new Error("PAPERCLIP_COMPANY_ID not set");
+      const q = new URLSearchParams({ status: String(status || OPEN_STATUSES), limit: String(Math.min(Number(limit) || 100, 200)), excludeRoutineExecutions: "true" });
+      if (label) q.set("labelId", (await labelIds([String(label)]))[0]);
+      if (updated_since) q.set("updatedSince", String(updated_since));
+      const list = await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/issues?${q}`);
+      return { tasks: list.map(brief) };
+    },
+  },
+  task_create: {
+    description:
+      "Create a Paperclip task, idempotently: the same marker always returns the same task (deduplicated: true) instead of creating another. Put the source and reason in the description.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        description: { type: "string", description: "markdown" },
+        marker: { type: "string", description: "stable dedup key, e.g. brief:2026-10-05 or source:gmail:thread:<id>" },
+        labels: { type: "array", items: { type: "string" } },
+        priority: { type: "string", enum: PRIORITIES },
+      },
+      required: ["title", "description", "marker"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: async ({ title, description, marker, labels, priority }) => {
+      if (!COMPANY) throw new Error("PAPERCLIP_COMPANY_ID not set");
+      const m = String(marker).trim();
+      if (!/^[A-Za-z0-9:._\/-]{3,200}$/.test(m)) throw new Error("invalid marker");
+      const body = {
+        title: String(title).slice(0, 200),
+        description: `${String(description).replace(/<!--|-->/g, "").slice(0, 60_000)}\n\n<!-- source:${m} -->`,
+        status: "todo",
+        priority: PRIORITIES.includes(priority) ? priority : "medium",
+        labelIds: await labelIds(labels ?? []),
+        idempotencyKey: await idempotencyKey(m),
+        allowDuplicate: true,
+      };
+      const i = await api("POST", `/api/companies/${encodeURIComponent(COMPANY)}/issues`, body);
+      return { ...brief(i), deduplicated: Boolean(i.deduplicated) };
+    },
+  },
+  task_update: {
+    description: "Update a Paperclip task's title, description or priority (e.g. refresh today's brief). The source marker is preserved.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        issue: { type: "string" },
+        title: { type: "string" },
+        description: { type: "string" },
+        priority: { type: "string", enum: PRIORITIES },
+      },
+      required: ["issue"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: async ({ issue, title, description, priority }) => {
+      const body = {};
+      if (title) body.title = String(title).slice(0, 200);
+      if (priority && PRIORITIES.includes(priority)) body.priority = priority;
+      if (description !== undefined) {
+        const current = await api("GET", `/api/issues/${issueRef(issue)}`);
+        const marker = /<!-- source:[^>]*-->/.exec(current.description ?? "")?.[0];
+        body.description = String(description).replace(/<!--|-->/g, "").slice(0, 60_000) + (marker ? `\n\n${marker}` : "");
+      }
+      if (!Object.keys(body).length) throw new Error("nothing to update");
+      return brief(await api("PATCH", `/api/issues/${issueRef(issue)}`, body));
     },
   },
   task_comment: {
