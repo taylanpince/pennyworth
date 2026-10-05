@@ -37,6 +37,7 @@ if echo "$g_health" | grep -q '"ok":true'; then
   # Harmless read: list today's events (count only).
   token="$(cat "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/google_mcp_token" 2>/dev/null)"
   dc cp scripts/dev/mcp-call.mjs paperclip:/tmp/mcp-call.mjs >/dev/null 2>&1
+  check "gmail read (1 message)" sh -c "docker compose --env-file '$env_file' exec -T paperclip node /tmp/mcp-call.mjs http://google-workspace-mcp:8081/mcp gmail_search '{\"query\":\"in:inbox\",\"max_results\":1}' '$token' >/dev/null"
   check "google calendar read" sh -c "docker compose --env-file '$env_file' exec -T paperclip node /tmp/mcp-call.mjs http://google-workspace-mcp:8081/mcp calendar_list_events '{\"start\":\"$(date -u +%Y-%m-%dT00:00:00Z)\",\"end\":\"$(date -u +%Y-%m-%dT23:59:59Z)\",\"max_results\":5}' '$token' >/dev/null"
 else
   printf '  skip  google workspace (not connected: %s)\n' "$(echo "$g_health" | cut -c1-80)"

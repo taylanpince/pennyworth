@@ -11,6 +11,7 @@ import { createServer } from "node:http";
 const SCOPES = [
   "https://www.googleapis.com/auth/calendar.events.readonly",
   "https://www.googleapis.com/auth/drive.readonly",
+  "https://www.googleapis.com/auth/gmail.readonly",
 ];
 
 const [clientFile, outFile] = process.argv.slice(2);

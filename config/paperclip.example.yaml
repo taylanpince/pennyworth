@@ -99,6 +99,19 @@ agents:
     enabled_tools:
       paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status]
 
+  inbox-agent:
+    name: Inbox Agent
+    title: Email that needs you
+    instructions: config/agents/inbox-agent.md
+    adapter: codex_local
+    model: ""
+    reasoning_effort: medium
+    timeout_sec: 1200
+    mcp_servers: [google_workspace, paperclip_tasks]
+    enabled_tools:
+      google_workspace: [gmail_search, gmail_read_thread]
+      paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status]
+
   assistant:
     name: Assistant
     title: Research, drafts and acting on your task replies
@@ -110,7 +123,7 @@ agents:
     mcp_servers: [slack, google_workspace, paperclip_tasks, ops_mcp]
     enabled_tools:
       ops_mcp: [obsidian_search, obsidian_read, obsidian_read_document_map, meeting_note_correct]
-      google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event]
+      google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
 
   engineer:
     name: Engineer
@@ -166,3 +179,14 @@ routines:
       Process replies on: {{tasks}}
       Follow "B. Processing the user's replies" in your instructions.
     concurrency: always_enqueue
+
+  inbox-scan:
+    title: Inbox scan
+    agent: inbox-agent
+    description: |
+      Today is {{date}}. Your user's email address is you@example.com. Follow your instructions:
+      find email that needs the user, create or update tasks (deduplicated), close tasks
+      already answered, then close this task with a count summary.
+    concurrency: skip_if_active
+    schedules:
+      - { cron: "0 8-19 * * 1-5", timezone: Europe/Madrid, label: "work hours" }

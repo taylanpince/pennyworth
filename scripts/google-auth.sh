@@ -2,7 +2,7 @@
 # One-time read-only Google consent for the google-workspace-mcp sidecar.
 #
 #   scripts/google-auth.sh ~/Downloads/client_secret_XXXX.json
-#   scripts/google-auth.sh            (prompts for client ID and secret instead)
+#   scripts/google-auth.sh            (reuses the client on file, or prompts for client ID and secret)
 #
 # Needs a "Desktop app" OAuth client from a Google Cloud project with the Calendar API
 # and Drive API enabled. Requests only calendar.events.readonly and drive.readonly.
@@ -13,6 +13,14 @@ env_file="${PENNYWORTH_ENV_FILE:-.env}"
 set -a; . "$env_file"; set +a
 out="$PENNYWORTH_SECRETS_DIR/google_oauth.json"
 client="${1:-}"
+if [ -z "$client" ] && [ -s "$out" ] && node -e 'const j=require(process.argv[1]);process.exit(j.client_id?0:1)' "$out" 2>/dev/null; then
+  # Re-consent (e.g. after new scopes were added) with the client already on file.
+  umask 077
+  client="$(mktemp "$PENNYWORTH_SECRETS_DIR/.client.XXXXXX")"
+  trap 'rm -f "$client"' EXIT
+  node -e 'const j=require(process.argv[1]);console.log(JSON.stringify({installed:{client_id:j.client_id,client_secret:j.client_secret}}))' "$out" > "$client"
+  echo "Reusing the OAuth client from $out"
+fi
 if [ -z "$client" ]; then
   # No JSON download available: build the client file from prompts (secret not echoed).
   read -r -p "OAuth client ID: " client_id

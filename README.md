@@ -136,6 +136,7 @@ todo --all                           # include reviews and briefs
 | Meeting Librarian | file watcher + every 15 min, weekdays 08–20 | ops-mcp; Calendar/Drive read; close or comment on its own tasks |
 | Chief of Staff | weekdays 08:30 → "Daily Brief — date" | Calendar read (list/get events only); Paperclip task list/create/update |
 | Slack Scout | every 30 min, weekdays 08–20 | Slack read/search only; Paperclip task search/create/update/close |
+| Inbox Agent | hourly, weekdays 08–19 | Gmail read/search only; Paperclip task search/create/update/close |
 | Assistant | when assigned, and on your task replies | Slack/Docs/Drive/Calendar read; notes read + meeting-note corrections; Paperclip tasks incl. hand-back |
 | pennyworth-runner (host service, not a Paperclip agent) | your comments on `engineer` tasks | Codex/OpenRouter in its own git worktrees, as you; read-only gh; no pushes except your `push`/`pr` |
 
@@ -234,7 +235,7 @@ Pennyworth uses its own read-only sidecar (`services/google-workspace-mcp`). Pap
 1. In a Google Cloud project under your Workspace account, enable the **Google Calendar API** and the **Google Drive API**.
 2. Configure the OAuth consent screen as *Internal* if your Workspace allows it.
 3. Create an OAuth client of type **Desktop app** and download its JSON.
-4. Run `scripts/google-auth.sh <that json>` (or `scripts/google-auth.sh` with no argument to paste the client ID and secret instead) and approve in the browser. The only scopes requested are `calendar.events.readonly` and `drive.readonly`. The refresh token goes to `~/.config/pennyworth/google_oauth.json` (0600) and is mounted into the sidecar only.
+4. Enable the **Gmail API** and **Google Docs API** too. Run `scripts/google-auth.sh <that json>` (or `scripts/google-auth.sh` with no argument to paste the client ID and secret instead) and approve in the browser. The only scopes requested are `calendar.events.readonly`, `drive.readonly` and `gmail.readonly`. Re-run `scripts/google-auth.sh` without arguments after scopes change; it reuses the client on file. The refresh token goes to `~/.config/pennyworth/google_oauth.json` (0600) and is mounted into the sidecar only.
 
 If Workspace policy blocks the consent, nothing else breaks: matching reports "calendar unavailable" and sources stay pending. Do not weaken Workspace settings to work around it.
 

@@ -155,6 +155,55 @@ export class Workspace {
     };
   }
 
+  /** Gmail search (Gmail query syntax). Returns message metadata, newest first. */
+  async gmailSearch(query: string, max = 20): Promise<Record<string, unknown>[]> {
+    const list = await this.g.get<{ messages?: { id: string; threadId: string }[] }>("https://gmail.googleapis.com/gmail/v1/users/me/messages", { q: query, maxResults: Math.min(50, max) });
+    const out: Record<string, unknown>[] = [];
+    for (const { id } of list.messages ?? []) {
+      const full = await this.g.get<GmailMessage>(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(id)}`, { format: "metadata" });
+      out.push({
+        id: full.id,
+        thread_id: full.threadId,
+        from: header(full, "From"),
+        to: header(full, "To"),
+        cc: header(full, "Cc"),
+        subject: header(full, "Subject"),
+        date: full.internalDate ? new Date(Number(full.internalDate)).toISOString() : header(full, "Date"),
+        labels: full.labelIds ?? [],
+        snippet: full.snippet,
+        link: `https://mail.google.com/mail/u/0/#all/${full.threadId}`,
+      });
+    }
+    return out;
+  }
+
+  /** A whole thread as text, oldest first; message bodies truncated. */
+  async gmailThread(id: string, maxCharsPerMessage = 6000): Promise<Record<string, unknown>> {
+    const t = await this.g.get<{ id: string; messages?: GmailMessage[] }>(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(id)}`, { format: "full" });
+    const profile = await this.g.get<{ emailAddress: string }>("https://gmail.googleapis.com/gmail/v1/users/me/profile");
+    return {
+      thread_id: t.id,
+      me: profile.emailAddress,
+      link: `https://mail.google.com/mail/u/0/#all/${t.id}`,
+      messages: (t.messages ?? []).map((m) => {
+        const text = messageText(m.payload);
+        return {
+          id: m.id,
+          from: header(m, "From"),
+          to: header(m, "To"),
+          cc: header(m, "Cc"),
+          subject: header(m, "Subject"),
+          date: m.internalDate ? new Date(Number(m.internalDate)).toISOString() : header(m, "Date"),
+          labels: m.labelIds ?? [],
+          from_me: (m.labelIds ?? []).includes("SENT"),
+          attachments: attachments(m.payload),
+          text: text.slice(0, maxCharsPerMessage),
+          truncated: text.length > maxCharsPerMessage,
+        };
+      }),
+    };
+  }
+
   async readFile(id: string, maxChars = 400_000): Promise<{ file: DriveFile; text: string; truncated: boolean }> {
     const file = await this.g.get<DriveFile>(`${DRIVE}/files/${encodeURIComponent(id)}`, {
       fields: "id,name,mimeType,modifiedTime,createdTime,version,webViewLink,size",
@@ -170,6 +219,42 @@ export class Workspace {
     }
     return { file, text: result.text.slice(0, maxChars), truncated: result.truncated || result.text.length > maxChars };
   }
+}
+
+// ---------------------------------------------------------------- Gmail (read-only)
+
+interface GmailPart { mimeType?: string; filename?: string; body?: { data?: string; size?: number }; parts?: GmailPart[]; headers?: { name: string; value: string }[] }
+interface GmailMessage { id: string; threadId: string; labelIds?: string[]; snippet?: string; internalDate?: string; payload?: GmailPart }
+
+const header = (m: GmailMessage, name: string) => m.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value;
+
+const b64url = (data: string) => Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+
+/** Plain-text body of a message: text/plain preferred, else HTML with tags stripped. */
+export function messageText(part: GmailPart | undefined): string {
+  if (!part) return "";
+  const walk = (p: GmailPart, type: string): string | undefined => {
+    if (p.mimeType === type && p.body?.data) return b64url(p.body.data);
+    for (const c of p.parts ?? []) {
+      const t = walk(c, type);
+      if (t) return t;
+    }
+    return undefined;
+  };
+  const plain = walk(part, "text/plain");
+  if (plain) return plain;
+  const html = walk(part, "text/html");
+  return html ? html.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, "").replace(/<br\s*\/?>|<\/p>|<\/div>/gi, "\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\n{3,}/g, "\n\n") : "";
+}
+
+function attachments(part: GmailPart | undefined): string[] {
+  const out: string[] = [];
+  const walk = (p: GmailPart) => {
+    if (p.filename) out.push(p.filename);
+    for (const c of p.parts ?? []) walk(c);
+  };
+  if (part) walk(part);
+  return out;
 }
 
 // ---------------------------------------------------------------- Google Docs (tabs)

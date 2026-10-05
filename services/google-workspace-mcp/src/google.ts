@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 export const SCOPES = [
   "https://www.googleapis.com/auth/calendar.events.readonly",
   "https://www.googleapis.com/auth/drive.readonly",
+  "https://www.googleapis.com/auth/gmail.readonly",
 ];
 
 export interface StoredCredentials {

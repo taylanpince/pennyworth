@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SCOPES } from "../src/google.js";
-import { docIdFrom, docsBodyToMarkdown, escapeQ, normalizeEvent } from "../src/workspace.js";
+import { docIdFrom, docsBodyToMarkdown, escapeQ, messageText, normalizeEvent } from "../src/workspace.js";
 
 describe("google-workspace-mcp", () => {
   it("requests read-only scopes only", () => {
@@ -42,6 +42,12 @@ describe("google-workspace-mcp", () => {
       { table: { tableRows: [{ tableCells: [{ content: [{ paragraph: { elements: [{ textRun: { content: "Owner\n" } }] } }] }, { content: [{ paragraph: { elements: [{ textRun: { content: "Item\n" } }] } }] }] }] } },
     ]);
     expect(md).toBe("## Agenda 2026-10-05\n- Mainnet checks\n  - Carlos\n| Owner | Item |");
+  });
+
+  it("extracts Gmail message text (plain preferred, HTML fallback)", () => {
+    const enc = (s: string) => Buffer.from(s).toString("base64url");
+    expect(messageText({ mimeType: "multipart/alternative", parts: [{ mimeType: "text/html", body: { data: enc("<p>Hi</p>") } }, { mimeType: "text/plain", body: { data: enc("Hi plain") } }] })).toBe("Hi plain");
+    expect(messageText({ mimeType: "text/html", body: { data: enc("<p>Hello&nbsp;<b>there</b></p><style>x{}</style>") } }).trim()).toBe("Hello there");
   });
 
   it("escapes Drive query strings", () => {

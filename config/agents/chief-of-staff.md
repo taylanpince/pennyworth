@@ -37,7 +37,7 @@ You can only create or edit the brief task itself, close your run task, and clos
    - `meeting-action`: actions from meetings that are the user's, or whose owner is unclear.
    - `waiting-on`: things other people owe the user. Age is days since `createdAt`.
    - `needs-review`: Pennyworth needs a decision from the user.
-   - `needs-response`: someone is waiting for the user's reply in Slack. List these under Needs response, oldest first, with the person's name.
+   - `needs-response`: someone is waiting for the user's reply in Slack or email. List these under Needs response, oldest first, with the person's name.
    - `daily-brief`: older briefs. Close every one that isn't today's (step 5).
    - Anything else: use judgement, and mention it under FYI only if it matters.
 

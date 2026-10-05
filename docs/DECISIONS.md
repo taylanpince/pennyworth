@@ -175,3 +175,9 @@ The AI Tool Hub page lists Paperclip as "Security team only". The user cleared u
 - **Replies:** pennyworth-runner (board key, host) checks the user's open tasks once a minute for new comments by the user. After a 90-second quiet period it starts the "Process task replies" routine with the task identifiers. Review tasks (ops-mcp) and engineer tasks (runner) are excluded, and closed tasks are ignored.
 - **`meeting_note_correct`:** a short, single-line find/replace limited to Pennyworth-written content for one meeting: its canonical note, and its own Meeting Log entry blocks (from the entry heading to the next heading). It uses versioned writes and also updates the stored extraction, so a later re-publish keeps the correction.
 - **`docs_read`:** uses the Docs API with tabs (`drive.readonly` scope). If the Docs API isn't enabled in the Cloud project, it falls back to Drive's text export, which covers the first tab only.
+
+## D-16: Gmail, read-only
+
+- `google-workspace-mcp` adds `gmail_search` and `gmail_read_thread` under the `gmail.readonly` scope. Nothing can send, draft, label or delete mail.
+- The **Inbox Agent** runs hourly during work hours. Its rules match the Slack Scout's: only `needs-response` (a direct, unanswered ask to the user) and the user's own explicit commitments become tasks. Tasks are deduplicated by `source:gmail:thread:<id>` and closed automatically once the user replies.
+- The **Assistant** can also read Gmail, for assigned research tasks.
