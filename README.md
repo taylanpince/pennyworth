@@ -237,6 +237,8 @@ Pennyworth uses its own read-only sidecar (`services/google-workspace-mcp`). Pap
 3. Create an OAuth client of type **Desktop app** and download its JSON.
 4. Enable the **Gmail API** and **Google Docs API** too. Run `scripts/google-auth.sh <that json>` (or `scripts/google-auth.sh` with no argument to paste the client ID and secret instead) and approve in the browser. The only scopes requested are `calendar.events.readonly`, `drive.readonly` and `gmail.readonly`. Re-run `scripts/google-auth.sh` without arguments after scopes change; it reuses the client on file. The refresh token goes to `~/.config/pennyworth/google_oauth.json` (0600) and is mounted into the sidecar only.
 
+**Several accounts:** run `scripts/google-auth.sh --email you@work.com --primary` for the account whose Calendar and Meet transcripts Pennyworth should use, then `scripts/google-auth.sh --email you@other.com` for each extra account. Gmail inboxes and Drive search cover every connected account; tasks note which account an email came from.
+
 If Workspace policy blocks the consent, nothing else breaks: matching reports "calendar unavailable" and sources stay pending. Do not weaken Workspace settings to work around it.
 
 **Testing without Google:** set `GOOGLE_FIXTURES_DIR=/fixtures` in `.env` and run `docker compose up -d`. The sidecar then serves `fixtures/calendar/events.json`. Copy `fixtures/transcripts/2026-10-04_1401.md` into your transcripts folder to run the §41 scenario. Unset the variable afterwards.

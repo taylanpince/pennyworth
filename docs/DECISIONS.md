@@ -186,3 +186,12 @@ The AI Tool Hub page lists Paperclip as "Security team only". The user cleared u
   - tasks are deduplicated by `source:gmail:thread:<id>`.
 - **Deduplication beyond 7 days:** Paperclip idempotency keys expire after 7 days, so the task bridge's `task_create` also looks for an open task carrying the same marker before creating one. This matters for emails left in the inbox, and for long-running Slack items.
 - The **Assistant** can also read Gmail, for assigned research tasks.
+
+## D-17: Several Google accounts
+
+- `google_oauth.json` holds several accounts, sharing one OAuth client, plus a `primary`.
+- **Primary account:** Calendar and meeting documents (Meet transcripts, Gemini notes), unless a tool call names another account.
+- **All accounts:** Gmail and Drive search, with each result tagged with its `account`.
+- **Reading** a thread, file or doc tries the given account first, then each account in turn.
+- **Inbox zero** covers every connected inbox, and each task records its account.
+- **Why it matters:** a re-consent once silently switched the whole connection, Calendar included, to a different Google account. Making the primary explicit (`--primary`) prevents that.

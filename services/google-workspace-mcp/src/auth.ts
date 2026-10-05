@@ -1,6 +1,10 @@
 // Host-side, one-time OAuth consent for the read-only Google sidecar.
 //
-//   node src/auth.ts <client_secret.json> <output credentials file>
+//   node src/auth.ts <client_secret.json> <credentials file> [--email you@example.com] [--primary]
+//
+// Adds (or refreshes) one Google account in the multi-account credentials file. --email
+// pre-selects the account in Google's chooser; --primary makes it the account used for
+// Calendar and meeting documents (the first account is primary by default).
 //
 // Uses the installed-app loopback flow with PKCE. Requests read-only scopes only.
 // Self-contained (no local imports) so it runs with Node's type stripping.
@@ -14,10 +18,56 @@ const SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
 ];
 
-const [clientFile, outFile] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const flag = (name: string) => {
+  const i = args.indexOf(name);
+  if (i < 0) return undefined;
+  const v = args[i + 1];
+  args.splice(i, 2);
+  return v;
+};
+const loginHint = flag("--email");
+const makePrimary = args.includes("--primary");
+if (makePrimary) args.splice(args.indexOf("--primary"), 1);
+const [clientFile, outFile] = args;
 if (!clientFile || !outFile) {
-  console.error("usage: node src/auth.ts <client_secret.json> <output credentials file>");
+  console.error("usage: node src/auth.ts <client_secret.json> <credentials file> [--email you@example.com] [--primary]");
   process.exit(2);
+}
+
+type Account = { refresh_token: string; scopes?: string[] };
+type CredsFile = { client_id?: string; client_secret?: string; refresh_token?: string; primary?: string; accounts?: Record<string, Account> };
+
+async function emailFor(accessToken: string): Promise<string> {
+  const r = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile", { headers: { authorization: `Bearer ${accessToken}` } });
+  const j = (await r.json()) as { emailAddress?: string };
+  if (!j.emailAddress) throw new Error("could not determine the account's email address (is the Gmail API enabled?)");
+  return j.emailAddress;
+}
+
+/** Existing credentials, converting the legacy single-account shape (its email is looked up). */
+async function existingCreds(clientId: string, clientSecret?: string): Promise<CredsFile> {
+  let current: CredsFile = {};
+  try {
+    current = JSON.parse(readFileSync(outFile as string, "utf8")) as CredsFile;
+  } catch {
+    return {};
+  }
+  if (current.refresh_token && !current.accounts) {
+    try {
+      const body = new URLSearchParams({ client_id: current.client_id ?? clientId, refresh_token: current.refresh_token, grant_type: "refresh_token" });
+      if (current.client_secret ?? clientSecret) body.set("client_secret", (current.client_secret ?? clientSecret)!);
+      const tok = (await (await fetch("https://oauth2.googleapis.com/token", { method: "POST", body })).json()) as { access_token?: string };
+      if (tok.access_token) {
+        const email = await emailFor(tok.access_token);
+        current = { client_id: current.client_id, client_secret: current.client_secret, primary: email, accounts: { [email]: { refresh_token: current.refresh_token } } };
+        console.log(`Converted the existing login (${email}) to the multi-account format.`);
+      }
+    } catch {
+      current = {};
+    }
+  }
+  return current;
 }
 
 const raw = JSON.parse(readFileSync(clientFile, "utf8"));
@@ -46,7 +96,7 @@ const server = createServer(async (req, res) => {
   });
   if (client.client_secret) body.set("client_secret", client.client_secret);
   const tokenRes = await fetch("https://oauth2.googleapis.com/token", { method: "POST", body });
-  const tokens = (await tokenRes.json()) as { refresh_token?: string; scope?: string; error?: string };
+  const tokens = (await tokenRes.json()) as { refresh_token?: string; access_token?: string; scope?: string; error?: string };
   if (!tokenRes.ok || !tokens.refresh_token) {
     res.writeHead(500).end("token exchange failed; see terminal");
     console.error("token exchange failed:", tokens.error ?? tokenRes.status);
@@ -55,10 +105,17 @@ const server = createServer(async (req, res) => {
   const granted = (tokens.scope ?? "").split(" ");
   const unexpected = granted.filter((s) => s && !SCOPES.includes(s) && !["openid", "email", "profile"].includes(s));
   if (unexpected.length) console.warn("warning: unexpected scopes granted:", unexpected.join(", "));
-  writeFileSync(outFile, JSON.stringify({ client_id: client.client_id, client_secret: client.client_secret, refresh_token: tokens.refresh_token, scopes: granted }, null, 2), { mode: 0o600 });
+  const email = await emailFor(tokens.access_token!);
+  const creds = await existingCreds(client.client_id, client.client_secret);
+  creds.client_id = client.client_id;
+  creds.client_secret = client.client_secret;
+  creds.accounts = { ...(creds.accounts ?? {}), [email]: { refresh_token: tokens.refresh_token, scopes: granted } };
+  if (makePrimary || !creds.primary) creds.primary = email;
+  delete creds.refresh_token;
+  writeFileSync(outFile, JSON.stringify(creds, null, 2), { mode: 0o600 });
   chmodSync(outFile, 0o600);
-  res.writeHead(200, { "content-type": "text/plain" }).end("Pennyworth: Google read-only access granted. You can close this tab.");
-  console.log(`Saved read-only credentials to ${outFile}`);
+  res.writeHead(200, { "content-type": "text/plain" }).end(`Pennyworth: read-only access granted for ${email}. You can close this tab.`);
+  console.log(`Connected ${email} (read-only). Accounts: ${Object.keys(creds.accounts).join(", ")}; primary (Calendar, meeting docs): ${creds.primary}`);
   server.close();
 });
 
@@ -77,6 +134,7 @@ server.listen(0, "127.0.0.1", () => {
     code_challenge: challenge,
     code_challenge_method: "S256",
     state,
+    ...(loginHint ? { login_hint: loginHint } : {}),
   }).toString();
   console.log("Open this URL in your browser and approve read-only access:\n");
   console.log(auth.toString());
