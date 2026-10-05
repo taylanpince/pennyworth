@@ -48,6 +48,11 @@ describe("Meet document titles", () => {
     expect(b.title).toBe("Wallet Weekly");
     expect(new Date(b.startMs!).toISOString()).toBe("2026-10-04T12:45:00.000Z");
     expect(parseMeetDocTitle("Random doc", "Europe/Madrid").startMs).toBeUndefined();
+    // Named US/other timezones (the meeting organizer's zone), not the user's.
+    const c = parseMeetDocTitle("Confirmed- Settle <> Polygon Weekly Sync - 2026/10/05 09:30 EDT - Notes by Gemini", "Europe/Madrid");
+    expect(c.title).toBe("Confirmed- Settle <> Polygon Weekly Sync");
+    expect(new Date(c.startMs!).toISOString()).toBe("2026-10-05T13:30:00.000Z");
+    expect(new Date(parseMeetDocTitle("X - 2026/01/12 10:00 PST - Notes by Gemini", "Europe/Madrid").startMs!).toISOString()).toBe("2026-01-12T18:00:00.000Z");
   });
 });
 

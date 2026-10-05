@@ -65,17 +65,27 @@ export function transcriptToText(raw: string, ext: string): string {
  *   "OMS <> Privy Integration (2026-10-04 14:00 GMT+02:00) - Transcript"
  *   "OMS <> Privy Integration - 2026/10/04 14:00 CEST - Notes by Gemini"
  */
+/** UTC offsets (minutes) for timezone abbreviations Google uses in Meet/Gemini titles. */
+const TZ_ABBREVIATIONS: Record<string, number> = {
+  UTC: 0, GMT: 0, WET: 0, WEST: 60, BST: 60, IST: 330, CET: 60, CEST: 120, EET: 120, EEST: 180, MSK: 180,
+  EST: -300, EDT: -240, CST: -360, CDT: -300, MST: -420, MDT: -360, PST: -480, PDT: -420, AKST: -540, AKDT: -480, HST: -600,
+  SGT: 480, HKT: 480, JST: 540, KST: 540, AEST: 600, AEDT: 660, NZST: 720, NZDT: 780,
+};
+
 export function parseMeetDocTitle(title: string, tz: string): FilenameHints {
-  const m = /^(?<title>.*?)\s*(?:\(|-\s+)(?<date>\d{4}[-/]\d{2}[-/]\d{2})\s+(?<time>\d{1,2}:\d{2})(?:\s*(?:GMT|UTC)(?<off>[+-]\d{1,2})(?::?(?<offm>\d{2}))?|\s*[A-Z]{2,5})?\)?/.exec(title);
+  const m = /^(?<title>.*?)\s*(?:\(|-\s+)(?<date>\d{4}[-/]\d{2}[-/]\d{2})\s+(?<time>\d{1,2}:\d{2})(?:\s*(?:GMT|UTC)(?<off>[+-]\d{1,2})(?::?(?<offm>\d{2}))?|\s*(?<abbr>[A-Z]{2,5}))?\)?/.exec(title);
   if (!m?.groups) return { title: title.replace(/\s*-\s*(Transcript|Notes by Gemini)\s*$/i, "").trim() || undefined };
   const date = m.groups.date!.replace(/\//g, "-");
   const [y, mo, d] = date.split("-").map(Number) as [number, number, number];
   const [h, mi] = m.groups.time!.split(":").map(Number) as [number, number];
   let startMs: number;
+  const abbrOffset = m.groups.abbr ? TZ_ABBREVIATIONS[m.groups.abbr] : undefined;
   if (m.groups.off !== undefined) {
     const sign = m.groups.off.startsWith("-") ? -1 : 1;
     const offMin = sign * (Math.abs(Number(m.groups.off)) * 60 + Number(m.groups.offm ?? 0));
     startMs = Date.UTC(y, mo - 1, d, h, mi) - offMin * 60_000;
+  } else if (abbrOffset !== undefined) {
+    startMs = Date.UTC(y, mo - 1, d, h, mi) - abbrOffset * 60_000;
   } else {
     startMs = zonedToEpoch({ year: y, month: mo, day: d, hour: h, minute: mi, second: 0 }, tz);
   }
