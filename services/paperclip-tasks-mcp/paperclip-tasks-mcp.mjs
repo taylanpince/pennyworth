@@ -17,7 +17,9 @@ const RUN = process.env.PAPERCLIP_RUN_ID || "";
 const COMPANY = process.env.PAPERCLIP_COMPANY_ID || "";
 const CURRENT_TASK = process.env.PAPERCLIP_TASK_ID || "";
 
-const STATUSES = ["todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
+// Paperclip rejects agent-set "blocked"/"in_review" without structured blockers or review
+// paths, so agents only get the statuses that always work.
+const STATUSES = ["todo", "in_progress", "done", "cancelled"];
 
 async function api(method, path, body) {
   if (!KEY) throw new Error("PAPERCLIP_API_KEY is not set (only available inside a Paperclip run)");
@@ -54,6 +56,14 @@ async function labelIds(names) {
     if (!id) throw new Error(`unknown label "${n}" (labels are created by scripts/paperclip-setup.mjs)`);
     return id;
   });
+}
+
+// Tasks agents create belong to the user (Paperclip would otherwise assign them to the
+// creating agent, and the user's comments would wake that agent).
+let ownerId;
+async function ownerUserId() {
+  if (ownerId === undefined && COMPANY) ownerId = (await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}`)).defaultResponsibleUserId ?? null;
+  return ownerId ?? undefined;
 }
 
 // Marker → idempotency key, mirroring ops-mcp, so re-runs never duplicate tasks.
@@ -156,6 +166,8 @@ const TOOLS = {
         idempotencyKey: await idempotencyKey(m),
         allowDuplicate: true,
       };
+      const owner = await ownerUserId();
+      if (owner) body.assigneeUserId = owner;
       const i = await api("POST", `/api/companies/${encodeURIComponent(COMPANY)}/issues`, body);
       return { ...brief(i), deduplicated: Boolean(i.deduplicated) };
     },

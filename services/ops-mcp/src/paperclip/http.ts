@@ -28,9 +28,29 @@ export class HttpPaperclipApi implements PaperclipApi {
       allowDuplicate: true, // our own markers handle dedup; titles may legitimately repeat
     };
     if (input.priority) body.priority = input.priority;
+    // Assign to the user unless an agent is named: Paperclip otherwise assigns issues to the
+    // creating agent, and the user's comments would wake that agent instead of reaching ops-mcp.
     if (input.assignee_agent_id) body.assigneeAgentId = input.assignee_agent_id;
+    else {
+      const user = await this.ownerUserId();
+      if (user) body.assigneeUserId = user;
+    }
     const issue = await this.request<Record<string, unknown>>("POST", `/api/companies/${this.companyId}/issues`, body);
     return toRef(issue);
+  }
+
+  private owner?: string | null;
+
+  /** The company's default responsible user (the human owner of this instance). */
+  private async ownerUserId(): Promise<string | undefined> {
+    if (this.owner === undefined) {
+      try {
+        this.owner = (await this.request<{ defaultResponsibleUserId?: string }>("GET", `/api/companies/${this.companyId}`)).defaultResponsibleUserId ?? null;
+      } catch {
+        return undefined;
+      }
+    }
+    return this.owner ?? undefined;
   }
 
   async getIssue(id: string): Promise<IssueRef> {

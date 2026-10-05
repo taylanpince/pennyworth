@@ -11,6 +11,7 @@ import type { Router } from "../routing/routing.js";
 import type { SourceMetadata, SourceRow, SourceStore } from "../sources/store.js";
 import { parseMeetDocTitle } from "../sources/parse.js";
 import { ACTIONABLE_STATUSES } from "../sources/store.js";
+import { parseMatchCommand, parseRouteCommand } from "./review-commands.js";
 import type { TranscriptScanner } from "../sources/transcripts.js";
 import { ConflictError, UserFacingError } from "../util/errors.js";
 import { newId, nowIso, sha256, shortHash } from "../util/ids.js";
@@ -86,6 +87,7 @@ export class MeetingService {
     const retried = await this.tasks.retryPending();
     const reviews = await this.syncReviews();
     const toClose = await this.tasks.pendingCloses();
+    const problems = this.tasks.takeProblems();
     const maxAttempts = this.cfg.transcripts.max_match_attempts;
     const work = this.sources
       .listByStatus(ACTIONABLE_STATUSES, 100)
@@ -104,6 +106,8 @@ export class MeetingService {
       // Review tasks resolved by ops-mcp that Paperclip would not let it close directly:
       // post the comment and set the task to done.
       tasks_to_close: toClose,
+      // Replies on review tasks that could not be applied: post each message as a comment on the task.
+      review_problems: problems,
       awaiting_review: this.sources.listByStatus(["needs_review"], 100).length,
       work,
     };
@@ -362,8 +366,18 @@ export class MeetingService {
     return { source_id: s.id, status: "matched", event_id: chosen.event_id, title: chosen.title, next_step: "read the source and call meeting_publish" };
   }
 
-  /** Apply `pick N` / `ignore` / `route <path>` commands from user comments on review tasks. */
-  async syncReviews(): Promise<number> {
+  private syncing?: Promise<number>;
+
+  /**
+   * Apply the user's replies on review tasks ("pick 2", "ignore", "route <note>", or natural
+   * phrasing). Runs on every scan and periodically in the background; concurrent calls share one run.
+   */
+  syncReviews(): Promise<number> {
+    this.syncing ??= this.doSyncReviews().finally(() => (this.syncing = undefined));
+    return this.syncing;
+  }
+
+  private async doSyncReviews(): Promise<number> {
     let applied = 0;
     for (const row of this.tasks.listOpen(["meeting_review", "routing_review"])) {
       let comments;
@@ -374,35 +388,44 @@ export class MeetingService {
         continue;
       }
       const ctx = this.tasks.context<{ source_id?: string; meeting_id?: string }>(row);
+      // Newest command wins.
       for (const c of [...comments].reverse()) {
         try {
           if (row.kind === "meeting_review" && ctx.source_id) {
-            const pick = /^\s*(?:pick|choose)\s+(\S+)\s*$/im.exec(c.body);
-            if (pick) {
-              await this.resolve(ctx.source_id, pick[1]!, "user");
-              applied++;
-              break;
-            }
-            if (/^\s*ignore\s*$/im.test(c.body)) {
-              await this.resolve(ctx.source_id, "ignore", "user");
-              applied++;
-              break;
-            }
+            const cmd = parseMatchCommand(c.body);
+            if (!cmd) continue;
+            await this.resolve(ctx.source_id, cmd.kind === "ignore" ? "ignore" : cmd.choice, "user");
+            applied++;
+            break;
           }
           if (row.kind === "routing_review" && ctx.meeting_id) {
-            const routes = [...c.body.matchAll(/^\s*route\s+(.+?)\s*$/gim)].map((m) => m[1]!.replace(/^`|`$/g, "").replace(/^\[\[|\]\]$/g, ""));
-            if (routes.length) {
-              await this.resolveRouting(ctx.meeting_id, routes, row.marker);
-              applied++;
+            const cmd = parseRouteCommand(c.body);
+            if (!cmd) continue;
+            const missing = cmd.kind === "route" ? cmd.targets.filter((t) => !this.noteExists(t)) : [];
+            if (cmd.kind === "route" && missing.length === cmd.targets.length) {
+              this.tasks.noteProblem(row.marker, c.id, `Couldn't find ${missing.map((m) => `\`${m}\``).join(", ")} in the vault folders Pennyworth can see. Check the path (folders: ${this.cfg.vault.write_roots.join(", ")}) and reply again.`);
               break;
             }
+            await this.resolveRouting(ctx.meeting_id, cmd.kind === "none" ? ["none"] : cmd.targets, row.marker);
+            applied++;
+            break;
           }
         } catch (err) {
           this.log.warn({ marker: row.marker, err: String(err) }, "review command could not be applied");
+          if (err instanceof UserFacingError) this.tasks.noteProblem(row.marker, c.id, err.message);
+          break;
         }
       }
     }
     return applied;
+  }
+
+  private noteExists(path: string): boolean {
+    try {
+      return this.vault.exists(path);
+    } catch {
+      return false;
+    }
   }
 
   async resolveRouting(meetingId: string, routes: string[], marker?: string): Promise<Record<string, unknown>> {

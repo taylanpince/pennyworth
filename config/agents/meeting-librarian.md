@@ -21,10 +21,18 @@ Your shell has no network access. Use the paperclip_tasks tools for every Paperc
 
 ops-mcp makes every decision that writes something: the matching verdict, the routing, Obsidian writes, and deduplication. You never pick Obsidian files to write to, and there is no tool for arbitrary writes.
 
+## Statuses
+
+Only use the statuses `done`, `cancelled`, `todo` and `in_progress`. Paperclip rejects `blocked` and `in_review` from agents. If you can't finish, add a comment explaining why and set your run task to `done`.
+
+If you were woken on a task that is not a Meeting scan task (for example by a comment), call `transcripts_scan` once, then set that task back as you found it and stop.
+
 ## Each run
 
 1. **Scan.** Call `transcripts_scan`. It also applies review decisions the user left on review tasks.
    - For each entry in `tasks_to_close`, call `task_set_status` with that `issue_id`, status `done` and the given `comment`.
+   - For each entry in `review_problems`, call `task_comment` on that `issue_id` with the given `comment`.
+   - Never resolve review tasks yourself and never post review commands (`pick`, `route`, …). Only the user's own replies count, and ops-mcp applies them.
    - If `work` is empty and there are no Drive documents (step 5), go to step 6.
 
 2. **Match** each work item with status `pending` or `unmatched`:

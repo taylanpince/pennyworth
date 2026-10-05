@@ -50,7 +50,9 @@ Each entry records what was decided, why, and what it costs. The spec stays the 
   - `pick N` or `ignore` for meeting matches;
   - `route <path>` or `route none` for routing.
 - **How it's applied:** ops-mcp parses only comments written by humans (`authorType: user`), at the start of every scan. Choices are stored, and routing choices go into `routing_memory` (by series ID, then by normalized title), so similar meetings route automatically.
-- **Latency:** review tasks are unassigned, so a comment doesn't wake an agent. The decision is applied on the next scan: the next file event, or within 15 minutes during work hours. To apply it at once, use "Run now" on the Meeting scan routine.
+- **Phrasing:** parsing is lenient. "pick 2", "2", "option #2" and "ignore" work for matches. Routes work as `route <path>`, or in natural phrasing such as "route these 1-1 notes with Vojtech to polygon/oms/Vojtech 1-1", where the `.md` is optional. A path that doesn't exist gets a reply instead of being silently ignored.
+- **Latency:** ops-mcp applies replies within about a minute, through a background sync, so you don't wait for a scan. Closing the review task in Paperclip happens on the next Meeting scan, because only an agent run may update it.
+- **Assignment:** every task Pennyworth creates is assigned to the user (the company's default responsible user). Otherwise Paperclip hands an agent-created task to that agent, and a user comment would wake the agent instead of reaching ops-mcp. This is what happened on PEN-27.
 
 ## D-5: Matching additions
 

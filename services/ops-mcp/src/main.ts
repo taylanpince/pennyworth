@@ -69,6 +69,16 @@ const http = createServer(async (req, res) => {
 
 http.listen(cfg.server.port, cfg.server.host, () => log.info({ port: cfg.server.port }, "ops-mcp listening"));
 
+// Apply the user's replies on review tasks within a minute, without waiting for a scan.
+if (app.paperclip) {
+  setInterval(() => {
+    app.meetings.syncReviews().then(
+      (n) => n && log.info({ applied: n }, "applied review replies"),
+      (err) => log.warn({ err: String(err) }, "review sync failed"),
+    );
+  }, 60_000).unref();
+}
+
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.on(sig, () => {
     log.info({ sig }, "shutting down");

@@ -129,6 +129,7 @@ switch (cmd) {
       status: "todo",
       priority,
       labelIds: [await label("todo")],
+      assigneeUserId: (await api("GET", "/api/cli-auth/me")).userId,
       allowDuplicate: true,
     });
     console.log(`Added ${c("1", i.identifier)} (${priority}): ${i.title}`);
