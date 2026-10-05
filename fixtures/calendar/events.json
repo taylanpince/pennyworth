@@ -1,0 +1,41 @@
+[
+  {
+    "id": "fixture_oms_privy_20261004T120000Z",
+    "title": "OMS <> Privy Integration",
+    "start": "2026-10-04T14:00:00+02:00",
+    "end": "2026-10-04T14:30:00+02:00",
+    "timezone": "Europe/Madrid",
+    "attendees": [
+      { "name": "Alice Martin", "email": "alice@example.com" },
+      { "name": "Bob Chen", "email": "bob@example.com" },
+      { "name": "Taylan", "email": "taylan@example.com", "self": true, "response_status": "accepted" }
+    ],
+    "meet_link": "https://meet.google.com/abc-defg-hij",
+    "attachments": []
+  },
+  {
+    "id": "fixture_wallet_weekly_20261004T124500Z",
+    "series_id": "fixture_wallet_weekly",
+    "title": "Wallet Weekly",
+    "start": "2026-10-04T14:45:00+02:00",
+    "end": "2026-10-04T15:15:00+02:00",
+    "timezone": "Europe/Madrid",
+    "attendees": [
+      { "name": "Carol Diaz", "email": "carol@example.com" },
+      { "name": "Taylan", "email": "taylan@example.com", "self": true }
+    ],
+    "attachments": []
+  },
+  {
+    "id": "fixture_partner_wallet_20261004T130000Z",
+    "title": "Partner Wallet Call",
+    "start": "2026-10-04T15:00:00+02:00",
+    "end": "2026-10-04T15:30:00+02:00",
+    "timezone": "Europe/Madrid",
+    "attendees": [
+      { "name": "Dan Okafor", "email": "dan@partner.example" },
+      { "name": "Taylan", "email": "taylan@example.com", "self": true }
+    ],
+    "attachments": []
+  }
+]

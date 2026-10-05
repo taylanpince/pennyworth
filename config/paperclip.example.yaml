@@ -1,0 +1,79 @@
+# What scripts/paperclip-setup.mjs provisions in Paperclip. Copy to config/paperclip.yaml.
+# Re-running the setup applies changes idempotently (matched by name/title).
+
+company:
+  name: Pennyworth
+  description: Personal operations control plane
+
+labels:
+  - { name: meeting-action, color: "#2563eb" }
+  - { name: needs-review, color: "#d97706" }
+  - { name: waiting-on, color: "#7c3aed" }
+  - { name: system-error, color: "#dc2626" }
+  - { name: daily-brief, color: "#059669" }
+
+# MCP servers given to Codex agents directly through the shared Codex config
+# (/paperclip/.codex/config.toml). Not registered as Paperclip Tool Connections: the
+# Paperclip gateway drops MCP tool annotations, so Codex would refuse every write tool.
+# See docs/DECISIONS.md (D-8). Tokens come from env vars set from secret files.
+mcp_servers:
+  ops_mcp:
+    url: http://ops-mcp:8080/mcp
+    bearer_token_env_var: PENNYWORTH_OPS_MCP_TOKEN
+  google_workspace:
+    url: http://google-workspace-mcp:8081/mcp
+    bearer_token_env_var: PENNYWORTH_GOOGLE_MCP_TOKEN
+  paperclip_tasks:
+    command: node
+    args: [/opt/pennyworth/paperclip-tasks-mcp.mjs]
+    env_vars: [PAPERCLIP_API_KEY, PAPERCLIP_API_URL, PAPERCLIP_RUN_ID, PAPERCLIP_COMPANY_ID, PAPERCLIP_TASK_ID]
+
+# Extra Codex CLI arguments for every agent. Codex's read-only sandbox stays on (inside
+# the container it fails closed, so shell commands cannot run at all), and built-in
+# tools that could reach external accounts or the network are disabled.
+codex_args:
+  - --sandbox
+  - read-only
+  - -c
+  - features.shell_tool=false
+  - -c
+  - features.unified_exec=false
+  - -c
+  - features.apps=false
+  - -c
+  - features.browser_use=false
+  - -c
+  - features.browser_use_external=false
+  - -c
+  - features.in_app_browser=false
+  - -c
+  - features.computer_use=false
+  - -c
+  - features.image_generation=false
+  - -c
+  - web_search="disabled"
+
+agents:
+  meeting-librarian:
+    name: Meeting Librarian
+    title: Meeting memory
+    instructions: config/agents/meeting-librarian.md
+    adapter: codex_local
+    model: ""                  # empty = Paperclip's Codex default
+    reasoning_effort: medium
+    timeout_sec: 1800
+
+routines:
+  meeting-scan:
+    title: Meeting scan
+    agent: meeting-librarian
+    description: |
+      Meeting artifacts may have changed. Follow your instructions: scan with ops-mcp,
+      match new sources against the calendar, publish matched meetings, check Drive
+      meeting documents if the Drive tool is available, then close this task with a
+      short count summary.
+    concurrency: coalesce_if_active
+    webhook: true                       # fired by the transcript watcher
+    schedules:
+      # Backstop for missed file events, review decisions and Drive documents.
+      - { cron: "*/15 8-20 * * 1-5", timezone: Europe/Madrid, label: "work hours" }

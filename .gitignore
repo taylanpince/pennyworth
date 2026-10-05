@@ -1,0 +1,16 @@
+# Local state and secrets
+data/*
+!data/.gitkeep
+.env
+config/system.yaml
+config/routing.yaml
+compose.vault.yaml
+backups/
+*.sqlite
+*.sqlite-*
+
+# Node
+node_modules/
+dist/
+*.log
+config/paperclip.yaml

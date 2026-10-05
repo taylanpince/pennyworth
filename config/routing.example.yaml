@@ -1,0 +1,18 @@
+# Meeting → note routing. Copy to config/routing.yaml.
+# Priority: explicit routes > confirmed mappings (remembered from review tasks) >
+# topic keywords > search candidates (always reviewed, never written automatically).
+# Targets must be existing notes inside vault.write_roots.
+
+routes: []
+#  - calendar_title_regex: "(?i)open money stack|\\boms\\b"
+#    target: "Projects/Open Money Stack.md"
+#  - attendee_email_regex: "@partner\\.example$"
+#    target: "Partners/Partner.md"
+
+topics: []
+#  - keywords: [agglayer]
+#    target: "Projects/Agglayer.md"
+
+# Meetings matching these title regexes only get a canonical note (no project note, no review).
+skip_title_regex: []
+#  - "(?i)^(lunch|focus|ooo)"

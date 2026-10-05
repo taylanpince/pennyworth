@@ -1,0 +1,68 @@
+# ops-mcp configuration. Copy to config/system.yaml (scripts/bootstrap.sh does this).
+# Paths are as seen inside the ops-mcp container.
+
+timezone: Europe/Madrid
+
+# Your names/emails as they appear in calendar invites and transcripts. Used to
+# exclude you from attendee evidence and to decide which action items are yours.
+self:
+  names: []          # e.g. ["Alex", "Alex Doe"]
+  emails: []         # e.g. ["alex@example.com"]
+
+transcripts:
+  roots:
+    - /sources/transcripts
+  extensions: [.md, .txt, .vtt, .srt]
+  stability_seconds: 10
+  recursive: true
+  # Files last modified before this time are registered but never processed.
+  # Set to the install date to avoid backfilling old transcripts; remove to backfill.
+  ignore_before: "2026-10-05T00:00:00+02:00"
+  max_match_attempts: 3
+  # Regexes over the filename stem. Named groups: title, date (YYYY-MM-DD), time.
+  # Defaults handle "Title-2026-10-04_14-01-00.txt", "Title-2026-10-04.txt", "2026-10-04_1401.md".
+  # filename_patterns: [...]
+
+vault:
+  root: /vault
+  # Vault-relative folders ops-mcp can see. Only these are mounted into the container
+  # (scripts/bootstrap.sh generates compose.vault.yaml from VAULT_FOLDERS in .env).
+  read_roots: [Meetings]
+  write_roots: [Meetings]
+  meetings_root: Meetings
+  target_heading: Meeting Log
+
+meeting_matching:
+  candidate_window_before_minutes: 90
+  candidate_window_after_minutes: 90
+  auto_match_threshold: 75
+  review_threshold: 55
+  ambiguity_margin: 10
+  review_min_temporal: 40
+
+routing:
+  config_path: /config/routing.yaml
+  auto_write_confidence: 0.8
+  multi_target_confidence: 0.9
+  review_unrouted: true
+
+paperclip:
+  base_url: http://paperclip:3100
+  ui_base_url: http://localhost:3100
+  company_id: ""                         # filled in by scripts/paperclip-setup.mjs
+  api_key_file: /run/secrets/paperclip_ops_key
+  labels:
+    meeting_action: meeting-action
+    needs_review: needs-review
+    system_error: system-error
+
+server:
+  host: 0.0.0.0
+  port: 8080
+
+data:
+  db_path: /data/ops-mcp/state.sqlite
+
+logging:
+  level: info
+  verbose_sources: false
