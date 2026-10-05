@@ -101,7 +101,7 @@ agents:
 
   inbox-agent:
     name: Inbox Agent
-    title: Email that needs you
+    title: Inbox zero → tasks
     instructions: config/agents/inbox-agent.md
     adapter: codex_local
     model: ""
@@ -185,8 +185,8 @@ routines:
     agent: inbox-agent
     description: |
       Today is {{date}}. Your user's email address is you@example.com. Follow your instructions:
-      find email that needs the user, create or update tasks (deduplicated), close tasks
-      already answered, then close this task with a count summary.
+      mirror the inbox as tasks (one per thread, deduplicated), close tasks for threads
+      that were archived, then close this task with a count summary.
     concurrency: skip_if_active
     schedules:
       - { cron: "0 8-19 * * 1-5", timezone: Europe/Madrid, label: "work hours" }

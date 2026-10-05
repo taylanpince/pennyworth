@@ -179,5 +179,10 @@ The AI Tool Hub page lists Paperclip as "Security team only". The user cleared u
 ## D-16: Gmail, read-only
 
 - `google-workspace-mcp` adds `gmail_search` and `gmail_read_thread` under the `gmail.readonly` scope. Nothing can send, draft, label or delete mail.
-- The **Inbox Agent** runs hourly during work hours. Its rules match the Slack Scout's: only `needs-response` (a direct, unanswered ask to the user) and the user's own explicit commitments become tasks. Tasks are deduplicated by `source:gmail:thread:<id>` and closed automatically once the user replies.
+- The **Inbox Agent** runs hourly during work hours. The user practises inbox zero, so the inbox *is* the to-do list:
+  - every thread in the inbox becomes one `todo` task, read or unread, any age or category;
+  - the title says the action ("Reply to …", "Sign …", "Read: …"), with priority from deadlines (low for receipts and notifications);
+  - the task is closed when the thread is archived, and cancelled if it's deleted;
+  - tasks are deduplicated by `source:gmail:thread:<id>`.
+- **Deduplication beyond 7 days:** Paperclip idempotency keys expire after 7 days, so the task bridge's `task_create` also looks for an open task carrying the same marker before creating one. This matters for emails left in the inbox, and for long-running Slack items.
 - The **Assistant** can also read Gmail, for assigned research tasks.

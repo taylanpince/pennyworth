@@ -66,6 +66,15 @@ async function ownerUserId() {
   return ownerId ?? undefined;
 }
 
+async function findByMarker(marker) {
+  if (!COMPANY) return undefined;
+  const token = marker.split(":").pop();
+  const q = new URLSearchParams({ q: token.slice(0, 200), status: OPEN_STATUSES, limit: "50", excludeRoutineExecutions: "true" });
+  const list = await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/issues?${q}`);
+  const needle = `<!-- source:${marker} -->`;
+  return list.find((i) => String(i.description ?? "").includes(needle));
+}
+
 // Marker → idempotency key, mirroring ops-mcp, so re-runs never duplicate tasks.
 async function idempotencyKey(marker) {
   const { createHash } = await import("node:crypto");
@@ -157,6 +166,10 @@ const TOOLS = {
       if (!COMPANY) throw new Error("PAPERCLIP_COMPANY_ID not set");
       const m = String(marker).trim();
       if (!/^[A-Za-z0-9:._\/-]{3,200}$/.test(m)) throw new Error("invalid marker");
+      // Idempotency keys expire after 7 days in Paperclip, so also look for an open task
+      // that already carries this marker (e.g. an email kept in the inbox for weeks).
+      const existing = await findByMarker(m);
+      if (existing) return { ...brief(existing), deduplicated: true };
       const body = {
         title: String(title).slice(0, 200),
         description: `${String(description).replace(/<!--|-->/g, "").slice(0, 60_000)}\n\n<!-- source:${m} -->`,
