@@ -2,16 +2,28 @@
 # One-time read-only Google consent for the google-workspace-mcp sidecar.
 #
 #   scripts/google-auth.sh ~/Downloads/client_secret_XXXX.json
+#   scripts/google-auth.sh            (prompts for client ID and secret instead)
 #
 # Needs a "Desktop app" OAuth client from a Google Cloud project with the Calendar API
 # and Drive API enabled. Requests only calendar.events.readonly and drive.readonly.
 set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo"
-client="${1:?usage: scripts/google-auth.sh <client_secret.json>}"
 env_file="${PENNYWORTH_ENV_FILE:-.env}"
 set -a; . "$env_file"; set +a
 out="$PENNYWORTH_SECRETS_DIR/google_oauth.json"
+client="${1:-}"
+if [ -z "$client" ]; then
+  # No JSON download available: build the client file from prompts (secret not echoed).
+  read -r -p "OAuth client ID: " client_id
+  read -r -s -p "OAuth client secret: " client_secret; echo
+  [ -n "$client_id" ] && [ -n "$client_secret" ] || { echo "error: both values are required" >&2; exit 1; }
+  umask 077
+  client="$(mktemp "$PENNYWORTH_SECRETS_DIR/.client.XXXXXX")"
+  trap 'rm -f "$client"' EXIT
+  CLIENT_ID="$client_id" CLIENT_SECRET="$client_secret" node -e \
+    'console.log(JSON.stringify({installed:{client_id:process.env.CLIENT_ID,client_secret:process.env.CLIENT_SECRET}}))' > "$client"
+fi
 node services/google-workspace-mcp/src/auth.ts "$client" "$out"
 chmod 0600 "$out"
 docker compose up -d --force-recreate google-workspace-mcp

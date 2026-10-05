@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/pennyworth.png" alt="Pennyworth" width="160">
+</p>
+
 # Pennyworth
 
 A local-first personal operations system. Paperclip is the control plane (agents, tasks, routines), Obsidian is the long-term memory, and a small deterministic service, **ops-mcp**, sits between them.
@@ -114,7 +118,7 @@ Pennyworth uses its own read-only sidecar (`services/google-workspace-mcp`). Pap
 1. In a Google Cloud project under your Workspace account, enable the **Google Calendar API** and the **Google Drive API**.
 2. Configure the OAuth consent screen as *Internal* if your Workspace allows it.
 3. Create an OAuth client of type **Desktop app** and download its JSON.
-4. Run `scripts/google-auth.sh <that json>` and approve in the browser. The only scopes requested are `calendar.events.readonly` and `drive.readonly`. The refresh token goes to `~/.config/pennyworth/google_oauth.json` (0600) and is mounted into the sidecar only.
+4. Run `scripts/google-auth.sh <that json>` (or `scripts/google-auth.sh` with no argument to paste the client ID and secret instead) and approve in the browser. The only scopes requested are `calendar.events.readonly` and `drive.readonly`. The refresh token goes to `~/.config/pennyworth/google_oauth.json` (0600) and is mounted into the sidecar only.
 
 If Workspace policy blocks the consent, nothing else breaks: matching reports "calendar unavailable" and sources stay pending. Do not weaken Workspace settings to work around it.
 
