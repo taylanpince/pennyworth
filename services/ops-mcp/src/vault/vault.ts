@@ -166,6 +166,27 @@ export class Vault {
     throw new ConflictError("unreachable");
   }
 
+  /**
+   * Apply a pure edit function to an existing note with the optimistic version check;
+   * on a conflict, re-read and retry once. Returns null if the edit made no change.
+   */
+  editNote(rel: string, edit: (content: string) => string): NoteSnapshot | null {
+    const { abs, rel: normalized } = this.resolveWrite(rel);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const before = readFileSync(abs, "utf8");
+      const after = edit(before);
+      if (after === before) return null;
+      try {
+        this.atomicCommit(abs, sha256(before), after, attempt);
+        return { path: normalized, content: after, version: sha256(after) };
+      } catch (err) {
+        if (err instanceof ConflictError && attempt < 2) continue;
+        throw err;
+      }
+    }
+    return null;
+  }
+
   private atomicCommit(abs: string, expectedVersion: string, content: string, attempt: number): void {
     const tmp = join(dirname(abs), `.${basename(abs)}.pennyworth-${randomBytes(6).toString("hex")}.tmp`);
     const mode = statSync(abs).mode & 0o777;

@@ -296,6 +296,10 @@ async function ensureRoutines(companyId, agents) {
       priority: "medium",
       status: "active",
       concurrencyPolicy: r.concurrency ?? "coalesce_if_active",
+      // Placeholders like {{tasks}} are filled by whoever starts the run (API); give them a default.
+      variables: [...new Set([...(r.description ?? "").matchAll(/\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}/g)].map((m) => m[1]))]
+        .filter((v) => !["date", "timestamp"].includes(v))
+        .map((name) => ({ name, type: "text", required: false, defaultValue: "" })),
       catchUpPolicy: "skip_missed",
     };
     let routine = routines.find((x) => x.title === r.title);

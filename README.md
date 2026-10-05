@@ -136,9 +136,25 @@ todo --all                           # include reviews and briefs
 | Meeting Librarian | file watcher + every 15 min, weekdays 08–20 | ops-mcp; Calendar/Drive read; close or comment on its own tasks |
 | Chief of Staff | weekdays 08:30 → "Daily Brief — date" | Calendar read (list/get events only); Paperclip task list/create/update |
 | Slack Scout | every 30 min, weekdays 08–20 | Slack read/search only; Paperclip task search/create/update/close |
+| Assistant | when assigned, and on your task replies | Slack/Docs/Drive/Calendar read; notes read + meeting-note corrections; Paperclip tasks incl. hand-back |
 | pennyworth-runner (host service, not a Paperclip agent) | your comments on `engineer` tasks | Codex/OpenRouter in its own git worktrees, as you; read-only gh; no pushes except your `push`/`pr` |
 
 Each agent sees only the MCP servers and tools listed for it in `config/paperclip.yaml` (`mcp_servers`, `enabled_tools`). Everything else is disabled in its Codex arguments. Run a routine on demand with "Run now" in Paperclip.
+
+## Assistant
+
+For anything that isn't code: research, drafts, and acting on your replies.
+
+- **Assign a task to Assistant**, e.g. "Update the agenda for today's JPM call from #ext-… and the previous agendas doc". It reads Slack, Google Docs (all tabs, once the Docs API is enabled), Drive, Calendar and your notes. It posts the deliverable as a comment for you to review and paste, then assigns the task back to you. To follow up, comment and reassign it to Assistant.
+- **Reply on any of your tasks.** About 90 seconds after your last comment, pennyworth-runner hands it to the Assistant, which acts on clear intent:
+  - fixes names and details in the task and in Pennyworth's meeting notes;
+  - records context ("1:1 with her on Thursday");
+  - closes the task ("done", "not relevant");
+  - answers questions.
+
+  It replies with one line saying what changed. Notes to self that need no action get no reply.
+
+It never sends messages and never edits Slack, Docs or Calendar. In your notes it can only correct text Pennyworth wrote for a meeting.
 
 ## Coding jobs (engineer)
 

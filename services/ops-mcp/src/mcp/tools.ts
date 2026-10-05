@@ -134,6 +134,18 @@ export function buildServer(deps: ToolDeps): McpServer {
   );
 
   server.registerTool(
+    "meeting_note_correct",
+    {
+      title: "Correct text in a meeting's notes",
+      description:
+        "Replace a short piece of text (e.g. a misspelled name) in the notes Pennyworth wrote for one meeting: its canonical note and its Meeting Log entries. Only use when the user asked for the correction. Other content in the user's notes is never touched.",
+      inputSchema: { calendar_event_id: z.string().min(1).max(1024), find: z.string().min(1).max(200), replace: z.string().max(200) },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    wrap("meeting_note_correct", (a: { calendar_event_id: string; find: string; replace: string }) => meetings.correctMeeting(a)),
+  );
+
+  server.registerTool(
     "source_mark_failed",
     {
       title: "Mark a source as failed",

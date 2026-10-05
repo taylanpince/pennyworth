@@ -99,6 +99,19 @@ agents:
     enabled_tools:
       paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status]
 
+  assistant:
+    name: Assistant
+    title: Research, drafts and acting on your task replies
+    instructions: config/agents/assistant.md
+    adapter: codex_local
+    model: ""
+    reasoning_effort: medium
+    timeout_sec: 1800
+    mcp_servers: [slack, google_workspace, paperclip_tasks, ops_mcp]
+    enabled_tools:
+      ops_mcp: [obsidian_search, obsidian_read, obsidian_read_document_map, meeting_note_correct]
+      google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event]
+
   engineer:
     name: Engineer
     title: Coding jobs on this machine (pennyworth-runner)
@@ -144,3 +157,12 @@ routines:
     concurrency: skip_if_active
     schedules:
       - { cron: "*/30 8-20 * * 1-5", timezone: Europe/Madrid, label: "work hours" }
+
+  task-replies:
+    title: Process task replies
+    agent: assistant
+    # Started by pennyworth-runner when you comment on your tasks (no schedule).
+    description: |
+      Process replies on: {{tasks}}
+      Follow "B. Processing the user's replies" in your instructions.
+    concurrency: always_enqueue

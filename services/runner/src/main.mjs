@@ -37,6 +37,11 @@ async function poll() {
   const engineer = await pc.engineerAgentId().catch(() => undefined);
   if (engineer) for (const i of await pc.assignedIssues(engineer, updatedSince)) byId.set(i.id, i);
   for (const issue of byId.values()) await handleIssue(issue, engineer).catch((err) => reportError(issue, err));
+  // Replies: all of your open tasks (comments don't reliably bump "updated"), at most once a minute.
+  if (cfg.replies?.enabled !== false && Date.now() - lastReplyCheck >= 60_000) {
+    lastReplyCheck = Date.now();
+    await dispatchReplies().catch((err) => log("reply dispatch failed", { err: String(err.message ?? err).slice(0, 300) }));
+  }
   state.set("last_poll", now);
   drainQueue();
 }
@@ -91,6 +96,41 @@ async function handleIssue(issue, engineerId) {
   } else {
     void startJob(job);
   }
+}
+
+// ------------------------------------------------------------------ replies → Assistant
+
+/**
+ * Your comments on your own open tasks go to the Assistant ("Process task replies"),
+ * after a short quiet period so a follow-up comment or closing the task is taken into account.
+ * Review tasks (ops-mcp) and engineer tasks (this runner) have their own handlers.
+ */
+let lastReplyCheck = 0;
+
+async function dispatchReplies() {
+  const r = cfg.replies ?? {};
+  const debounceMs = (r.debounce_seconds ?? 90) * 1000;
+  const exclude = new Set(r.exclude_labels ?? ["needs-review", cfg.label]);
+  let since = state.get("replies_since");
+  if (!since) {
+    since = new Date(Date.now() - (r.first_run_lookback_hours ?? 24) * 3_600_000).toISOString();
+    state.set("replies_since", since);
+  }
+  const ready = [];
+  const pending = [];
+  for (const issue of await pc.myOpenIssues()) {
+    if ((issue.labels ?? []).some((l) => exclude.has(l.name))) continue;
+    const fresh = (await pc.comments(issue.id)).filter((c) => Paperclip.isUserInstruction(c) && c.createdAt >= since && !state.handled(c.id));
+    if (!fresh.length) continue;
+    // Wait until the newest comment on this task is older than the debounce window.
+    if (Date.now() - Date.parse(fresh.at(-1).createdAt) < debounceMs) continue;
+    ready.push(issue.identifier);
+    pending.push(...fresh.map((c) => [c.id, issue.id]));
+  }
+  if (!ready.length) return;
+  await pc.runRoutine(r.routine ?? "Process task replies", { tasks: ready.join(", ") });
+  for (const [cid, iid] of pending) state.markHandled(cid, iid);
+  log("replies dispatched to Assistant", { tasks: ready });
 }
 
 function drainQueue() {

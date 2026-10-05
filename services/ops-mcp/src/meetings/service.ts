@@ -586,6 +586,63 @@ export class MeetingService {
     return { name, cursor, moved: true };
   }
 
+  /**
+   * Correct a short piece of text (e.g. a misspelled name) in Pennyworth-written content for
+   * one meeting: the canonical note and that meeting's Meeting Log entries. Never touches
+   * anything else in the user's notes.
+   */
+  correctMeeting(input: { calendar_event_id: string; find: string; replace: string }): Record<string, unknown> {
+    const { find, replace } = input;
+    const bad = (t: string) => /[\r\n<>`:]|<!--|-->/.test(t);
+    if (!find || find.length > 200 || replace.length > 200 || bad(find) || bad(replace)) {
+      throw new UserFacingError("find/replace must be short single-line text without : < > or backticks", "bad_request");
+    }
+    const meeting = this.meetingByEvent(input.calendar_event_id);
+    if (!meeting) throw new UserFacingError(`No published meeting for calendar event ${input.calendar_event_id}`, "not_found");
+    const marker = meetingMarker(meeting.calendar_event_id);
+    const changed: { path: string; replacements: number }[] = [];
+    const count = (hay: string) => hay.split(find).length - 1;
+
+    if (meeting.canonical_note_path && this.vault.exists(meeting.canonical_note_path)) {
+      let n = 0;
+      const snap = this.vault.editNote(meeting.canonical_note_path, (content) => {
+        n = count(content);
+        return content.split(find).join(replace);
+      });
+      if (snap) {
+        this.setCanonical(meeting.id, snap.path, snap.version);
+        changed.push({ path: snap.path, replacements: n });
+      }
+    }
+    const targets = this.db
+      .prepare("SELECT obsidian_path FROM meeting_targets WHERE meeting_id = ? AND write_status IN ('written', 'exists')")
+      .all(meeting.id) as { obsidian_path: string }[];
+    for (const t of targets) {
+      let n = 0;
+      const snap = this.vault.editNote(t.obsidian_path, (content) => {
+        // The entry: its "### " heading line (just above the marker) up to the next heading.
+        const at = content.indexOf(marker);
+        if (at < 0) return content;
+        const start = content.lastIndexOf("\n###", at) + 1;
+        const nextHeading = /\n#{1,3} /g;
+        nextHeading.lastIndex = at;
+        const m = nextHeading.exec(content);
+        const end = m ? m.index + 1 : content.length;
+        const region = content.slice(start, end);
+        n = count(region);
+        return content.slice(0, start) + region.split(find).join(replace) + content.slice(end);
+      });
+      if (snap) changed.push({ path: snap.path, replacements: n });
+    }
+    // Keep the stored extraction consistent so a later re-publish keeps the correction.
+    if (meeting.extraction_json?.includes(find)) {
+      this.db.prepare("UPDATE meetings SET extraction_json = ?, updated_at = ? WHERE id = ?").run(meeting.extraction_json.split(find).join(replace), nowIso(), meeting.id);
+    }
+    if (!changed.length) throw new UserFacingError(`"${find}" was not found in the notes Pennyworth wrote for this meeting`, "not_found");
+    this.log.info({ tool: "meeting_note_correct", event_id: meeting.calendar_event_id, notes: changed.map((c) => c.path) }, "meeting notes corrected");
+    return { calendar_event_id: meeting.calendar_event_id, changed };
+  }
+
   markFailed(sourceId: string, reason: string): Record<string, unknown> {
     const s = this.requireSource(sourceId);
     if (["processed", "ignored", "superseded"].includes(s.status)) return { source_id: s.id, status: s.status };

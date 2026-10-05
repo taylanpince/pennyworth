@@ -51,6 +51,18 @@ export class Paperclip {
     return this.api("GET", `/api/companies/${this.company}/issues?${q}`);
   }
 
+  async myOpenIssues(updatedSince) {
+    const q = new URLSearchParams({ assigneeUserId: "me", status: "backlog,todo,in_progress,in_review,blocked", limit: "300", excludeRoutineExecutions: "true" });
+    if (updatedSince) q.set("updatedSince", updatedSince);
+    return this.api("GET", `/api/companies/${this.company}/issues?${q}`);
+  }
+
+  async runRoutine(title, variables) {
+    const routine = (await this.api("GET", `/api/companies/${this.company}/routines`)).find((r) => r.title === title);
+    if (!routine) throw new Error(`routine "${title}" not found (run scripts/paperclip-setup.mjs)`);
+    return this.api("POST", `/api/routines/${routine.id}/run`, { source: "api", variables });
+  }
+
   issue(id) {
     return this.api("GET", `/api/issues/${encodeURIComponent(id)}`);
   }

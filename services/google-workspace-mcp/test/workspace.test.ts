@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SCOPES } from "../src/google.js";
-import { escapeQ, normalizeEvent } from "../src/workspace.js";
+import { docIdFrom, docsBodyToMarkdown, escapeQ, normalizeEvent } from "../src/workspace.js";
 
 describe("google-workspace-mcp", () => {
   it("requests read-only scopes only", () => {
@@ -30,6 +30,18 @@ describe("google-workspace-mcp", () => {
       attachments: [{ file_id: "f1", title: "Transcript", url: "https://docs.google.com/document/d/f1" }],
     });
     expect(e.attendees).toHaveLength(2);
+  });
+
+  it("parses doc URLs with tabs and renders Docs bodies as markdown", () => {
+    expect(docIdFrom("https://docs.google.com/document/d/1XoSua5F_x-Y/edit?tab=t.0")).toEqual({ id: "1XoSua5F_x-Y", tab: "t.0" });
+    expect(docIdFrom("1XoSua5F")).toEqual({ id: "1XoSua5F", tab: undefined });
+    const md = docsBodyToMarkdown([
+      { paragraph: { paragraphStyle: { namedStyleType: "HEADING_2" }, elements: [{ textRun: { content: "Agenda 2026-10-05\n" } }] } },
+      { paragraph: { bullet: { nestingLevel: 0 }, elements: [{ textRun: { content: "Mainnet checks\n" } }] } },
+      { paragraph: { bullet: { nestingLevel: 1 }, elements: [{ textRun: { content: "Carlos\n" } }] } },
+      { table: { tableRows: [{ tableCells: [{ content: [{ paragraph: { elements: [{ textRun: { content: "Owner\n" } }] } }] }, { content: [{ paragraph: { elements: [{ textRun: { content: "Item\n" } }] } }] }] }] } },
+    ]);
+    expect(md).toBe("## Agenda 2026-10-05\n- Mainnet checks\n  - Carlos\n| Owner | Item |");
   });
 
   it("escapes Drive query strings", () => {

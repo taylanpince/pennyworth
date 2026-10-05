@@ -76,6 +76,24 @@ describe("functional scenario (§41)", () => {
   });
 });
 
+describe("meeting note corrections", () => {
+  it("fixes a name in the canonical note and only inside the meeting's Meeting Log entry", async () => {
+    const env = makeEnv();
+    const human = "# Open Money Stack\n\nAlice Martin owns the roadmap.\n\n## Meeting Log\n\n## Links\n";
+    writeFileSync(join(env.vault, "Projects", "Open Money Stack.md"), human);
+    writeAt(join(env.transcripts, "2026-10-04_1401.md"), TRANSCRIPT);
+    await runLibrarian(env);
+    const r = env.app.meetings.correctMeeting({ calendar_event_id: OMS_PRIVY.id, find: "Alice", replace: "Alicia" }) as { changed: { path: string; replacements: number }[] };
+    expect(r.changed.map((c) => c.path).sort()).toEqual(["Meetings/2026/10/2026-10-04 1400 - OMS Privy Integration.md", "Projects/Open Money Stack.md"]);
+    const project = readFileSync(join(env.vault, "Projects", "Open Money Stack.md"), "utf8");
+    expect(project).toContain("Alice Martin owns the roadmap."); // human text untouched
+    expect(project).toContain("**Attendees:** Alicia, Bob");
+    expect(readFileSync(join(env.vault, "Meetings/2026/10/2026-10-04 1400 - OMS Privy Integration.md"), "utf8")).not.toMatch(/\bAlice\b/);
+    expect(() => env.app.meetings.correctMeeting({ calendar_event_id: OMS_PRIVY.id, find: "Nobody", replace: "x" })).toThrow(/not found/);
+    expect(() => env.app.meetings.correctMeeting({ calendar_event_id: OMS_PRIVY.id, find: "Alicia", replace: "x\n## Injected" })).toThrow(/single-line/);
+  });
+});
+
 describe("action task policy", () => {
   const actions = [
     { owner: "Taylan", action: "Mine alone", deadline: null },

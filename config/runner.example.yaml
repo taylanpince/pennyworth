@@ -51,3 +51,11 @@ sandbox:
     - ~/.cargo/registry
     - ~/.cargo/git
     - ~/.gradle
+
+# Your comments on your own open tasks → the Assistant ("Process task replies" routine).
+replies:
+  enabled: true
+  routine: Process task replies
+  debounce_seconds: 90            # wait for follow-up comments / closing the task
+  exclude_labels: [needs-review, engineer]   # handled by ops-mcp / this runner
+  first_run_lookback_hours: 24
