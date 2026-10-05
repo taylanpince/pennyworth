@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 export async function git(cwd, ...args) {
   const { stdout } = await run("git", args, { cwd, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
@@ -40,9 +41,22 @@ export async function defaultBranch(clone) {
   try {
     return (await git(clone, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")).replace(/^origin\//, "");
   } catch {
-    await git(clone, "remote", "set-head", "origin", "--auto");
-    return (await git(clone, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")).replace(/^origin\//, "");
+    try {
+      await git(clone, "remote", "set-head", "origin", "--auto");
+      return (await git(clone, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")).replace(/^origin\//, "");
+    } catch {
+      return "main"; // empty repository: nothing on GitHub yet
+    }
   }
+}
+
+const hasRef = (cwd, ref) => git(cwd, "rev-parse", "--verify", "--quiet", ref).then(() => true, () => false);
+
+/** Bring a reference repository's checkout up to date with origin (read-only context for the agent). */
+export async function refreshCheckout(clone) {
+  const base = await defaultBranch(clone);
+  if (await hasRef(clone, `origin/${base}`)) await git(clone, "checkout", "--quiet", "--detach", `origin/${base}`);
+  return clone;
 }
 
 /** One worktree per task on branch pennyworth/<task>, created from origin/<base>. */
@@ -52,7 +66,8 @@ export async function ensureWorktree(workDir, clone, identifier, repo, branch, b
   mkdirSync(join(workDir, "tasks"), { recursive: true });
   const exists = await git(clone, "branch", "--list", branch);
   if (exists) await git(clone, "worktree", "add", "--quiet", path, branch);
-  else await git(clone, "worktree", "add", "--quiet", "-b", branch, path, `origin/${base}`);
+  else if (await hasRef(clone, `origin/${base}`)) await git(clone, "worktree", "add", "--quiet", "-b", branch, path, `origin/${base}`);
+  else await git(clone, "worktree", "add", "--quiet", "--orphan", "-b", branch, path); // empty repository
   return path;
 }
 
@@ -61,8 +76,10 @@ export async function removeWorktree(clone, worktree) {
 }
 
 export async function changesSummary(worktree, base) {
-  const commits = await git(worktree, "log", "--oneline", `origin/${base}..HEAD`).catch(() => "");
-  const stat = await git(worktree, "diff", "--stat", `origin/${base}...HEAD`).catch(() => "");
+  // An empty repository has no origin/<base>: everything on the branch is new.
+  const empty = !(await hasRef(worktree, `origin/${base}`));
+  const commits = await git(worktree, "log", "--oneline", ...(empty ? ["HEAD"] : [`origin/${base}..HEAD`])).catch(() => "");
+  const stat = await git(worktree, "diff", "--stat", ...(empty ? [EMPTY_TREE, "HEAD"] : [`origin/${base}...HEAD`])).catch(() => "");
   const dirty = await git(worktree, "status", "--porcelain").catch(() => "");
   return { commits, stat, dirty };
 }

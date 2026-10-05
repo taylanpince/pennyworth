@@ -161,8 +161,10 @@ It never sends messages and never edits Slack, Docs or Calendar. In your notes i
 
 Comment on a task and the work happens in a repository on this machine, the way you'd run Codex in a terminal tab, but tracked in Paperclip.
 
-1. Assign the task to **Engineer**, or add the label **engineer**. If you assign it without instructions, it replies "Ready" and tells you what it needs.
-2. Comment with what you want. Optional `key: value` lines anywhere in the comment control the run:
+1. Assign the task to **Engineer**, or add the label **engineer**. If you assign it and haven't commented yet, it replies "Ready".
+2. Comment with what you want, in plain words: which repository to work in (link or org/name), any repositories to use as references, whether you want a report/spec first or the change made, and optionally a model ("use the astra model", "use GLM"). A short Codex call reads the request; the runner checks its answers against the repositories you mentioned and the known models, and asks you in plain words if it can't tell which repository you mean (reply with just the name). Reference repositories are cloned read-only next to the worktree. Empty repositories work too: the task branch starts from scratch.
+
+   Explicit `key: value` lines anywhere in the comment still override what it reads:
 
    ```text
    repo: 0xPolygon/omsx          # any repo in 0xsequence, 0xPolygon or agglayer (or a GitHub URL)

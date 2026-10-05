@@ -19,7 +19,7 @@ Reply with a concise markdown report, exactly these sections:
 2–4 sentences: what you found${mode === "implement" ? " and what you changed" : ""}.
 
 ## Details
-${mode === "implement" ? "The changes (files, approach, notable decisions)." : "Findings with evidence: file:line references, log excerpts (short), commands and their results."}
+${mode === "implement" ? "The changes (files, approach, notable decisions)." : "Findings with evidence: file:line references, log excerpts (short), commands and their results. If you were asked for a spec, plan or design, the full document goes here."}
 
 ## Verification
 Commands you ran (builds, tests, queries) and their outcome.
@@ -28,13 +28,13 @@ Commands you ran (builds, tests, queries) and their outcome.
 Open questions or recommended follow-ups. Say "None" if there are none.
 ${mode === "implement" ? "\nEnd with one line: `Commit message: <conventional commit subject>` (e.g. `Commit message: fix(settlement): retry on transient RPC errors`)." : ""}`;
 
-export function firstPrompt({ user, task, repo, worktree, branch, base, mode, shells, instructions }) {
+export function firstPrompt({ user, task, repo, worktree, branch, base, mode, shells, instructions, references = [] }) {
   return `You are Pennyworth's engineering agent, working for ${user} on Paperclip task ${task.identifier}: "${task.title}".
 
 ## Workspace
 
 - Repository: ${repo.slug} (GitHub). Working copy: ${worktree} (a git worktree on branch ${branch}, based on origin/${base}; all remote branches are fetched).
-- Tools: git, gh (read-only), and the ${shells.join(", ")} devshell(s). Your usual MCP servers are available.
+${references.map((r) => `- Reference: ${r.slug}, checked out read-only at ${r.path} (current default branch). Read it for context; don't modify it.\n`).join("")}- Tools: git, gh (read-only), and the ${shells.join(", ")} devshell(s). Your usual MCP servers are available.
 - Mode: **${mode}**. ${
     mode === "implement"
       ? "Make the requested change, keep it focused, add or update tests where sensible, and run the relevant tests."

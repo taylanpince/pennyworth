@@ -8,7 +8,8 @@ import { promisify } from "node:util";
 import { branchFor, findRepos, normalizeRepo, parseComment, repoAllowed, resolveEngine, resolveMode, resolveShells } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
-import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, remoteHasBranch, removeWorktree } from "./git.mjs";
+import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteHasBranch, removeWorktree } from "./git.mjs";
+import { codexModels, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
 import { commitMessage, firstPrompt, followUpPrompt, stripCommitLine } from "./prompt.mjs";
 import { State } from "./state.mjs";
@@ -52,18 +53,15 @@ async function handleIssue(issue, engineerId) {
   // Comments written before the runner first saw the task only count if they are recent
   // (so "comment, then add the label" works, but old discussions don't trigger jobs).
   const horizon = known ? 0 : Date.now() - (cfg.first_seen_lookback_minutes ?? 30) * 60_000;
-  const comments = (await pc.comments(issue.id)).filter((c) => Paperclip.isUserInstruction(c) && !state.handled(c.id));
+  const userComments = (await pc.comments(issue.id)).filter((c) => Paperclip.isUserInstruction(c));
+  const comments = userComments.filter((c) => !state.handled(c.id));
   const fresh = comments.filter((c) => known || Date.parse(c.createdAt) >= horizon);
   for (const c of comments.filter((x) => !fresh.includes(x))) state.markHandled(c.id, issue.id);
   if (!fresh.length) {
-    // Newly assigned to the Engineer without instructions: say what's needed, once.
-    if (engineerId && issue.assigneeAgentId === engineerId && !state.get(`greeted:${issue.id}`) && !running.has(issue.id)) {
+    // Newly assigned to the Engineer and nobody has said anything yet: say so, once.
+    if (engineerId && issue.assigneeAgentId === engineerId && !userComments.length && !state.get(`greeted:${issue.id}`) && !running.has(issue.id)) {
       state.set(`greeted:${issue.id}`, new Date().toISOString());
-      const repos = findRepos(`${issue.title}\n${issue.description ?? ""}`, cfg.allowed_orgs);
-      await pc.comment(
-        issue.id,
-        `Ready. Comment with what you'd like done${repos.length === 1 ? ` (I'll use \`${repos[0].slug}\`)` : ", including a line `repo: org/name`"}. Optional lines: \`mode: implement\`, \`engine: glm\`, \`shells: go,pulumi\`.`,
-      );
+      await pc.comment(issue.id, "Ready. Tell me in a comment what you'd like done and which repository to work in.");
     }
     return;
   }
@@ -152,6 +150,7 @@ async function applyDirectives(issue, task, directives) {
     fields.repo = repo.slug;
   }
   if (directives.base) fields.base = directives.base.trim();
+  if (directives.model) directives.model = resolveModelAlias(directives.model, codexModels()) ?? directives.model;
   if (directives.engine || directives.model) fields.engine = resolveEngine(directives, cfg, task.engine);
   if (directives.mode) fields.mode = resolveMode(directives, task.mode);
   if (Object.keys(fields).length) state.updateTask(issue.id, fields);
@@ -161,25 +160,54 @@ async function applyDirectives(issue, task, directives) {
 class UserError extends Error {}
 
 async function startJob({ issue, directives, instructions }) {
+  directives = { ...directives };
   const controller = new AbortController();
   running.set(issue.id, { controller });
   let jobId;
   try {
-    let task = await applyDirectives(issue, state.task(issue.id), directives);
     const full = await pc.issue(issue.id);
+    // A request still waiting on an answer (e.g. which repository) is combined with the answer.
+    const pendingKey = `pending:${issue.id}`;
+    const pending = state.get(pendingKey);
+    if (pending) instructions = `${pending}\n\n${instructions}`;
 
-    // Repository: explicit, remembered, or inferred from the task/instructions.
+    // Plain-language request → settings. Explicit "key: value" lines still win.
+    const candidates = findRepos(`${instructions}\n${full.title}\n${full.description ?? ""}`, cfg.allowed_orgs).map((r) => r.slug);
+    const before = state.task(issue.id);
+    const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, candidates, known: before.repo })
+      .catch((err) => (log("intake failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }), undefined));
+    const inferred = {};
+    if (read?.repo && !before.repo) inferred.repo = read.repo;
+    if (read?.mode) inferred.mode = read.mode;
+    if (read?.engine === "glm") inferred.engine = "glm";
+    else if (read?.model) Object.assign(inferred, { engine: "codex", model: read.model });
+    let task = await applyDirectives(issue, before, { ...inferred, ...directives });
+
     if (!task.repo) {
-      const candidates = findRepos(`${full.title}\n${full.description ?? ""}\n${instructions}`, cfg.allowed_orgs);
-      if (candidates.length !== 1) {
+      if (candidates.length === 1) state.updateTask(issue.id, { repo: candidates[0] });
+      else {
+        state.set(pendingKey, instructions);
         throw new UserError(
-          candidates.length
-            ? `Several repositories are mentioned (${candidates.map((r) => `\`${r.slug}\``).join(", ")}). Add a line \`repo: org/name\` to your comment.`
-            : `Which repository? Add a line \`repo: org/name\` (allowed orgs: ${cfg.allowed_orgs.join(", ")}).`,
+          read?.question ??
+            (candidates.length
+              ? `Which repository should I work in: ${candidates.map((c) => `\`${c}\``).join(" or ")}? Just reply with the name.`
+              : "Which repository should I work in? Reply with its GitHub link or org/name."),
         );
       }
-      state.updateTask(issue.id, { repo: candidates[0].slug });
       task = state.task(issue.id);
+    }
+    state.set(pendingKey, "");
+    // Reference repositories (read-only context), remembered for follow-ups.
+    const refsKey = `refs:${issue.id}`;
+    const refSlugs = [...new Set([...JSON.parse(state.get(refsKey) || "[]"), ...(read?.references ?? [])])].filter((r) => r.toLowerCase() !== task.repo.toLowerCase());
+    state.set(refsKey, JSON.stringify(refSlugs));
+    const references = [];
+    for (const slug of refSlugs) {
+      try {
+        references.push({ slug, path: await refreshCheckout(await ensureClone(cfg.workDir, normalizeRepo(slug))) });
+      } catch (err) {
+        log("reference clone failed", { issue: issue.identifier, repo: slug, err: String(err.message ?? err).slice(0, 300) });
+      }
     }
     const repo = normalizeRepo(task.repo);
     const engine = task.engine ?? resolveEngine({}, cfg);
@@ -197,15 +225,16 @@ async function startJob({ issue, directives, instructions }) {
     jobId = state.startJob(issue.id, engineLabel(engine), logPath);
     running.get(issue.id).jobId = jobId;
     const resumed = Boolean(task.session_id && task.engine?.kind === engine.kind);
+    const refsNote = references.length ? `, reading ${references.map((r) => `\`${r.slug}\``).join(", ")} for reference` : "";
     await pc.startWork(
       issue.id,
-      `${resumed ? "Continuing" : "Started"}: **${mode}** in \`${repo.slug}\` on \`${branch}\` with ${engineLabel(engine)} (shells: ${shells.join(", ")}).\nWorktree: \`${worktree}\``,
+      `${resumed ? "Continuing" : "On it"}: ${mode === "implement" ? "making the change" : "investigating"} in \`${repo.slug}\`${refsNote}, with ${engineLabel(engine)}. I'll post the result here.\n\n_Branch \`${branch}\` · worktree \`${worktree}\` · shells ${shells.join(", ")}_`,
     );
     log("job started", { issue: issue.identifier, repo: repo.slug, engine: engine.kind, mode, resumed });
 
     const prompt = resumed
       ? followUpPrompt({ user: cfg.selfName, mode, instructions })
-      : firstPrompt({ user: cfg.selfName, task: full, repo, worktree, branch, base, mode, shells, instructions });
+      : firstPrompt({ user: cfg.selfName, task: full, repo, worktree, branch, base, mode, shells, instructions, references });
     const result = await runAgent({ cfg, engine, shells, worktree, prompt, sessionId: resumed ? task.session_id : undefined, logPath, signal: controller.signal });
     if (result.sessionId) state.updateTask(issue.id, { session_id: result.sessionId });
 

@@ -23,6 +23,12 @@ engines:
     model: z-ai/glm-5.3-flash
     key_file: ~/.config/pennyworth/openrouter_key
 
+# Reads plain-language requests (target repo, reference repos, mode, model) with a short Codex call.
+intake:
+  model: ""                           # empty = your Codex default
+  reasoning_effort: low
+  timeout_seconds: 180
+
 devshells:
   flake: ~/config/nixos               # nix develop <flake>#<shell>
   engine_shell: llm                   # provides codex/opencode; always outermost
