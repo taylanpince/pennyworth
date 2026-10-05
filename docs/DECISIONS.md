@@ -138,3 +138,11 @@ The AI Tool Hub page lists Paperclip as "Security team only". The user cleared u
   - the Paperclip UI;
   - the Chief of Staff's daily brief, which ranks items and suggests changes but never edits your tasks.
 - **Supporting tool:** `task_create` in the paperclip-tasks bridge is idempotent by marker (Paperclip `idempotencyKey`), so re-running the brief updates "Daily Brief — <date>" instead of creating a second one.
+
+## D-13: Slack through Slack's official MCP, behind a read-only proxy
+
+- **Decision:** `services/slack-mcp` proxies `https://mcp.slack.com/mcp`, which is approved on go/mcps, with the user's token. It exposes an allowlist of read tools; anything matching send, post, schedule, update, create, delete, reaction, draft, upload or similar is never exposed, even if allowlisted.
+- **Auth:** OAuth 2 with PKCE, using Polygon's public client (`SLACK_CLIENT_ID`) and its registered loopback callback on port 3118. Only read and search user scopes are requested.
+- **Tokens:** Slack rotates refresh tokens, so the token file lives in `$PENNYWORTH_SECRETS_DIR/slack/` (0700), mounted read-write into the sidecar only.
+- **Why not Codex's own MCP OAuth:** the login would have to run inside the container, where the browser callback can't reach. A proxy also lets us enforce read-only access in code, independent of the Slack app's configured scopes.
+- **Polling:** the Slack Scout polls every 30 minutes during work hours, with no public ingress (spec §29, §25).

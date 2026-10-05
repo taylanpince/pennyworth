@@ -49,9 +49,11 @@ gen_secret paperclip_auth_secret
 gen_secret paperclip_agent_jwt_secret
 gen_secret ops_mcp_token
 gen_secret google_mcp_token
+gen_secret slack_mcp_token
 placeholder paperclip_ops_key ""
 placeholder google_oauth.json "{}"
 chmod 0600 "$PENNYWORTH_SECRETS_DIR"/*
+mkdir -p "$PENNYWORTH_SECRETS_DIR/slack" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/slack"
 
 echo "Config"
 mkdir -p "$config_dir"

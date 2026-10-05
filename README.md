@@ -135,8 +135,29 @@ todo --all                           # include reviews and briefs
 |---|---|---|
 | Meeting Librarian | file watcher + every 15 min, weekdays 08–20 | ops-mcp; Calendar/Drive read; close or comment on its own tasks |
 | Chief of Staff | weekdays 08:30 → "Daily Brief — date" | Calendar read (list/get events only); Paperclip task list/create/update |
+| Slack Scout | every 30 min, weekdays 08–20 | Slack read/search only; Paperclip task search/create/update/close |
 
 Each agent sees only the MCP servers and tools listed for it in `config/paperclip.yaml` (`mcp_servers`, `enabled_tools`). Everything else is disabled in its Codex arguments. Run a routine on demand with "Run now" in Paperclip.
+
+## Slack
+
+Pennyworth reads Slack through Slack's official MCP server (`mcp.slack.com`). It uses Polygon's registered OAuth client from go/mcps, a public client with callback `http://localhost:3118/callback`, set as `SLACK_CLIENT_ID` in `.env`.
+
+- The `slack-mcp` sidecar holds your user token, refreshes it (Slack rotates refresh tokens), and exposes **only** read tools: search, read channel/thread, user and channel lookups. Send, draft, schedule, react, canvas and list tools are never listed, and are refused if called.
+- Consent asks only for read and search scopes.
+
+```sh
+scripts/slack-auth.sh         # once: open the printed URL, approve; then:
+node scripts/paperclip-setup.mjs   # re-activates the Slack scan routine
+```
+
+The Slack Scout creates three kinds of tasks:
+
+- `needs-response`: someone is waiting for your reply. It is closed automatically once you answer in the thread.
+- `todo`: something you promised.
+- `waiting-on`: something someone promised you.
+
+Every task carries a permalink and the marker `source:slack:<channel>:<ts>`, so nothing is duplicated. `todo` lists the needs-response items as `reply`.
 
 ## Google
 

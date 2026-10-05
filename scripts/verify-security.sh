@@ -55,6 +55,7 @@ git ls-files --cached --others --exclude-standard | grep -qE '(^|/)(\.env|system
 echo "Capabilities (by construction)"
 pass "ops-mcp exposes no delete/replace/arbitrary-write tools (see services/ops-mcp/src/mcp/tools.ts)"
 pass "google-workspace-mcp requests only *.readonly scopes and has GET-only client code"
+pass "slack-mcp exposes only allowlisted read tools and never send/react/edit tools (services/slack-mcp/src/policy.ts)"
 pass "no email/Slack send or calendar write tool is configured for any agent"
 
 echo

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Your todo list, kept in Paperclip. Acts as you (board API key from the secrets dir).
 //
-//   todo                                  list open todos and meeting actions, by priority
+//   todo                                  list open todos, meeting actions and Slack replies, by priority
 //   todo add "Draft OMS roadmap" [-p high] [-n "details"]
 //   todo prio PEN-12 high                 critical | high | medium | low
 //   todo done PEN-12 ["optional note"]
@@ -85,6 +85,7 @@ function print(issues, empty) {
   if (!issues.length) return console.log(empty);
   const tag = (i) => {
     const names = (i.labels ?? []).map((l) => l.name);
+    if (names.includes("needs-response")) return c("31", "reply");
     if (names.includes("meeting-action")) return c("36", "meeting");
     if (names.includes("waiting-on")) return c("35", "waiting");
     if (names.includes("needs-review")) return c("33", "review");
@@ -113,7 +114,7 @@ switch (cmd) {
   case "ls":
   case "--all": {
     const all = cmd === "--all" || args.includes("--all");
-    print(await list({ labelNames: all ? ["todo", "meeting-action", "needs-review", "waiting-on", "daily-brief"] : ["todo", "meeting-action"] }), "Nothing on your list.");
+    print(await list({ labelNames: all ? ["todo", "meeting-action", "needs-response", "needs-review", "waiting-on", "daily-brief"] : ["todo", "meeting-action", "needs-response"] }), "Nothing on your list.");
     break;
   }
   case "add": {

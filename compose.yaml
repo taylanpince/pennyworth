@@ -21,13 +21,14 @@ services:
     entrypoint:
       - /bin/sh
       - -c
-      # Also exports the bearer tokens Codex sends to ops-mcp and google-workspace-mcp
+      # Also exports the bearer tokens Codex sends to ops-mcp, google-workspace-mcp and slack-mcp
       # (bearer_token_env_var in the shared Codex config). $$ escapes compose interpolation.
       - >-
         export BETTER_AUTH_SECRET="$$(cat /run/secrets/paperclip_auth_secret)"
         PAPERCLIP_AGENT_JWT_SECRET="$$(cat /run/secrets/paperclip_agent_jwt_secret)"
         PENNYWORTH_OPS_MCP_TOKEN="$$(cat /run/secrets/ops_mcp_token)"
         PENNYWORTH_GOOGLE_MCP_TOKEN="$$(cat /run/secrets/google_mcp_token)"
+        PENNYWORTH_SLACK_MCP_TOKEN="$$(cat /run/secrets/slack_mcp_token)"
         && exec /usr/bin/tini -- docker-entrypoint.sh "$$@"
       - paperclip
     command: ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
@@ -57,6 +58,7 @@ services:
       # Bearer tokens Codex sends to ops-mcp / google-workspace-mcp (see config/paperclip.yaml).
       - ops_mcp_token
       - google_mcp_token
+      - slack_mcp_token
     pids_limit: 2048
     networks:
       egress:
@@ -118,6 +120,27 @@ services:
       - backplane
       - egress
 
+  slack-mcp:
+    <<: *hardening
+    build: ./services/slack-mcp
+    image: pennyworth/slack-mcp:local
+    user: "${PUID:-1000}:${PGID:-100}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    environment:
+      SLACK_CLIENT_ID: "${SLACK_CLIENT_ID:-}"
+      SLACK_TOKEN_FILE: /state/token.json
+      MCP_TOKEN_FILE: /run/secrets/slack_mcp_token
+    volumes:
+      # Read-write: Slack rotates refresh tokens, so the newest pair must be persisted.
+      - ${PENNYWORTH_SECRETS_DIR}/slack:/state
+    secrets:
+      - slack_mcp_token
+    networks:
+      - backplane
+      - egress
+
 networks:
   # Explicit 10.x subnets: some host firewalls (here: NordVPN's) drop traffic to Docker's
   # default 172.16.0.0/12 pools, which breaks the published 127.0.0.1:3100 port.
@@ -146,3 +169,5 @@ secrets:
     file: ${PENNYWORTH_SECRETS_DIR}/google_oauth.json
   google_mcp_token:
     file: ${PENNYWORTH_SECRETS_DIR}/google_mcp_token
+  slack_mcp_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/slack_mcp_token
