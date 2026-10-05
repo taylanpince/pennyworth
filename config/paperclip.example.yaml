@@ -34,6 +34,8 @@ mcp_servers:
 codex_args:
   - --sandbox
   - read-only
+  # Paperclip run workspaces are not git repositories.
+  - --skip-git-repo-check
   - -c
   - features.shell_tool=false
   - -c

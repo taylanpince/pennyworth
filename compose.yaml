@@ -21,7 +21,14 @@ services:
     entrypoint:
       - /bin/sh
       - -c
-      - 'BETTER_AUTH_SECRET="$(cat /run/secrets/paperclip_auth_secret)" PAPERCLIP_AGENT_JWT_SECRET="$(cat /run/secrets/paperclip_agent_jwt_secret)" exec /usr/bin/tini -- docker-entrypoint.sh "$@"'
+      # Also exports the bearer tokens Codex sends to ops-mcp and google-workspace-mcp
+      # (bearer_token_env_var in the shared Codex config). $$ escapes compose interpolation.
+      - >-
+        export BETTER_AUTH_SECRET="$$(cat /run/secrets/paperclip_auth_secret)"
+        PAPERCLIP_AGENT_JWT_SECRET="$$(cat /run/secrets/paperclip_agent_jwt_secret)"
+        PENNYWORTH_OPS_MCP_TOKEN="$$(cat /run/secrets/ops_mcp_token)"
+        PENNYWORTH_GOOGLE_MCP_TOKEN="$$(cat /run/secrets/google_mcp_token)"
+        && exec /usr/bin/tini -- docker-entrypoint.sh "$$@"
       - paperclip
     command: ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
     environment:

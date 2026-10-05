@@ -83,6 +83,7 @@ Also:
   - ChatGPT apps/connectors (`features.apps=false`): these could otherwise reach the ChatGPT account's own Gmail/Drive connectors.
   - Browser use, computer use, image generation and web search.
 - **Result:** agents act only through vetted MCP tools.
+- **Run workspaces:** Paperclip runs agents in non-git workspaces, so `codex_args` includes `--skip-git-repo-check`. Without it Codex exits before doing anything.
 - **Also confirmed:** Paperclip's default for `codex_local` is `--dangerously-bypass-approvals-and-sandbox`. The setup script always sends `dangerouslyBypassApprovalsAndSandbox: false` and refuses `codex_args` without `--sandbox`.
 
 ## D-8: MCP servers go to Codex directly, not through Paperclip's tool gateway
