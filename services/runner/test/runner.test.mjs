@@ -252,3 +252,13 @@ describe("first push to an empty repository", () => {
     assert.equal(execFileSync("git", ["-C", remote, "log", "--format=%s", "main"]).toString().trim(), "docs: spec");
   });
 });
+
+describe("engine switches", () => {
+  it("gives a fresh engine the earlier requests as context", () => {
+    const p = firstPrompt({
+      user: "Taylan", task: { identifier: "PEN-18", title: "Tron", description: "" }, repo: normalizeRepo("0xPolygon/tron-indexer-gateway"),
+      worktree: "/w", branch: "pennyworth/pen-18", base: "main", mode: "implement", shells: ["llm"], instructions: "Implement it.", earlier: "Write the spec.",
+    });
+    assert.match(p, /## Earlier requests on this task[\s\S]*Write the spec\.[\s\S]*## Instructions from Taylan \(authoritative\)\n\nImplement it\./);
+  });
+});

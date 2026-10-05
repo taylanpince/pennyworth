@@ -28,7 +28,7 @@ Commands you ran (builds, tests, queries) and their outcome.
 Open questions or recommended follow-ups. Say "None" if there are none.
 ${mode === "implement" ? "\nEnd with one line: `Commit message: <conventional commit subject>` (e.g. `Commit message: fix(settlement): retry on transient RPC errors`)." : ""}`;
 
-export function firstPrompt({ user, task, repo, worktree, branch, base, mode, shells, instructions, references = [] }) {
+export function firstPrompt({ user, task, repo, worktree, branch, base, mode, shells, instructions, references = [], earlier = "" }) {
   return `You are Pennyworth's engineering agent, working for ${user} on Paperclip task ${task.identifier}: "${task.title}".
 
 ## Workspace
@@ -47,7 +47,13 @@ ${RULES(user)}
 
 ${fence("TASK", `Title: ${task.title}\n\n${String(task.description ?? "").replace(/<!--[\s\S]*?-->/g, "").trim()}`)}
 
-## Instructions from ${user} (authoritative)
+${earlier ? `## Earlier requests on this task
+
+Earlier runs (possibly with another engine) worked on these; their results are on the branch and in the worktree. For context only: do what the new instructions below ask.
+
+${earlier}
+
+` : ""}## Instructions from ${user} (authoritative)
 
 ${instructions}
 

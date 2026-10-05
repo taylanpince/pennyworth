@@ -2,7 +2,7 @@
 // Pennyworth runner: turns your comments on Paperclip tasks labelled "engineer" into
 // Codex / OpenRouter coding jobs in runner-owned git worktrees on this machine.
 import { execFile } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { branchFor, findRepos, normalizeRepo, parseComment, repoAllowed, resolveEngine, resolveMode, resolveShells } from "./commands.mjs";
@@ -224,7 +224,14 @@ async function startJob({ issue, directives, instructions }) {
     const logPath = join(logsDir, `${issue.identifier}-${Date.now()}.log`);
     jobId = state.startJob(issue.id, engineLabel(engine), logPath);
     running.get(issue.id).jobId = jobId;
-    const resumed = Boolean(task.session_id && task.engine?.kind === engine.kind);
+    // A saved session can only be continued by the engine that created it (Codex and opencode
+    // sessions are not interchangeable). After a switch the new engine starts fresh, with the
+    // earlier requests on this task and the work already on the branch as context.
+    const sessionEngine = state.get(`session_engine:${issue.id}`) || (String(task.session_id).startsWith("ses_") ? "openrouter" : "codex");
+    const resumed = Boolean(task.session_id && sessionEngine === engine.kind);
+    const historyKey = `history:${issue.id}`;
+    const earlier = resumed ? "" : state.get(historyKey) || "";
+    state.set(historyKey, `${state.get(historyKey) || ""}\n\n---\n\n${instructions}`.trim().slice(-20_000));
     const refsNote = references.length ? `, reading ${references.map((r) => `\`${r.slug}\``).join(", ")} for reference` : "";
     await pc.startWork(
       issue.id,
@@ -234,9 +241,12 @@ async function startJob({ issue, directives, instructions }) {
 
     const prompt = resumed
       ? followUpPrompt({ user: cfg.selfName, mode, instructions })
-      : firstPrompt({ user: cfg.selfName, task: full, repo, worktree, branch, base, mode, shells, instructions, references });
+      : firstPrompt({ user: cfg.selfName, task: full, repo, worktree, branch, base, mode, shells, instructions, references, earlier });
     const result = await runAgent({ cfg, engine, shells, worktree, prompt, sessionId: resumed ? task.session_id : undefined, logPath, signal: controller.signal });
-    if (result.sessionId) state.updateTask(issue.id, { session_id: result.sessionId });
+    if (result.sessionId) {
+      state.updateTask(issue.id, { session_id: result.sessionId });
+      state.set(`session_engine:${issue.id}`, engine.kind);
+    }
 
     if (result.cancelled) {
       state.finishJob(jobId, "cancelled");
@@ -258,7 +268,7 @@ async function startJob({ issue, directives, instructions }) {
     const report = stripCommitLine(result.lastMessage) || "_The agent produced no report. See the run log._";
     const parts = [
       result.timedOut ? `**Timed out** after ${cfg.timeout_minutes ?? 60} minutes. Partial results below.\n` : "",
-      result.code && !result.timedOut ? `**The agent exited with code ${result.code}.** See the log for details.\n` : "",
+      result.code && !result.timedOut ? `**The run failed** (exit code ${result.code}). Last lines of the log:\n\`\`\`\n${logTail(logPath)}\n\`\`\`\n` : "",
       report,
       "",
       "---",
@@ -269,7 +279,8 @@ async function startJob({ issue, directives, instructions }) {
     if (changes.commits) parts.push("\nReply **push** to publish the branch to GitHub, or **pr** to also open a draft PR.");
     parts.push(`Worktree: \`${worktree}\` · log: \`${logPath}\``);
     if (unexpectedPush) parts.push(`\n⚠️ **The branch \`${branch}\` exists on GitHub but the runner did not push it.** Please check.`);
-    await pc.setStatus(issue.id, result.code || result.timedOut ? "blocked" : "in_review", parts.filter(Boolean).join("\n"));
+    // Failures also go to review (Paperclip refuses "blocked" without a blocker); the report says what failed.
+    await pc.setStatus(issue.id, "in_review", parts.filter(Boolean).join("\n"));
     state.finishJob(jobId, result.timedOut ? "timeout" : result.code ? "failed" : "done", committed ? "committed" : undefined);
     log("job finished", { issue: issue.identifier, code: result.code, timedOut: result.timedOut, committed: Boolean(committed) });
   } catch (err) {
@@ -337,6 +348,15 @@ async function runCommand(issue, task, command) {
     state.updateTask(issue.id, { pr_url: url });
     log("draft PR opened", { issue: issue.identifier, url });
     await pc.comment(issue.id, `Opened draft PR: ${url}`);
+  }
+}
+
+/** Last few lines of a job log, without terminal colour codes (for failure reports). */
+function logTail(path, lines = 6) {
+  try {
+    return readFileSync(path, "utf8").replace(/\x1b\[[0-9;]*m/g, "").trim().split("\n").filter((l) => !l.startsWith("#")).slice(-lines).join("\n").slice(-1500) || "(empty)";
+  } catch {
+    return "(log unavailable)";
   }
 }
 
