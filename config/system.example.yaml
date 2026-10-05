@@ -51,6 +51,8 @@ paperclip:
   ui_base_url: http://localhost:3100
   company_id: ""                         # filled in by scripts/paperclip-setup.mjs
   api_key_file: /run/secrets/paperclip_ops_key
+  # Which meeting actions become tasks: mine (default) | mine_and_unclear | all
+  meeting_action_tasks: mine
   labels:
     meeting_action: meeting-action
     needs_review: needs-review

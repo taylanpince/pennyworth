@@ -85,8 +85,12 @@ Rules:
   - `explicit`: it was clearly stated as decided or agreed.
   - `probable`: it is the likely conclusion, but nobody confirmed it.
   - Open discussion is **not** a decision. Put unresolved points in `open_questions`.
-- **Actions:** only genuine commitments or requests.
+- **Actions:** only concrete, explicit commitments ("I'll send the deck", "Alice will draft the spec") or clear requests that someone agreed to.
+  - Not actions: ideas, options ("we could…"), general intentions, ongoing work being described ("the team is migrating…"), or things that are only being discussed.
+  - Keep each action specific enough to be done and checked off. Merge duplicates.
+  - `owner`: who committed, by name. Use the user's own name when the user committed (`[Me]` in local transcripts, or the user speaking in a Meet transcript). For shared actions that include the user, name both ("Taylan and Vojtech").
   - `owner` is null when it is genuinely unclear. Never infer one.
   - `deadline` is null unless one was explicitly stated, in the words used ("Friday", "end of month"). Never invent deadlines.
+  - All actions go in the notes. ops-mcp only creates Paperclip tasks for the user's own actions, so getting the owner right matters.
 - In local transcripts, `[Me]` is the user and `[Them]` is everyone else.
 - Keep each item to one line. No markdown headings and no HTML.

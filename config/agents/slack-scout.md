@@ -36,20 +36,25 @@ Your task gives today's date and the user's Slack user ID (`U…`). Below, `<me>
 
    Skip bot and integration messages (Jira, GitHub, calendar and the like), unless a human asks the user something in the same thread.
 
-3. **Decide.** For each candidate, read the thread when the context isn't obvious. Then classify it:
-   - **Needs response:** a direct question or request to the user that the user has *not* answered later in the thread. Label: `needs-response`.
-   - **User's promise:** the user committed to doing something ("I'll send…", "let me check…") and it isn't visibly done. Label: `todo`.
-   - **Waiting on someone:** someone committed to deliver something *to the user*. Label: `waiting-on`.
-   - **Otherwise:** FYI chatter, already answered, or social messages. No task.
+3. **Decide.** For each candidate, read the thread when the context isn't obvious. Only two outcomes create a task:
+   - **Needs response** (label `needs-response`): someone asks the user a direct question, or makes a request that needs the user's own decision, answer, review, approval or access. It must be addressed to the user (an @mention, a DM, or a reply to the user's message), and the user has not answered it later in the thread.
+   - **User's commitment** (label `todo`): the user explicitly said they would do something concrete ("I'll send…", "I will review…", "let me get you access") and hasn't visibly done it in the thread.
 
-   When unsure whether something is aimed at the user, leave it out. Precision matters more than recall.
+   Everything else creates **no task**:
+   - things other people committed to, or are already working on, even if the user cares about them;
+   - questions to a group or channel that someone else already answered;
+   - FYI and status updates, mentions in passing, or the user being cc'd;
+   - social messages and acknowledgements ("thanks", "sounds good");
+   - vague intentions ("we should…", "might look at…");
+   - bot and integration messages.
+
+   When in doubt, leave it out. A missed FYI is better than a noisy task list. Aim for only the handful of items that genuinely need the user each day.
 
 4. **Create tasks.** Use one `task_create` per conversation, using the root message of the thread:
    - `marker`: `source:slack:<channel_id>:<thread_ts or message ts>`.
    - `title`:
      - for needs-response: `Reply to <person>: <topic>`, e.g. "Reply to Heena: review JPM sync agenda";
      - for todo: the action itself;
-     - for waiting-on: `<person>: <what they owe>`.
    - `priority`: `high` for an explicit deadline today or tomorrow, or a blocker. `medium` otherwise. `low` for nice-to-haves.
    - `description`, in this format:
 
@@ -73,4 +78,4 @@ Your task gives today's date and the user's Slack user ID (`U…`). Below, `<me>
 
    If `task_create` returns `deduplicated: true`, the task already exists. Add a `task_comment` only when there's genuinely new information in the thread, such as a new deadline or a follow-up ping.
 
-5. **Finish.** Call `task_current`, then `task_set_status` on your run task with status `done` and a one-line count summary, e.g. "3 new needs-response, 1 todo, 0 waiting-on; closed 2 answered".
+5. **Finish.** Call `task_current`, then `task_set_status` on your run task with status `done` and a one-line count summary, e.g. "3 new needs-response, 1 todo; closed 2 answered".

@@ -548,7 +548,10 @@ export class MeetingService {
     }
 
     // 3. Action items → Paperclip tasks (also when the vault is unavailable).
-    for (const a of extraction.actions) result.action_tasks.push(await this.actionTask(meeting, notePath, s, a));
+    // Every action stays in the notes; only the user's own become tasks (by default).
+    for (const a of extraction.actions) {
+      if (this.wantsTask(a.owner)) result.action_tasks.push(await this.actionTask(meeting, notePath, s, a));
+    }
 
     this.sources.setStatus(s.id, result.status === "processed" ? "processed" : "obsidian_write_pending", result.status === "processed" ? undefined : "vault unavailable");
     this.finishRun(runId, "ok", { note: result.canonical_note, targets: result.targets, tasks: result.action_tasks.length });
@@ -776,6 +779,19 @@ export class MeetingService {
       },
       { meeting_id: meeting.id },
     );
+  }
+
+  private isMine(owner: string | null): boolean {
+    if (!owner) return false;
+    const o = owner.toLowerCase();
+    return this.cfg.self.names.some((n) => new RegExp(`(^|[^a-z])${n.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\  private matchReviewMarker(s: SourceRow): string {")}([^a-z]|$)`).test(o));
+  }
+
+  private wantsTask(owner: string | null): boolean {
+    const policy = this.cfg.paperclip.meeting_action_tasks;
+    if (this.isMine(owner)) return true;
+    if (!owner?.trim()) return policy !== "mine";
+    return policy === "all";
   }
 
   private matchReviewMarker(s: SourceRow): string {

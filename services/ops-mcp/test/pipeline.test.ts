@@ -55,8 +55,9 @@ describe("functional scenario (§41)", () => {
 
     const actionTasks = env.paperclip.byLabel("meeting-action");
     const waiting = env.paperclip.byLabel("waiting-on");
+    // Only the user's own action becomes a task; Alice's stays in the notes.
     expect(actionTasks).toHaveLength(1);
-    expect(waiting).toHaveLength(1);
+    expect(waiting).toHaveLength(0);
     expect(actionTasks[0]!.input.description).toContain("## Source");
     expect(actionTasks[0]!.input.description).toContain("[[Meetings/2026/10/2026-10-04 1400 - OMS Privy Integration]]");
     expect(actionTasks[0]!.input.description).toMatch(/<!-- source:meeting:evt_oms_privy_20261004:action:[0-9a-f]{12} -->/);
@@ -69,9 +70,33 @@ describe("functional scenario (§41)", () => {
     const noteAgain = readFileSync(join(env.vault, "Projects", "Open Money Stack.md"), "utf8");
     expect(countOccurrences(noteAgain, "paperclip-meeting:evt_oms_privy_20261004")).toBe(1);
     expect(readdirSync(join(env.vault, "Meetings", "2026", "10"))).toHaveLength(1);
-    expect(env.paperclip.issues.size).toBe(2);
+    expect(env.paperclip.issues.size).toBe(1);
     const counts = env.app.db.prepare("SELECT (SELECT COUNT(*) FROM sources) s, (SELECT COUNT(*) FROM meetings) m").get() as { s: number; m: number };
     expect(counts).toEqual({ s: 1, m: 1 });
+  });
+});
+
+describe("action task policy", () => {
+  const actions = [
+    { owner: "Taylan", action: "Mine alone", deadline: null },
+    { owner: "Taylan Pince and Vojtech Vitek", action: "Shared with me", deadline: null },
+    { owner: "Alice", action: "Someone else's", deadline: null },
+    { owner: null, action: "No clear owner", deadline: null },
+  ];
+  const run = async (policy: string) => {
+    const env = makeEnv({ cfg: { paperclip: { base_url: "http://paperclip.test:3100", meeting_action_tasks: policy } } });
+    writeFileSync(join(env.vault, "Projects", "Open Money Stack.md"), OMS_NOTE);
+    writeAt(join(env.transcripts, "2026-10-04_1401.md"), TRANSCRIPT);
+    await runLibrarian(env, [OMS_PRIVY], { ...EXTRACTION, actions });
+    return [...env.paperclip.issues.values()].map((i) => i.input.title).sort();
+  };
+
+  it("mine (default): only actions the user owns, including shared ones", async () => {
+    expect(await run("mine")).toEqual(["Mine alone", "Shared with me"]);
+  });
+  it("mine_and_unclear adds ownerless actions; all adds others as waiting-on", async () => {
+    expect(await run("mine_and_unclear")).toEqual(["Mine alone", "No clear owner", "Shared with me"]);
+    expect(await run("all")).toEqual(["Alice: Someone else's", "Mine alone", "No clear owner", "Shared with me"]);
   });
 });
 
@@ -97,8 +122,8 @@ describe("changed transcript", () => {
     ]);
     const note = readFileSync(join(env.vault, "Projects", "Open Money Stack.md"), "utf8");
     expect(countOccurrences(note, "paperclip-meeting:evt_oms_privy_20261004")).toBe(1);
-    // One new task for the new action only.
-    expect(env.paperclip.issues.size).toBe(3);
+    // Bob's new action is not the user's: no new task.
+    expect(env.paperclip.issues.size).toBe(1);
   });
 
   it("does not overwrite a canonical note the user edited", async () => {
@@ -233,7 +258,7 @@ describe("failure behaviour", () => {
     const second = await runLibrarian(env);
     expect(second.results[0]!.status).toBe("processed");
     expect(existsSync(join(env.vault, "Meetings/2026/10/2026-10-04 1400 - OMS Privy Integration.md"))).toBe(true);
-    expect(env.paperclip.issues.size).toBe(2);
+    expect(env.paperclip.issues.size).toBe(1);
   });
 
   it("calendar unavailable: no guess, source stays pending", async () => {
@@ -263,9 +288,9 @@ describe("failure behaviour", () => {
     expect(results[0]!.action_tasks.every((t) => t.state === "pending_create")).toBe(true);
     env.paperclip.up = true;
     await env.app.meetings.scan();
-    expect(env.paperclip.issues.size).toBe(2);
+    expect(env.paperclip.issues.size).toBe(1);
     await env.app.meetings.scan();
-    expect(env.paperclip.issues.size).toBe(2);
+    expect(env.paperclip.issues.size).toBe(1);
   });
 
   it("a target note that cannot be written is reported, not overwritten", async () => {
