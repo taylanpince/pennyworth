@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Read-only gh for Pennyworth coding agents. Placed first on the agent's PATH; forwards
+# read commands to the real gh and refuses anything that writes to GitHub.
+# (The runner itself uses the real gh for human-approved `push` / `pr` commands.)
+set -euo pipefail
+
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+real=""
+IFS=: read -r -a dirs <<< "$PATH"
+for d in "${dirs[@]}"; do
+  [ "$d" = "$self_dir" ] && continue
+  if [ -x "$d/gh" ]; then real="$d/gh"; break; fi
+done
+[ -n "$real" ] || { echo "gh (pennyworth): real gh not found on PATH" >&2; exit 127; }
+
+deny() { echo "gh (pennyworth): '$*' is blocked — agents have read-only GitHub access. Report what should be done instead." >&2; exit 3; }
+
+sub="${1:-}"; action="${2:-}"
+case "$sub" in
+  ""|--help|-h|help|version|--version|status|search|browse) ;;
+  auth) [ "$action" = "status" ] || deny "$@" ;;
+  api)
+    # Only GET requests: reject explicit methods other than GET and any field/input flags
+    # (which turn a request into a POST).
+    shift
+    method="GET"
+    for ((i = 1; i <= $#; i++)); do
+      a="${!i}"
+      case "$a" in
+        -X|--method) j=$((i + 1)); method="${!j:-}";;
+        -X*) method="${a#-X}";;
+        --method=*) method="${a#--method=}";;
+        -f|-F|--field|--raw-field|--input|-f*|-F*|--field=*|--raw-field=*|--input=*) deny "api with request body" ;;
+      esac
+    done
+    [ "${method^^}" = "GET" ] || deny "api -X $method"
+    exec "$real" api "$@"
+    ;;
+  pr|issue|run|workflow|release|repo|gist|label|project|cache|secret|variable|ruleset|codespace|org|attestation)
+    case "$action" in
+      ""|list|view|diff|checks|status|watch|download|--help|-h) ;;
+      clone) [ "$sub" = "repo" ] || deny "$@" ;;
+      *) deny "$@" ;;
+    esac
+    ;;
+  *) deny "$@" ;;
+esac
+exec "$real" "$@"

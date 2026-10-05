@@ -13,6 +13,7 @@ labels:
   - { name: daily-brief, color: "#059669" }
   - { name: todo, color: "#0891b2" }
   - { name: needs-response, color: "#e11d48" }
+  - { name: engineer, color: "#4f46e5" }
 
 # MCP servers given to Codex agents directly through the shared Codex config
 # (/paperclip/.codex/config.toml). Not registered as Paperclip Tool Connections: the

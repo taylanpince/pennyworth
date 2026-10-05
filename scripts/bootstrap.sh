@@ -89,6 +89,8 @@ say "wrote $vault_file (${#folders[@]} folders)"
 
 echo "Installing setup-script dependency"
 [ -d services/ops-mcp/node_modules/yaml ] || npm ci --prefix services/ops-mcp --silent
+[ -d services/runner/node_modules/yaml ] || npm ci --prefix services/runner --silent
+for f in runner; do [ -f "$config_dir/$f.yaml" ] || { cp "config/$f.example.yaml" "$config_dir/$f.yaml"; say "created $config_dir/$f.yaml"; }; done
 
 echo "Validating compose"
 docker compose --env-file "$env_file" -f compose.yaml -f "$vault_file" config --quiet

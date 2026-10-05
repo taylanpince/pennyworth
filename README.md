@@ -136,8 +136,60 @@ todo --all                           # include reviews and briefs
 | Meeting Librarian | file watcher + every 15 min, weekdays 08–20 | ops-mcp; Calendar/Drive read; close or comment on its own tasks |
 | Chief of Staff | weekdays 08:30 → "Daily Brief — date" | Calendar read (list/get events only); Paperclip task list/create/update |
 | Slack Scout | every 30 min, weekdays 08–20 | Slack read/search only; Paperclip task search/create/update/close |
+| pennyworth-runner (host service, not a Paperclip agent) | your comments on `engineer` tasks | Codex/OpenRouter in its own git worktrees, as you; read-only gh; no pushes except your `push`/`pr` |
 
 Each agent sees only the MCP servers and tools listed for it in `config/paperclip.yaml` (`mcp_servers`, `enabled_tools`). Everything else is disabled in its Codex arguments. Run a routine on demand with "Run now" in Paperclip.
+
+## Coding jobs (engineer)
+
+Comment on a task and the work happens in a repository on this machine, the way you'd run Codex in a terminal tab, but tracked in Paperclip.
+
+1. Add the label **engineer** to a task.
+2. Comment with what you want. Optional `key: value` lines anywhere in the comment control the run:
+
+   ```text
+   repo: 0xPolygon/omsx          # any repo in 0xsequence, 0xPolygon or agglayer (or a GitHub URL)
+   mode: implement               # default: investigate (report only, no changes)
+   engine: glm                   # default: codex; glm = OpenRouter z-ai/glm-5.3-flash; or openrouter:<model>
+   shells: go,pulumi             # devshells from ~/config/nixos; default: detected (+ pulumi when you mention gcloud)
+   base: release/v2              # branch to start from; default: the repo's default branch
+   Find why the settlement test is flaky and fix it.
+   ```
+
+3. The **pennyworth-runner** service (systemd user service, runs as you) picks it up within about 20 seconds:
+   - it clones the repo into `~/pennyworth/repos` and creates the worktree `~/pennyworth/tasks/<TASK>-<repo>` on branch `pennyworth/<task>`;
+   - it runs the engine inside the devshells, with Codex's sandbox (writes only in the worktree and build caches);
+   - it posts the report on the task and sets the status to *in review*.
+
+   In implement mode, the runner commits the changes with the agent's proposed conventional commit message.
+4. Follow-up comments continue the same agent session in the same worktree.
+
+Commands (a comment containing only the word):
+
+| Command | What it does |
+|---|---|
+| `push` | publish `pennyworth/<task>` to GitHub (never forced, never another branch) |
+| `pr` | push and open a **draft** PR with the report as description |
+| `stop` | cancel the running job |
+| `status` | repo, branch, engine, mode, session |
+| `reset` | start a fresh agent conversation next time (keeps the worktree) |
+| `cleanup` | remove the worktree (the local branch is kept) |
+
+Agents can't push or write to GitHub themselves:
+
+- `gh` is wrapped read-only;
+- pushes are disabled in the runner's clones;
+- a pre-push hook and an ssh wrapper both refuse pushes;
+- after each run, the runner checks that nothing appeared on GitHub.
+
+Only *your* comments are instructions. Task text from Slack, email or meetings is passed to the agent as untrusted context. Job logs are in `~/.local/state/pennyworth-runner/logs/`. Configuration (orgs, engines, devshells, limits) is in `config/runner.yaml`.
+
+```sh
+systemctl --user status pennyworth-runner
+journalctl --user -u pennyworth-runner -f
+```
+
+OpenRouter jobs read the key from `~/.config/pennyworth/openrouter_key` (0600).
 
 ## Slack
 

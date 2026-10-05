@@ -146,3 +146,20 @@ The AI Tool Hub page lists Paperclip as "Security team only". The user cleared u
 - **Tokens:** Slack rotates refresh tokens, so the token file lives in `$PENNYWORTH_SECRETS_DIR/slack/` (0700), mounted read-write into the sidecar only.
 - **Why not Codex's own MCP OAuth:** the login would have to run inside the container, where the browser callback can't reach. A proxy also lets us enforce read-only access in code, independent of the Slack app's configured scopes.
 - **Polling:** the Slack Scout polls every 30 minutes during work hours, with no public ingress (spec §29, §25).
+
+## D-14: Coding jobs run on the host, as the user, behind guardrails
+
+- **Need:** investigations and implementations across `0xsequence`, `0xPolygon` and `agglayer` repos, using the user's own GitHub/gh, gcloud (16-hour sessions), Grafana MCP and Nix devshells.
+- **Rejected alternatives:**
+  - *A dedicated OS user* means duplicating and re-authenticating every credential.
+  - *Running coding agents inside the Paperclip container* means no toolchains, and a shell next to Paperclip's secrets.
+- **Decision:** `services/runner` is a systemd user service that polls Paperclip for the user's comments on tasks labelled `engineer`. It runs Codex (or OpenCode via OpenRouter) in runner-owned clones and per-task worktrees, inside the user's devshells, and posts the results back.
+- **Guardrails:**
+  - Only human comments are instructions; task text is fenced as untrusted.
+  - Orgs are allowlisted.
+  - Codex's workspace-write sandbox applies, with network on. OpenCode runs inside `codex sandbox`.
+  - `gh` is read-only through a wrapper.
+  - Pushes are blocked: `pushurl` disabled, a pre-push hook, an ssh wrapper refusing `git-receive-pack`, and `SSH_AUTH_SOCK` removed from the agent's environment. The runner checks the remote after every run.
+  - The runner, not the agent, commits.
+  - Publishing (`push`/`pr`, draft PRs only) is a deterministic action the user triggers explicitly, which is spec Phase 5's human approval.
+- **Residual risk:** the agent runs with the user's identity and can read the user's files, including credentials. A deliberate prompt injection could try to misuse that, so the trigger rule (only the user's own comments start or steer work) is the main control. Per-repo container isolation can be added later where needed.

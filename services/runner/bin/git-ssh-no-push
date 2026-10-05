@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# GIT_SSH_COMMAND for Pennyworth agents: allows fetches (git-upload-pack) and refuses
+# pushes (git-receive-pack). The runner publishes branches itself on the user's "push".
+for a in "$@"; do
+  case "$a" in
+    *git-receive-pack*) echo "push blocked: Pennyworth agents cannot push. Comment \"push\" on the task to publish the branch." >&2; exit 1 ;;
+  esac
+done
+exec ssh "$@"

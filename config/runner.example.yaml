@@ -1,0 +1,53 @@
+# Pennyworth runner (host service): coding jobs for Paperclip tasks labelled "engineer".
+# Copy to config/runner.yaml. Runs as you; see docs/DECISIONS.md D-14 for the guardrails.
+
+label: engineer
+poll_seconds: 20
+# Comments written up to this long before the runner first sees a task still count.
+first_seen_lookback_minutes: 30
+
+# Only repositories in these GitHub orgs can be worked on.
+allowed_orgs: [0xsequence, 0xPolygon, agglayer]
+
+# Runner-owned clones (repos/) and per-task worktrees (tasks/). Never your own checkouts.
+work_dir: ~/pennyworth
+state_dir: ~/.local/state/pennyworth-runner
+
+max_concurrent: 2
+timeout_minutes: 60
+
+engines:
+  codex:
+    model: ""                         # empty = your Codex default
+  openrouter:                         # "engine: glm" / "engine: openrouter" / "engine: openrouter:<model>"
+    model: z-ai/glm-5.3-flash
+    key_file: ~/.config/pennyworth/openrouter_key
+
+devshells:
+  flake: ~/config/nixos               # nix develop <flake>#<shell>
+  engine_shell: llm                   # provides codex/opencode; always outermost
+  available: [go, go-cgo, kurtosis, llm, mobile, node, postgres, pulumi, python, python311, rust]
+  # Detected from files in the repository root (override per task with "shells: go,pulumi").
+  detect:
+    go.mod: go
+    package.json: node
+    pnpm-lock.yaml: node
+    Cargo.toml: rust
+    pyproject.toml: python
+    requirements.txt: python
+    Pulumi.yaml: pulumi
+  # Added when the instructions match (regex → shell): gcloud lives in the pulumi shell.
+  keyword_shells:
+    "gcloud|cloud logging|stackdriver|gke|bigquery|log explorer": pulumi
+
+sandbox:
+  network: true                       # gh, gcloud, Grafana and package registries need it
+  # Writable besides the task worktree (build caches); everything else is read-only to the agent.
+  extra_writable_roots:
+    - ~/.cache
+    - ~/go/pkg/mod
+    - ~/.npm
+    - ~/.local/share/pnpm
+    - ~/.cargo/registry
+    - ~/.cargo/git
+    - ~/.gradle
