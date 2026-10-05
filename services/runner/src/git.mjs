@@ -90,10 +90,22 @@ export async function remoteHasBranch(clone, branch) {
   return out.length > 0;
 }
 
-/** Human-approved publish: push the task branch with the real URL, never force. */
-export async function pushBranch(clone, worktree, branch) {
+/** True when the repository on GitHub has no branches at all (a freshly created, empty repo). */
+export async function remoteIsEmpty(clone) {
+  return (await git(clone, "ls-remote", "--heads", "origin")).length === 0;
+}
+
+/**
+ * Human-approved publish: push the task branch with the real URL, never force. Into an empty
+ * repository the work goes to the default branch instead (`main`), because the first branch
+ * pushed to an empty GitHub repo becomes its default branch.
+ */
+export async function pushBranch(clone, worktree, branch, { initialBranch } = {}) {
   const url = await git(clone, "remote", "get-url", "origin");
-  await git(worktree, "push", "--no-verify", url, `HEAD:refs/heads/${branch}`);
+  const target = initialBranch && (await remoteIsEmpty(clone)) ? initialBranch : branch;
+  await git(worktree, "push", "--no-verify", url, `HEAD:refs/heads/${target}`);
+  if (target !== branch) await git(clone, "fetch", "--quiet", "origin");
+  return target;
 }
 
 export function detectShells(worktree, detect) {

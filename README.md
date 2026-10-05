@@ -187,7 +187,7 @@ Commands (a comment containing only the word):
 
 | Command | What it does |
 |---|---|
-| `push` | publish `pennyworth/<task>` to GitHub (never forced, never another branch) |
+| `push` | publish `pennyworth/<task>` to GitHub (never forced). Exception: if the repository is still empty, the work becomes its first commit on `main` (the first branch pushed to an empty repo becomes its default) |
 | `pr` | push and open a **draft** PR with the report as description |
 | `stop` | cancel the running job |
 | `status` | repo, branch, engine, mode, session |

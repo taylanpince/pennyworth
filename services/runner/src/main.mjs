@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { branchFor, findRepos, normalizeRepo, parseComment, repoAllowed, resolveEngine, resolveMode, resolveShells } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
-import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteHasBranch, removeWorktree } from "./git.mjs";
+import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteHasBranch, remoteIsEmpty, removeWorktree } from "./git.mjs";
 import { codexModels, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
 import { commitMessage, firstPrompt, followUpPrompt, stripCommitLine } from "./prompt.mjs";
@@ -310,13 +310,21 @@ async function runCommand(issue, task, command) {
   }
   const { commits } = await changesSummary(task.worktree, task.base);
   if (!commits) return void (await pc.comment(issue.id, "The task branch has no commits to publish."));
+  if (command === "pr" && (await remoteIsEmpty(clone))) {
+    return void (await pc.comment(issue.id, `The repository is still empty, so there's no branch to open a PR against. Reply **push** to publish this work as \`${task.base}\`.`));
+  }
   if (command === "push" || (command === "pr" && !task.pushed)) {
     if (!task.branch?.startsWith("pennyworth/")) throw new Error(`refusing to push unexpected branch ${task.branch}`);
-    await pushBranch(clone, task.worktree, task.branch);
+    const target = await pushBranch(clone, task.worktree, task.branch, { initialBranch: task.base });
     state.updateTask(issue.id, { pushed: 1 });
-    log("branch pushed", { issue: issue.identifier, repo: repo.slug, branch: task.branch });
+    log("branch pushed", { issue: issue.identifier, repo: repo.slug, branch: target });
     if (command === "push") {
-      return void (await pc.comment(issue.id, `Pushed \`${task.branch}\` → https://github.com/${repo.slug}/compare/${task.base}...${encodeURIComponent(task.branch)}?expand=1`));
+      return void (await pc.comment(
+        issue.id,
+        target === task.branch
+          ? `Pushed \`${task.branch}\` → https://github.com/${repo.slug}/compare/${task.base}...${encodeURIComponent(task.branch)}?expand=1`
+          : `The repository was empty, so I pushed this as its first commit on \`${target}\` → https://github.com/${repo.slug}/tree/${encodeURIComponent(target)}\nLater changes on this task go to \`${task.branch}\` as usual.`,
+      ));
     }
   }
   if (command === "pr") {

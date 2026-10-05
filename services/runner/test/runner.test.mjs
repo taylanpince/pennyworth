@@ -228,3 +228,27 @@ describe("empty repositories", () => {
     assert.match(s.stat, /SPEC\.md/);
   });
 });
+
+describe("first push to an empty repository", () => {
+  it("publishes to the default branch, then to the task branch afterwards", async () => {
+    const { defaultBranch, ensureWorktree, pushBranch, remoteHasBranch, remoteIsEmpty, git } = await import("../src/git.mjs");
+    const dir = mkdtempSync(join(tmpdir(), "push-empty-"));
+    const remote = join(dir, "remote.git");
+    execFileSync("git", ["init", "--bare", "-q", "-b", "main", remote]);
+    const clone = join(dir, "clone");
+    execFileSync("git", ["clone", "-q", remote, clone], { stdio: "ignore" });
+    execFileSync("git", ["-C", clone, "config", "remote.origin.pushurl", "DISABLED_BY_PENNYWORTH"]);
+    const base = await defaultBranch(clone);
+    const wt = await ensureWorktree(dir, clone, "PEN-18", { name: "r" }, "pennyworth/pen-18", base);
+    const commit = (m) => git(wt, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", m);
+    await commit("docs: spec");
+    assert.equal(await remoteIsEmpty(clone), true);
+    assert.equal(await pushBranch(clone, wt, "pennyworth/pen-18", { initialBranch: base }), "main");
+    assert.equal(await remoteHasBranch(clone, "main"), true);
+    assert.equal(await remoteHasBranch(clone, "pennyworth/pen-18"), false);
+    await commit("feat: more");
+    assert.equal(await pushBranch(clone, wt, "pennyworth/pen-18", { initialBranch: base }), "pennyworth/pen-18");
+    assert.equal(await remoteHasBranch(clone, "pennyworth/pen-18"), true);
+    assert.equal(execFileSync("git", ["-C", remote, "log", "--format=%s", "main"]).toString().trim(), "docs: spec");
+  });
+});
