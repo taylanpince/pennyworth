@@ -9,7 +9,8 @@
   "description": "Runs Codex/OpenRouter coding jobs on the host for Paperclip tasks labelled 'engineer'.",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/main.mjs",
-    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.mjs"
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.mjs",
+    "eval:intake": "node --disable-warning=ExperimentalWarning eval/intake.mjs"
   },
   "dependencies": {
     "yaml": "^2.9.1"

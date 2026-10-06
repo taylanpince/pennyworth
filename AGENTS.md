@@ -37,6 +37,7 @@ npm test --prefix services/ops-mcp                 # vitest
 npm test --prefix services/google-workspace-mcp
 npm test --prefix services/slack-mcp
 npm test --prefix services/runner                  # node --test
+npm run eval:intake --prefix services/runner       # real comments through the real intake, 3 runs each (~2 min)
 npx tsc --noEmit -p services/<svc>/tsconfig.json   # typecheck TS services
 
 # deploy
@@ -150,6 +151,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
   - **Email:** only threads he labels `pennyworth` in Gmail (any account, archived or not) become todos, closed when he removes the label. Never mirror the whole inbox: that produced junk tasks (meeting accepts, receipts).
   - Replies on meeting match review tasks (`pick N`, `ignore`) are handled by ops-mcp. Replies on other tasks go to the Assistant. Code work is assigned to Engineer (default engine Codex; "use Claude" = Claude Code; "use GLM" = OpenRouter `z-ai/glm-5.3-flash`).
   - **Plain language only.** The runner has no `key: value` syntax. Every comment except an exact `push`/`pr` goes through the intake (`services/runner/src/intake.mjs`), which picks the action (run/stop/status/reset/cleanup), repo, mode (answer/investigate/implement) and engine; code validates each answer. Never add syntax he has to learn. Publishing stays on the exact word.
+  - **Intake regression set:** `config/intake-cases.yaml` (personal, gitignored; example in `config/intake-cases.example.yaml`) holds his real comments and the reading each must get. Run `npm run eval:intake` before shipping any change to the intake prompt, its inputs, or how the runner acts on its answers, and add every misread found on a real task. Unit tests can't catch these: the intake answers differently from run to run (the old PEN-298 prompt misread the request 3 runs out of 4).
 - **Writing:** drafts (agendas, documents) go in task comments for him to review and paste. No Docs writes for now (option 1).
 - **Routing:** never ask him where a meeting goes ("choose a note" tasks were removed, D-18). Rules in `config/routing.yaml` and remembered routes win; otherwise the Meeting Librarian best-guesses an existing note or writes only the canonical note. Don't add routing rules he didn't ask for.
 - **Working style:** he likes being asked crisp decision questions with a recommendation, and otherwise expects you to proceed end to end and verify on the real system.

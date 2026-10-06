@@ -61,7 +61,7 @@ Fields:
   - "answer": a question to answer (how, what, why, can I, should I…). No files change.
   - "investigate": research, a report, a spec, a plan or a review. No files change.
   - "implement": code or files to be written or changed now (fix, add, implement, update, change…).
-  If unsure whether changes are wanted, do not pick "implement". A bare follow-up such as "continue", "go on" or "try again" keeps the previous mode${previousMode ? ` (it was "${previousMode}")` : ""}.
+  "answer" is for an actual question. A report that something is broken (an error, a failing build, test or deploy, pasted logs) without a question asks for it to be fixed: "implement". Otherwise, if unsure whether changes are wanted, do not pick "implement". A bare follow-up such as "continue", "go on" or "try again" keeps the previous mode${previousMode ? ` (it was "${previousMode}")` : ""}.
 - engine: "glm" if they ask for GLM/OpenRouter, "claude" if they ask for Claude or Claude Code, "codex" if they name Codex, otherwise "".
 - model: a model they name (e.g. "astra"), mapped to one of the known Codex models if possible; for Claude, "opus", "sonnet", "haiku", "fable" or a full claude-… id; otherwise "".
 - question: only if repo is "" and the task has no repository yet, one short plain-language question asking which repository to use. Otherwise "".

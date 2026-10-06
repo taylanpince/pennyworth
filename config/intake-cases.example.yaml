@@ -1,0 +1,43 @@
+# Regression set for the runner's intake (services/runner/src/intake.mjs): comments and the reading
+# each must get, run through the real intake call. Copy to config/intake-cases.yaml (gitignored)
+# and fill it with real comments; add every misread found on a real task.
+#
+#   npm run eval:intake --prefix services/runner [-- <id filter>]
+#
+# Fields: id, why (optional), title, description (task text), own_description (true when you wrote
+# the task: the description is part of the request), comment (your newest comment),
+# context {known_repo, previous_mode, busy, has_work}, expect {action, mode, repo, references,
+# engine, model}. An expected value can be a list of acceptable values, or null for "unset".
+
+- id: target and reference repo
+  title: New balance gateway
+  comment: |-
+    Write a spec first. Use the empty repo at https://github.com/0xPolygon/example-gateway and follow
+    the approach of https://github.com/0xPolygon/example-reference. Use the astra model.
+  expect: { action: run, mode: investigate, repo: 0xPolygon/example-gateway, references: [0xPolygon/example-reference] }
+
+- id: prepare a PR on a fresh task
+  why: "\"prepare a PR\" means do the work first, not publish"
+  title: Point the dev gateway at the new service
+  description: Follow the pattern of https://github.com/0xPolygon/example-infra/pull/12 and prepare one for the new service.
+  own_description: true
+  comment: ""
+  expect: { action: run, mode: implement, repo: 0xPolygon/example-infra }
+
+- id: question after changes
+  title: New balance gateway
+  comment: Can I use any value for the JWT_SECRET?
+  context: { known_repo: 0xPolygon/example-gateway, previous_mode: implement, has_work: true }
+  expect: { action: run, mode: answer }
+
+- id: stop while busy
+  title: New balance gateway
+  comment: stop that, wrong direction
+  context: { known_repo: 0xPolygon/example-gateway, previous_mode: implement, has_work: true, busy: true }
+  expect: { action: stop }
+
+- id: push it with work done
+  title: New balance gateway
+  comment: looks good, push it
+  context: { known_repo: 0xPolygon/example-gateway, previous_mode: implement, has_work: true }
+  expect: { action: push }

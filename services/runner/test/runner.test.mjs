@@ -444,3 +444,16 @@ describe("intake actions", async () => {
     assert.match(p, /newest comment \(decides "action"\):\n<<<COMMENT\nstop that\nCOMMENT>>>/);
   });
 });
+
+describe("intake regression set", async () => {
+  const { mismatches, requestFor } = await import("../eval/intake.mjs");
+  it("builds the request like the runner does", () => {
+    assert.equal(requestFor({ title: "T", description: "Do X <!-- source:x -->", own_description: true, comment: "go ahead" }), "T\n\nDo X\n\ngo ahead");
+    assert.equal(requestFor({ title: "T", description: "Slack text", comment: "fix it" }), "fix it");
+  });
+  it("compares values, lists of acceptable values, null and reference sets", () => {
+    const read = { action: "run", mode: "answer", repo: "a/b", references: ["c/d", "e/f"], engine: undefined };
+    assert.deepEqual(mismatches(read, { action: "run", mode: ["investigate", "answer"], references: ["e/f", "c/d"], engine: null }), []);
+    assert.deepEqual(mismatches(read, { mode: "implement" }), ['mode: got "answer", want "implement"']);
+  });
+});
