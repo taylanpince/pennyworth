@@ -429,3 +429,15 @@ describe("questions", async () => {
     assert.doesNotMatch(p, /## Verification/);
   });
 });
+
+describe("repositories as Paperclip stores them", () => {
+  it("reads Markdown links, angle brackets and escapes", () => {
+    const link = "[https://github.com/0xPolygon/tron-indexer-gateway](https://github.com/0xPolygon/tron-indexer-gateway)";
+    assert.equal(normalizeRepo(link).slug, "0xPolygon/tron-indexer-gateway");
+    assert.equal(parseComment(`Repo: ${link}\nCheck the deployment.`).directives.repo, link);
+    assert.equal(normalizeRepo("<https://github.com/0xPolygon/omsx.git>").slug, "0xPolygon/omsx");
+    assert.equal(normalizeRepo("0xPolygon/tron\\_indexer").slug, "0xPolygon/tron_indexer");
+    assert.equal(normalizeRepo("https://github.com/0xPolygon/omsx/pull/12").slug, "0xPolygon/omsx");
+    assert.equal(normalizeRepo("not a repo"), undefined);
+  });
+});
