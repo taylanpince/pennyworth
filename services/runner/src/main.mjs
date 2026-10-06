@@ -11,7 +11,7 @@ import { runAgent } from "./engines.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteHasBranch, remoteIsEmpty, removeWorktree } from "./git.mjs";
 import { codexModels, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
-import { commitMessage, firstPrompt, followUpPrompt, stripCommitLine } from "./prompt.mjs";
+import { commitMessage, firstPrompt, followUpPrompt, runOutcome, stripCommitLine } from "./prompt.mjs";
 import { State } from "./state.mjs";
 
 const execFileP = promisify(execFile);
@@ -254,10 +254,11 @@ async function startJob({ issue, directives, instructions }) {
       return;
     }
 
-    // Implement mode: the runner commits what the agent changed.
+    // Implement mode: the runner commits what the agent changed, but only after a finished run.
     let committed = "";
     const summaryBefore = await changesSummary(worktree, base);
-    if (mode === "implement" && summaryBefore.dirty) {
+    const outcome = runOutcome({ ...result, timeoutMinutes: cfg.timeout_minutes ?? 60, mode, dirty: Boolean(summaryBefore.dirty) });
+    if (mode === "implement" && summaryBefore.dirty && outcome.finished) {
       await git(worktree, "add", "-A");
       await git(worktree, "-c", "core.hooksPath=/dev/null", "commit", "--quiet", "-m", commitMessage(result.lastMessage, `chore: ${full.title}`), "-m", `Paperclip task: ${issue.identifier}`);
       committed = "yes";
@@ -265,11 +266,11 @@ async function startJob({ issue, directives, instructions }) {
     const changes = await changesSummary(worktree, base);
     const unexpectedPush = !task.pushed && (await remoteHasBranch(clone, branch));
 
-    const report = stripCommitLine(result.lastMessage) || "_The agent produced no report. See the run log._";
+    const report = stripCommitLine(result.lastMessage);
     const parts = [
-      result.timedOut ? `**Timed out** after ${cfg.timeout_minutes ?? 60} minutes. Partial results below.\n` : "",
-      result.code && !result.timedOut ? `**The run failed** (exit code ${result.code}). Last lines of the log:\n\`\`\`\n${logTail(logPath)}\n\`\`\`\n` : "",
-      report,
+      outcome.headline,
+      outcome.finished ? "" : `\nLast lines of the log:\n\`\`\`\n${logTail(logPath)}\n\`\`\`${report ? `\n\nThe agent's last message:\n\n> ${report.slice(0, 1500).replace(/\n/g, "\n> ")}` : ""}`,
+      outcome.finished ? `\n${report}` : "",
       "",
       "---",
       `${engineLabel(engine)} · ${mode} · \`${repo.slug}\` · branch \`${branch}\` (from \`${base}\`)`,
@@ -281,7 +282,7 @@ async function startJob({ issue, directives, instructions }) {
     if (unexpectedPush) parts.push(`\n⚠️ **The branch \`${branch}\` exists on GitHub but the runner did not push it.** Please check.`);
     // Failures also go to review (Paperclip refuses "blocked" without a blocker); the report says what failed.
     await pc.setStatus(issue.id, "in_review", parts.filter(Boolean).join("\n"));
-    state.finishJob(jobId, result.timedOut ? "timeout" : result.code ? "failed" : "done", committed ? "committed" : undefined);
+    state.finishJob(jobId, result.timedOut ? "timeout" : result.code ? "failed" : outcome.finished ? "done" : "incomplete", committed ? "committed" : undefined);
     log("job finished", { issue: issue.identifier, code: result.code, timedOut: result.timedOut, committed: Boolean(committed) });
   } catch (err) {
     if (jobId) state.finishJob(jobId, "failed", String(err).slice(0, 500));

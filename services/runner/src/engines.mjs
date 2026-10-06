@@ -46,8 +46,14 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
       argv: sandboxed,
       env: {
         OPENROUTER_API_KEY: key,
-        // Non-interactive: opencode must not stop to ask for permission (the sandbox is the boundary).
-        OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: { edit: "allow", bash: "allow", webfetch: "allow" }, autoupdate: false, share: "disabled" }),
+        // Non-interactive: opencode must not stop to ask for permission, because an unanswered prompt
+        // is auto-rejected and ends the run. Reading outside the worktree (reference repos) is
+        // fine: the codex sandbox around opencode still limits writes to the worktree.
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({
+          permission: { edit: "allow", bash: "allow", webfetch: "allow", external_directory: "allow", doom_loop: "allow" },
+          autoupdate: false,
+          share: "disabled",
+        }),
       },
       promptAsArg: true,
     };

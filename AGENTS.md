@@ -131,6 +131,11 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Multi-tab Docs** need the Docs API (`documents.get` with `includeTabsContent`). Drive's text export only returns the first tab; `docs_read` falls back to it.
 - **Meet/Gemini titles carry the organizer's timezone** ("09:30 EDT"). `parseMeetDocTitle` maps the abbreviations; extend `TZ_ABBREVIATIONS` if a new one shows up.
 
+### Runner engines
+
+- **opencode auto-rejects unanswered permission prompts and still exits 0.** Its defaults `ask` for `external_directory` and `doom_loop`, so they are set to `allow` (the `codex sandbox` around it is the write boundary). Never treat exit 0 as success: a run only counts as finished if its report has `## Summary` (`runOutcome`).
+- **Sessions are engine-specific.** A Codex thread ID can't be resumed by opencode (`ses_…` IDs); switching engines starts fresh with the task's earlier requests as context.
+
 ### Slack
 
 - `mcp.slack.com` has no dynamic client registration. It needs Polygon's public client (`SLACK_CLIENT_ID` in `.env`, callback `http://localhost:3118/callback`, PKCE, no secret) and rotating refresh tokens, which are persisted read-write in `~/.config/pennyworth/slack/`.

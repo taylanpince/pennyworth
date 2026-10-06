@@ -72,6 +72,19 @@ ${REPORT(mode)}
 `;
 }
 
+/**
+ * How a run ended, in one line at the top of the task comment. A run only counts as finished
+ * if it exited cleanly and wrote its report: opencode, for one, exits 0 when it gives up early.
+ */
+export function runOutcome({ code, timedOut, lastMessage, timeoutMinutes, mode, dirty }) {
+  const finished = !code && !timedOut && /^\s*##\s*Summary/im.test(lastMessage ?? "");
+  const leftover = dirty ? " Its partial changes are in the worktree, uncommitted." : " Nothing was changed.";
+  if (finished) return { finished, headline: mode === "implement" && dirty ? "**Done.** The changes are committed on the task branch." : "**Done.**" };
+  if (timedOut) return { finished, headline: `**Timed out** after ${timeoutMinutes} minutes.${leftover} Reply **continue** to pick up where it stopped.` };
+  if (code) return { finished, headline: `**Failed** (exit code ${code}).${leftover}` };
+  return { finished, headline: `**Stopped before finishing.** The agent ended without writing its report.${leftover} Reply **continue** to pick up where it stopped.` };
+}
+
 /** Extract "Commit message: …" from the agent's report (implement mode). */
 export function commitMessage(report, fallback) {
   const m = /^\s*`?Commit message:\s*`?([^`\n]+?)`?\s*$/im.exec(report ?? "");

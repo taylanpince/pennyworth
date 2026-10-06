@@ -262,3 +262,15 @@ describe("engine switches", () => {
     assert.match(p, /## Earlier requests on this task[\s\S]*Write the spec\.[\s\S]*## Instructions from Taylan \(authoritative\)\n\nImplement it\./);
   });
 });
+
+describe("run outcome", async () => {
+  const { runOutcome } = await import("../src/prompt.mjs");
+  it("only treats a clean exit with a report as finished", () => {
+    assert.equal(runOutcome({ code: 0, lastMessage: "## Summary\nok", mode: "implement", dirty: true }).finished, true);
+    const early = runOutcome({ code: 0, lastMessage: "The spec is thorough. Now let me study the reference.", mode: "implement", dirty: false });
+    assert.equal(early.finished, false);
+    assert.match(early.headline, /Stopped before finishing[\s\S]*Nothing was changed[\s\S]*continue/);
+    assert.match(runOutcome({ code: 1, lastMessage: "", dirty: true }).headline, /Failed\*\* \(exit code 1\)\. Its partial changes/);
+    assert.match(runOutcome({ timedOut: true, timeoutMinutes: 60, lastMessage: "## Summary\nx" }).headline, /Timed out\*\* after 60 minutes/);
+  });
+});
