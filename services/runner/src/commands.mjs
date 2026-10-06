@@ -1,41 +1,23 @@
-// Parsing of the user's Paperclip comments into runner commands and job settings.
+// The exact push/pr commands, repository names, engines, modes and devshells.
 // Pure functions (unit-tested): no I/O here.
 
 export const RUNNER_MARKER = "<!-- pennyworth-runner -->";
 
+// Publishing to GitHub is the one irreversible action, so it takes the exact word. Everything
+// else in a comment, including stop/status/reset/cleanup, is read by the intake (intake.mjs).
 const COMMANDS = new Map([
-  ["stop", "stop"],
-  ["cancel", "stop"],
   ["push", "push"],
   ["pr", "pr"],
   ["draft pr", "pr"],
   ["open pr", "pr"],
-  ["reset", "reset"],
-  ["status", "status"],
-  ["cleanup", "cleanup"],
 ]);
 
-const DIRECTIVE = /^\s*(repo|mode|engine|model|shells?|base)\s*:\s*(.+?)\s*$/i;
+/** Remove HTML comments: hidden text never counts as the user's words. */
+export const stripHidden = (s) => String(s ?? "").replace(/<!--[\s\S]*?-->/g, "");
 
-/** Remove HTML comments so hidden text can never carry directives. */
-const stripHidden = (s) => s.replace(/<!--[\s\S]*?-->/g, "");
-
-/**
- * Split a comment into a single-word command, `key: value` directives and free-form
- * instructions. Directives may appear on any line; everything else is instructions.
- */
-export function parseComment(body) {
-  const text = stripHidden(String(body ?? "")).trim();
-  const command = COMMANDS.get(text.toLowerCase().replace(/[.!]+$/, ""));
-  if (command) return { command, directives: {}, instructions: "" };
-  const directives = {};
-  const rest = [];
-  for (const line of text.split(/\r?\n/)) {
-    const m = DIRECTIVE.exec(line);
-    if (m) directives[m[1].toLowerCase().replace(/^shell$/, "shells")] = m[2];
-    else rest.push(line);
-  }
-  return { command: undefined, directives, instructions: rest.join("\n").trim() };
+/** "push" or "pr" when the whole comment is exactly that word; otherwise undefined. */
+export function parseCommand(body) {
+  return COMMANDS.get(stripHidden(body).trim().toLowerCase().replace(/[.!]+$/, ""));
 }
 
 /**

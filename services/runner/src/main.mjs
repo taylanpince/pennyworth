@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { RUNNER_MARKER, branchFor, ownRequest, findRepos, isClaudeModel, normalizeRepo, parseComment, repoAllowed, resolveEngine, resolveMode, resolveShells } from "./commands.mjs";
+import { RUNNER_MARKER, branchFor, ownRequest, findRepos, isClaudeModel, normalizeRepo, parseCommand, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree, startFreshBranch, nextBranchName } from "./git.mjs";
@@ -22,7 +22,7 @@ const logsDir = join(cfg.stateDir, "logs");
 mkdirSync(logsDir, { recursive: true, mode: 0o700 });
 
 const running = new Map(); // issueId → { controller, jobId }
-const queue = []; // { issue, instructions, directives }
+const queue = []; // { issue, instructions, read, candidates }
 const log = (msg, extra = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), msg, ...extra }));
 const engineLabel = (e) =>
   e.kind === "codex" ? `Codex${e.model ? ` (${e.model})` : ""}` : e.kind === "claude" ? `Claude Code${e.model ? ` (${e.model})` : ""}` : `OpenRouter ${e.model}`;
@@ -63,31 +63,64 @@ async function handleIssue(issue, engineerId) {
     // request (its description); otherwise ask, once.
     if (engineerId && issue.assigneeAgentId === engineerId && !userComments.length && !running.has(issue.id) && !state.get(`greeted:${issue.id}`)) {
       state.set(`greeted:${issue.id}`, new Date().toISOString());
-      if (ownRequest(await pc.issue(issue.id))) return dispatch({ issue, directives: {}, instructions: "" }); // startJob adds the description
+      if (ownRequest(await pc.issue(issue.id))) return handleRequest(issue, ""); // the description is the request
       await pc.comment(issue.id, "Ready. What would you like me to do, and in which repository?");
     }
     return;
   }
 
-  const instructions = [];
-  let directives = {};
+  const texts = [];
   for (const c of fresh) {
     state.markHandled(c.id, issue.id);
-    const parsed = parseComment(c.body);
-    if (parsed.command) {
-      await runCommand(issue, state.task(issue.id), parsed.command);
+    const command = parseCommand(c.body); // exactly "push" or "pr"
+    if (command) {
+      await runCommand(issue, state.task(issue.id), command);
       continue;
     }
-    directives = { ...directives, ...parsed.directives };
-    if (parsed.instructions) instructions.push(parsed.instructions);
+    const text = stripHidden(c.body).trim();
+    if (text) texts.push(text);
   }
-  if (!instructions.length && !Object.keys(directives).length) return;
-  if (!instructions.length) {
-    await applyDirectives(issue, task, directives);
-    await pc.comment(issue.id, `Settings updated: ${Object.entries(directives).map(([k, v]) => `${k}=${v}`).join(", ")}. Comment with instructions to start a run.`);
-    return;
+  if (texts.length) await handleRequest(issue, texts.join("\n\n"));
+}
+
+/**
+ * Read a plain-language request (one or more new comments) before anything is queued, so
+ * "stop that" or "how's it going?" work while a run is in progress. The intake decides what is
+ * asked; push and pr still need the exact word, so they are only suggested.
+ */
+async function handleRequest(issue, latest) {
+  const full = await pc.issue(issue.id);
+  let instructions = latest;
+  // First run on a task the user wrote: its title and description are part of the request.
+  if (!state.get(`history:${issue.id}`)) {
+    const own = ownRequest(full);
+    if (own) instructions = [`${full.title}\n\n${own}`, instructions].filter(Boolean).join("\n\n");
   }
-  return dispatch({ issue, directives, instructions: instructions.join("\n\n") });
+  // A request still waiting on an answer (e.g. which repository) is combined with the answer.
+  const pending = state.get(`pending:${issue.id}`);
+  if (pending) instructions = `${pending}\n\n${instructions}`;
+
+  const candidates = findRepos(`${instructions}\n${full.title}\n${full.description ?? ""}`, cfg.allowed_orgs).map((r) => r.slug);
+  const before = state.task(issue.id);
+  const busy = running.has(issue.id) || queue.some((j) => j.issue.id === issue.id);
+  const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, latest, candidates, known: before.repo, previousMode: before.mode, busy })
+    .catch((err) => (log("intake failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }), undefined));
+  const action = read?.action ?? "run";
+  log("request read", { issue: issue.identifier, action, mode: read?.mode });
+
+  if (["stop", "status", "reset", "cleanup"].includes(action)) {
+    if (action === "stop") {
+      const before = queue.length;
+      for (let i = queue.length - 1; i >= 0; i--) if (queue[i].issue.id === issue.id) queue.splice(i, 1);
+      if (!running.has(issue.id) && queue.length < before) return void (await pc.comment(issue.id, "Cancelled the queued request. Nothing else was running."));
+    }
+    return runCommand(issue, state.task(issue.id), action);
+  }
+  if (action === "push" || action === "pr") {
+    const what = action === "push" ? "publish the task branch to GitHub" : "push the task branch and open a draft PR";
+    return void (await pc.comment(issue.id, `To ${what}, reply with just **${action}**. I only publish on that exact word.`));
+  }
+  return dispatch({ issue, instructions, read, candidates, full });
 }
 
 async function dispatch(job) {
@@ -148,56 +181,40 @@ function drainQueue() {
 
 // ------------------------------------------------------------------ jobs
 
-async function applyDirectives(issue, task, directives) {
+async function applySettings(issue, task, settings) {
   const fields = {};
-  if (directives.repo) {
-    const repo = normalizeRepo(directives.repo);
-    if (!repoAllowed(repo, cfg.allowed_orgs)) throw new UserError(`Repository \`${directives.repo}\` is not allowed (allowed orgs: ${cfg.allowed_orgs.join(", ")}).`);
+  if (settings.repo) {
+    const repo = normalizeRepo(settings.repo);
+    if (!repoAllowed(repo, cfg.allowed_orgs)) throw new UserError(`Repository \`${settings.repo}\` is not allowed (allowed orgs: ${cfg.allowed_orgs.join(", ")}).`);
     if (task.repo && task.repo !== repo.slug) throw new UserError(`This task already works on \`${task.repo}\`. Use a separate task for another repository.`);
     fields.repo = repo.slug;
   }
-  if (directives.base) fields.base = directives.base.trim();
-  if (directives.model && !isClaudeModel(directives.model)) directives.model = resolveModelAlias(directives.model, codexModels()) ?? directives.model;
-  if (directives.engine || directives.model) fields.engine = resolveEngine(directives, cfg, task.engine);
-  if (directives.mode) fields.mode = resolveMode(directives, task.mode);
+  if (settings.base) fields.base = settings.base.trim();
+  if (settings.model && !isClaudeModel(settings.model)) settings.model = resolveModelAlias(settings.model, codexModels()) ?? settings.model;
+  if (settings.engine || settings.model) fields.engine = resolveEngine(settings, cfg, task.engine);
+  if (settings.mode) fields.mode = resolveMode(settings, task.mode);
   if (Object.keys(fields).length) state.updateTask(issue.id, fields);
   return state.task(issue.id);
 }
 
 class UserError extends Error {}
 
-async function startJob({ issue, directives, instructions }) {
-  directives = { ...directives };
+async function startJob({ issue, instructions, read, candidates }) {
   const controller = new AbortController();
   running.set(issue.id, { controller });
   let jobId;
   try {
     const full = await pc.issue(issue.id);
-    // First run on a task the user wrote: its description is part of the request.
-    if (!state.get(`history:${issue.id}`)) {
-      const own = parseComment(ownRequest(full));
-      if (own.instructions) {
-        directives = { ...own.directives, ...directives };
-        instructions = [`${full.title}\n\n${own.instructions}`, instructions].filter(Boolean).join("\n\n");
-      }
-    }
-    // A request still waiting on an answer (e.g. which repository) is combined with the answer.
     const pendingKey = `pending:${issue.id}`;
-    const pending = state.get(pendingKey);
-    if (pending) instructions = `${pending}\n\n${instructions}`;
-
-    // Plain-language request → settings. Explicit "key: value" lines still win.
-    const candidates = findRepos(`${instructions}\n${full.title}\n${full.description ?? ""}`, cfg.allowed_orgs).map((r) => r.slug);
+    // Settings from the intake's reading of the request (handleRequest), checked in applyDirectives.
     const before = state.task(issue.id);
-    const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, candidates, known: before.repo, previousMode: before.mode })
-      .catch((err) => (log("intake failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }), undefined));
     const inferred = {};
     if (read?.repo && !before.repo) inferred.repo = read.repo;
     inferred.mode = read?.mode ?? "investigate"; // judged per request; if unreadable, change nothing
     if (read?.engine === "glm") inferred.engine = "glm";
     else if (read?.engine === "claude") Object.assign(inferred, { engine: "claude" }, read.model ? { model: read.model } : {});
     else if (read?.model) Object.assign(inferred, { engine: "codex", model: read.model });
-    let task = await applyDirectives(issue, before, { ...inferred, ...directives });
+    let task = await applySettings(issue, before, inferred);
 
     if (!task.repo) {
       if (candidates.length === 1) state.updateTask(issue.id, { repo: candidates[0] });
@@ -241,7 +258,7 @@ async function startJob({ issue, directives, instructions }) {
       instructions = `(Runner note: ${prNote} Build on what is there now.)\n\n${instructions}`;
     }
     // Devshells: an explicit "shells:" wins, then the ones chosen for this task earlier, then detection.
-    const shells = directives.shells || !task.shells ? resolveShells(directives, detectShells(worktree, cfg.devshells.detect), instructions, cfg) : task.shells;
+    const shells = task.shells ?? resolveShells({}, detectShells(worktree, cfg.devshells.detect), instructions, cfg);
     state.updateTask(issue.id, { base, branch, worktree, shells, engine, mode });
 
     const logPath = join(logsDir, `${issue.identifier}-${Date.now()}.log`);
@@ -334,8 +351,21 @@ async function runCommand(issue, task, command) {
     return;
   }
   if (command === "status") {
-    const r = running.get(issue.id);
-    return void (await pc.comment(issue.id, `${r ? "A run is in progress." : "Idle."} Repo: \`${task?.repo ?? "—"}\`, branch: \`${task?.branch ?? "—"}\`, engine: ${task?.engine ? engineLabel(task.engine) : "default"}, mode: ${task?.mode ?? "investigate"}${task?.session_id ? ", session saved (follow-ups continue it)" : ""}.`));
+    const job = state.lastJob(issue.id);
+    const since = (t) => `${Math.max(1, Math.round((Date.now() - Date.parse(t)) / 60_000))} min ago`;
+    const MODE = { answer: "answering a question", investigate: "investigating", implement: "making changes" };
+    const ENDED = { done: "finished", failed: "failed", timeout: "timed out", cancelled: "was stopped", interrupted: "was interrupted by a runner restart", incomplete: "stopped before finishing" };
+    const queued = queue.filter((j) => j.issue.id === issue.id).length;
+    const lines = [
+      running.has(issue.id)
+        ? `**Working on it:** ${MODE[task?.mode] ?? "running"} with ${job?.engine ?? "the agent"}, started ${job ? since(job.started_at) : "just now"}.`
+        : job
+          ? `**Nothing running.** The last run ${ENDED[job.status] ?? job.status} ${since(job.finished_at ?? job.started_at)}; its result is in the comments above.`
+          : "**Nothing running**, and nothing has run on this task yet.",
+      queued ? `${queued} more request${queued === 1 ? " is" : "s are"} queued after it.` : "",
+      task?.repo ? `Working in \`${task.repo}\` on branch \`${task.branch ?? "—"}\`${task.pr_url ? `, PR: ${task.pr_url}` : task.pushed ? " (pushed, no PR yet)" : " (not pushed yet)"}.` : "",
+    ];
+    return void (await pc.comment(issue.id, lines.filter(Boolean).join("\n")));
   }
   if (command === "reset") {
     state.updateTask(issue.id, { session_id: null });
@@ -347,6 +377,9 @@ async function runCommand(issue, task, command) {
   const clone = join(cfg.workDir, "repos", repo.org, repo.name);
 
   if (command === "cleanup") {
+    if (await git(task.worktree, "status", "--porcelain").catch(() => "")) {
+      return void (await pc.comment(issue.id, `I didn't remove the working copy: it has uncommitted changes (\`${task.worktree}\`). Ask me to commit or discard them first.`));
+    }
     await removeWorktree(clone, task.worktree);
     state.updateTask(issue.id, { worktree: null, session_id: null });
     return void (await pc.comment(issue.id, `Removed the worktree. The local branch \`${task.branch}\` is kept${task.pushed ? " (and pushed)" : ""}.`));

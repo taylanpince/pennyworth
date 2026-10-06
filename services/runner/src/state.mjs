@@ -83,6 +83,10 @@ export class State {
     this.db.prepare("UPDATE jobs SET status = ?, finished_at = ?, detail = ? WHERE id = ?").run(status, new Date().toISOString(), detail ?? null, id);
   }
 
+  lastJob(issueId) {
+    return this.db.prepare("SELECT * FROM jobs WHERE issue_id = ? ORDER BY id DESC LIMIT 1").get(issueId);
+  }
+
   /** Jobs left 'running' by a crash or restart are marked interrupted at startup. */
   interruptStale() {
     return this.db.prepare("UPDATE jobs SET status = 'interrupted', finished_at = ? WHERE status = 'running'").run(new Date().toISOString()).changes;

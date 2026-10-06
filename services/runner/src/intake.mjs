@@ -8,11 +8,14 @@ import { join } from "node:path";
 import { isClaudeModel } from "./commands.mjs";
 import { inDevshells } from "./engines.mjs";
 
+export const ACTIONS = ["run", "stop", "status", "reset", "cleanup", "push", "pr"];
+
 export const INTAKE_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["repo", "references", "mode", "engine", "model", "question"],
+  required: ["action", "repo", "references", "mode", "engine", "model", "question"],
   properties: {
+    action: { type: "string", enum: ACTIONS },
     repo: { type: "string" },
     references: { type: "array", items: { type: "string" } },
     mode: { type: "string", enum: ["answer", "investigate", "implement"] },
@@ -40,10 +43,17 @@ export function resolveModelAlias(name, models) {
   return models.find((m) => m.toLowerCase().split(/[-_.\s]+/).includes(n) || m.toLowerCase().endsWith(`-${n}`));
 }
 
-export function intakePrompt({ user, title, description, instructions, candidates, models, known, previousMode }) {
+export function intakePrompt({ user, title, description, instructions, latest, candidates, models, known, previousMode, busy }) {
   return `You read ${user}'s request to a coding agent and extract its settings as JSON. Do not do the task itself and do not run any tools.
 
 Fields:
+- action: what ${user}'s newest comment asks of the runner (a run is ${busy ? "IN PROGRESS" : "not in progress"} on this task):
+  - "stop": stop or cancel the run in progress.
+  - "status": how the runner's work on this task is going (progress, what it is doing). Not a question about the code.
+  - "reset": start the agent's conversation afresh (forget the session), keeping the code.
+  - "cleanup": remove the local working copy; the work on this task is finished.
+  - "push": publish the work to GitHub. "pr": open a pull request.
+  - "run": anything else, i.e. a question, research, a review or changes for the agent. When in doubt, "run".
 - repo: the repository the work happens in (code is written or investigated there). Pick exactly one slug from the candidates, or "" if this task already has one (${known ? `it does: ${known}` : "it does not"}) and the request doesn't name a different one, or if you truly cannot tell.
 - references: other candidate repositories mentioned only as examples, inspiration or context to read.
 - mode: what this request asks for, judged on this request alone:
@@ -68,7 +78,12 @@ TASK>>>
 ${user}'s request (authoritative):
 <<<REQUEST
 ${String(instructions).replace(/<<<|>>>/g, "‹‹‹").slice(0, 12000)}
-REQUEST>>>`;
+REQUEST>>>
+${latest && latest !== instructions ? `
+${user}'s newest comment (decides "action"):
+<<<COMMENT
+${String(latest).replace(/<<<|>>>/g, "‹‹‹").slice(0, 4000)}
+COMMENT>>>` : ""}`;
 }
 
 /** Keep only answers that match the allowed choices. */
@@ -81,11 +96,12 @@ export function validateIntake(raw, { candidates, models }) {
   const model = claude ? (isClaudeModel(raw?.model) ? String(raw.model).trim().toLowerCase() : undefined) : resolveModelAlias(raw?.model, models);
   const engine = raw?.engine === "glm" ? "glm" : claude ? "claude" : raw?.engine === "codex" || model ? "codex" : undefined;
   const question = String(raw?.question ?? "").trim().slice(0, 500) || undefined;
-  return { repo, references, mode, engine, model, question };
+  const action = ACTIONS.includes(raw?.action) ? raw.action : "run";
+  return { action, repo, references, mode, engine, model, question };
 }
 
 /** Run the intake call. Resolves with validated settings; rejects on failure (callers fall back). */
-export async function readRequest({ cfg, user, title, description, instructions, candidates, known, previousMode }) {
+export async function readRequest({ cfg, user, title, description, instructions, latest, candidates, known, previousMode, busy }) {
   const models = codexModels();
   const dir = mkdtempSync(join(tmpdir(), "pennyworth-intake-"));
   try {
@@ -111,7 +127,7 @@ export async function readRequest({ cfg, user, title, description, instructions,
         clearTimeout(timer);
         code === 0 && existsSync(out) ? resolve() : reject(new Error(`intake exited with ${code}: ${err.trim().split("\n").pop() ?? ""}`));
       });
-      child.stdin.end(intakePrompt({ user, title, description, instructions, candidates, models, known, previousMode }));
+      child.stdin.end(intakePrompt({ user, title, description, instructions, latest, candidates, models, known, previousMode, busy }));
     });
     return validateIntake(JSON.parse(readFileSync(out, "utf8")), { candidates, models });
   } finally {

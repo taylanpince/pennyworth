@@ -148,7 +148,8 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Tasks:**
   - Tasks only for *his own* clear action items. No waiting-on tasks for other people's commitments, and no tasks for ownerless actions.
   - **Email:** only threads he labels `pennyworth` in Gmail (any account, archived or not) become todos, closed when he removes the label. Never mirror the whole inbox: that produced junk tasks (meeting accepts, receipts).
-  - Replies on review tasks (`route …`, `pick N`, `ignore`) are handled by ops-mcp. Replies on other tasks go to the Assistant. Code work is assigned to Engineer (default engine Codex; `engine: claude` = Claude Code; `engine: glm` = OpenRouter `z-ai/glm-5.3-flash`).
+  - Replies on review tasks (`route …`, `pick N`, `ignore`) are handled by ops-mcp. Replies on other tasks go to the Assistant. Code work is assigned to Engineer (default engine Codex; "use Claude" = Claude Code; "use GLM" = OpenRouter `z-ai/glm-5.3-flash`).
+  - **Plain language only.** The runner has no `key: value` syntax. Every comment except an exact `push`/`pr` goes through the intake (`services/runner/src/intake.mjs`), which picks the action (run/stop/status/reset/cleanup), repo, mode (answer/investigate/implement) and engine; code validates each answer. Never add syntax he has to learn. Publishing stays on the exact word.
 - **Writing:** drafts (agendas, documents) go in task comments for him to review and paste. No Docs writes for now (option 1).
 - **Routing:** meeting notes go into the existing notes he names. Routes are remembered per calendar series or title. Don't guess routing rules.
 - **Working style:** he likes being asked crisp decision questions with a recommendation, and otherwise expects you to proceed end to end and verify on the real system.

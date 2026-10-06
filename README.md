@@ -166,18 +166,6 @@ Comment on a task and the work happens in a repository on this machine, the way 
 
    Each comment is judged on its own: a question gets a direct answer and no code changes, a request for research, a review or a spec gets a report, and only an explicit request for changes gets them. Short follow-ups such as "continue" keep the previous kind.
 
-   Explicit `key: value` lines anywhere in the comment still override what it reads:
-
-   ```text
-   repo: 0xPolygon/omsx          # any repo in 0xsequence, 0xPolygon or agglayer (or a GitHub URL)
-   mode: implement               # default: investigate (report only, no changes)
-   engine: claude                # default: codex; claude = Claude Code; glm = OpenRouter z-ai/glm-5.3-flash; or openrouter:<model>
-   model: opus                   # optional: a Codex model, or a Claude one (opus, sonnet, claude-…)
-   shells: go,pulumi             # devshells from ~/config/nixos; default: detected (+ pulumi when you mention gcloud)
-   base: release/v2              # branch to start from; default: the repo's default branch
-   Find why the settlement test is flaky and fix it.
-   ```
-
 3. The **pennyworth-runner** service (systemd user service, runs as you) picks it up within about 20 seconds:
    - it clones the repo into `~/pennyworth/repos` and creates the worktree `~/pennyworth/tasks/<TASK>-<repo>` on branch `pennyworth/<task>`;
    - it runs the engine inside the devshells, with Codex's sandbox (writes only in the worktree and build caches);
@@ -186,16 +174,14 @@ Comment on a task and the work happens in a repository on this machine, the way 
    In implement mode, the runner commits the changes with the agent's proposed conventional commit message.
 4. Follow-up comments continue the same agent session in the same worktree. If the task's PR has been merged in the meantime, the work moves to a new branch (`pennyworth/<task>-2`, …) from the latest base branch, carrying over any commits made since the merge, and **pr** opens a new PR. If the PR was closed without merging, **pr** opens a new one from the same branch.
 
-Commands (a comment containing only the word):
+You can also just say what you want about the run itself: "stop that", "how's it going?", "start over with a fresh conversation", "we're done, clean up". The same short Codex call reads these. Clean-up refuses while there are uncommitted changes.
+
+Publishing takes the exact word, as a comment on its own. If you write "looks good, push it", the runner asks you to reply with the word:
 
 | Command | What it does |
 |---|---|
 | `push` | publish `pennyworth/<task>` to GitHub (never forced). Exception: if the repository is still empty, the work becomes its first commit on `main` (the first branch pushed to an empty repo becomes its default) |
 | `pr` | push and open a **draft** PR with the report as description |
-| `stop` | cancel the running job |
-| `status` | repo, branch, engine, mode, session |
-| `reset` | start a fresh agent conversation next time (keeps the worktree) |
-| `cleanup` | remove the worktree (the local branch is kept) |
 
 Agents can't push or write to GitHub themselves:
 

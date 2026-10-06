@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { findRepos, normalizeRepo, parseComment, repoAllowed, resolveEngine, resolveMode, resolveShells } from "../src/commands.mjs";
+import { findRepos, normalizeRepo, parseCommand, repoAllowed, resolveEngine, resolveMode, resolveShells } from "../src/commands.mjs";
 import { buildCommand, inDevshells } from "../src/engines.mjs";
 import { commitMessage, firstPrompt, latestReport, prTitle, stripCommitLine } from "../src/prompt.mjs";
 
@@ -15,22 +15,11 @@ const cfg = {
   devshells: { engine_shell: "llm", available: ["go", "llm", "node", "pulumi", "rust"], keyword_shells: { "gcloud|cloud logging": "pulumi" } },
 };
 
-describe("comment parsing", () => {
-  it("separates directives from instructions anywhere in the comment", () => {
-    const p = parseComment("repo: 0xPolygon/omsx\nFind why the settlement test is flaky.\nengine: glm\nmode: implement");
-    assert.deepEqual(p.directives, { repo: "0xPolygon/omsx", engine: "glm", mode: "implement" });
-    assert.equal(p.instructions, "Find why the settlement test is flaky.");
-  });
-
-  it("recognizes single-word commands", () => {
-    for (const [body, cmd] of [["push", "push"], ["Stop.", "stop"], ["draft PR", "pr"], ["reset", "reset"], ["cleanup", "cleanup"]]) {
-      assert.equal(parseComment(body).command, cmd);
-    }
-    assert.equal(parseComment("push the fix after review").command, undefined);
-  });
-
-  it("ignores directives hidden in HTML comments", () => {
-    assert.deepEqual(parseComment("<!-- repo: evil/repo -->\nlook at logs").directives, {});
+describe("exact commands", () => {
+  it("only an exact push or pr is a command; everything else goes to the intake", () => {
+    for (const [body, cmd] of [["push", "push"], ["Push.", "push"], ["pr", "pr"], ["draft PR", "pr"], ["open pr!", "pr"]]) assert.equal(parseCommand(body), cmd);
+    for (const body of ["push the fix after review", "stop", "status", "reset", "cleanup", "Repo: 0xPolygon/omsx\nCheck it"]) assert.equal(parseCommand(body), undefined);
+    assert.equal(parseCommand("<!-- hidden -->push"), "push");
   });
 });
 
@@ -233,7 +222,7 @@ describe("plain-language intake", async () => {
       { repo: "0xpolygon/tron-indexer-gateway", references: ["0xPolygon/solana-indexer-gateway", "evil/repo", "0xPolygon/tron-indexer-gateway"], mode: "investigate", engine: "", model: "astra", question: "" },
       { candidates, models },
     );
-    assert.deepEqual(v, { repo: "0xPolygon/tron-indexer-gateway", references: ["0xPolygon/solana-indexer-gateway"], mode: "investigate", engine: "codex", model: "gpt-6-astra", question: undefined });
+    assert.deepEqual(v, { action: "run", repo: "0xPolygon/tron-indexer-gateway", references: ["0xPolygon/solana-indexer-gateway"], mode: "investigate", engine: "codex", model: "gpt-6-astra", question: undefined });
     assert.equal(validateIntake({ repo: "evil/repo", references: [], mode: "rm -rf", engine: "x", model: "", question: "" }, { candidates, models }).repo, undefined);
     assert.equal(validateIntake({ repo: "evil/repo", references: [], mode: "rm -rf", engine: "x", model: "", question: "" }, { candidates, models }).mode, undefined);
   });
@@ -434,10 +423,24 @@ describe("repositories as Paperclip stores them", () => {
   it("reads Markdown links, angle brackets and escapes", () => {
     const link = "[https://github.com/0xPolygon/tron-indexer-gateway](https://github.com/0xPolygon/tron-indexer-gateway)";
     assert.equal(normalizeRepo(link).slug, "0xPolygon/tron-indexer-gateway");
-    assert.equal(parseComment(`Repo: ${link}\nCheck the deployment.`).directives.repo, link);
     assert.equal(normalizeRepo("<https://github.com/0xPolygon/omsx.git>").slug, "0xPolygon/omsx");
     assert.equal(normalizeRepo("0xPolygon/tron\\_indexer").slug, "0xPolygon/tron_indexer");
     assert.equal(normalizeRepo("https://github.com/0xPolygon/omsx/pull/12").slug, "0xPolygon/omsx");
     assert.equal(normalizeRepo("not a repo"), undefined);
+  });
+});
+
+describe("intake actions", async () => {
+  const { intakePrompt, validateIntake } = await import("../src/intake.mjs");
+  it("keeps only known actions and defaults to run", () => {
+    const base = { repo: "", references: [], mode: "answer", engine: "", model: "", question: "" };
+    assert.equal(validateIntake({ ...base, action: "stop" }, { candidates: [], models: [] }).action, "stop");
+    assert.equal(validateIntake({ ...base, action: "rm -rf" }, { candidates: [], models: [] }).action, "run");
+    assert.equal(validateIntake(base, { candidates: [], models: [] }).action, "run");
+  });
+  it("tells the intake whether a run is in progress and which comment is newest", () => {
+    const p = intakePrompt({ user: "Taylan", title: "t", description: "", instructions: "Earlier request\n\nstop that", latest: "stop that", candidates: [], models: [], busy: true });
+    assert.match(p, /a run is IN PROGRESS/);
+    assert.match(p, /newest comment \(decides "action"\):\n<<<COMMENT\nstop that\nCOMMENT>>>/);
   });
 });
