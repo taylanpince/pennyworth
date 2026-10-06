@@ -39,7 +39,7 @@ The user hands email to Pennyworth by applying the Gmail label **`pennyworth`** 
      From: Name <email>
      Subject: …
      Received: 2026-10-05 13:47 (newest message)
-     Link: https://mail.google.com/mail/u/0/#all/<thread_id>
+     Link: <the result's `link`, unchanged>
 
      ## Reason
 

@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadAccounts } from "../src/accounts.js";
+import { gmailLink, loadAccounts } from "../src/accounts.js";
 
 const file = (content: unknown) => {
   const p = join(mkdtempSync(join(tmpdir(), "gacc-")), "creds.json");
@@ -29,5 +29,10 @@ describe("google accounts", () => {
   it("falls back to the first account when primary is unknown, and fails when empty", () => {
     expect(loadAccounts(file({ client_id: "c", primary: "x@y.z", accounts: { "a@b.c": { refresh_token: "r" } } })).primary).toBe("a@b.c");
     expect(() => loadAccounts(file({ client_id: "c", accounts: {} }))).toThrow(/no Google accounts/);
+  });
+
+  it("links Gmail threads to the account they live in", () => {
+    expect(gmailLink("1a07abbf", "me@side.io")).toBe("https://mail.google.com/mail/u/me%40side.io/#all/1a07abbf");
+    expect(gmailLink("1a07abbf", "default")).toBe("https://mail.google.com/mail/u/0/#all/1a07abbf");
   });
 });

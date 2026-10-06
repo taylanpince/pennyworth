@@ -32,6 +32,12 @@ export function loadAccounts(path: string): { primary: string; accounts: Map<str
   return { primary, accounts };
 }
 
+/** Gmail web link that opens in the right account (`u/0` is whichever account signed in first). */
+export function gmailLink(threadId: string, account: string): string {
+  const user = account.includes("@") ? encodeURIComponent(account) : "0";
+  return `https://mail.google.com/mail/u/${user}/#all/${encodeURIComponent(threadId)}`;
+}
+
 const notFound = (err: unknown) => /\b(404|403)\b|not found|notFound|insufficient/i.test(String(err));
 
 /**
@@ -122,11 +128,14 @@ export class MultiWorkspace {
   }
 
   async gmailSearch(query: string, max = 20, account?: string) {
-    const results = await this.all(account, (w) => w.gmailSearch(query, max));
+    const results = (await this.all(account, (w) => w.gmailSearch(query, max))).map((m) =>
+      typeof m.thread_id === "string" ? { ...m, link: gmailLink(m.thread_id, m.account) } : m,
+    );
     return results.sort((a, b) => String((b as Record<string, unknown>).date ?? "").localeCompare(String((a as Record<string, unknown>).date ?? "")));
   }
 
-  gmailThread(id: string, maxChars?: number, account?: string) {
-    return this.firstThat(account, (w) => w.gmailThread(id, maxChars));
+  async gmailThread(id: string, maxChars?: number, account?: string) {
+    const t = await this.firstThat(account, (w) => w.gmailThread(id, maxChars));
+    return { ...t, link: gmailLink(String(t.id ?? id), t.account) };
   }
 }
