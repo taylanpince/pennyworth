@@ -96,3 +96,24 @@ export function commitMessage(report, fallback) {
 export function stripCommitLine(report) {
   return String(report ?? "").replace(/^\s*`?Commit message:.*$/im, "").trim();
 }
+
+/**
+ * The newest finished run report among a task's comments (oldest first), for a PR body: only
+ * runner comments that open with the "**Done.**" headline or "## Summary". Error comments can
+ * quote an earlier report, so a body merely containing "## Summary" doesn't count.
+ */
+export function latestReport(bodies, marker) {
+  for (const body of [...bodies].reverse()) {
+    if (!String(body ?? "").includes(marker)) continue;
+    const text = body.replace(/<!--[\s\S]*?-->/g, "").trim();
+    if (!/^(\*\*Done\.\*\*[^\n]*\n+)?##\s*Summary\b/.test(text)) continue;
+    return text.replace(/^\*\*Done\.\*\*[^\n]*\n+/, "").split("\n---\n")[0].trim();
+  }
+  return undefined;
+}
+
+/** PR title: the commit subject when the branch has exactly one commit (`git log --oneline`), else the task title. */
+export function prTitle(commits, taskTitle) {
+  const lines = String(commits ?? "").trim().split("\n").filter(Boolean);
+  return (lines.length === 1 ? lines[0].replace(/^[0-9a-f]{4,40}\s+/, "") : taskTitle).slice(0, 200);
+}

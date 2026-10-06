@@ -5,13 +5,13 @@ import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { branchFor, findRepos, normalizeRepo, parseComment, repoAllowed, resolveEngine, resolveMode, resolveShells } from "./commands.mjs";
+import { RUNNER_MARKER, branchFor, findRepos, normalizeRepo, parseComment, repoAllowed, resolveEngine, resolveMode, resolveShells } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteHasBranch, remoteIsEmpty, removeWorktree } from "./git.mjs";
 import { codexModels, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
-import { commitMessage, firstPrompt, followUpPrompt, runOutcome, stripCommitLine } from "./prompt.mjs";
+import { commitMessage, firstPrompt, followUpPrompt, latestReport, prTitle, runOutcome, stripCommitLine } from "./prompt.mjs";
 import { State } from "./state.mjs";
 
 const execFileP = promisify(execFile);
@@ -346,10 +346,11 @@ async function runCommand(issue, task, command) {
   if (command === "pr") {
     if (task.pr_url) return void (await pc.comment(issue.id, `The PR is already open and now has the latest commits: ${task.pr_url}`));
     const full = await pc.issue(issue.id);
-    const body = `Draft opened by Pennyworth for Paperclip task ${issue.identifier}.\n\n${(await lastReport(issue.id)) ?? ""}`.slice(0, 60_000);
+    const body = `Draft opened by Pennyworth for Paperclip task ${issue.identifier}.\n\n${(await lastReport(issue.id)) ?? ""}`.trim().slice(0, 60_000);
     const realGh = await findRealGh();
-    const { stdout } = await execFileP(realGh, ["pr", "create", "--draft", "--repo", repo.slug, "--head", task.branch, "--base", task.base, "--title", full.title.slice(0, 200), "--body", body], { cwd: task.worktree }).catch((err) => {
-      throw new UserError(`I couldn't open the PR. GitHub said:\n\`\`\`\n${String(err.stderr || err.message).trim().slice(-800)}\n\`\`\``);
+    const { stdout } = await execFileP(realGh, ["pr", "create", "--draft", "--repo", repo.slug, "--head", task.branch, "--base", task.base, "--title", prTitle(commits, full.title), "--body", body], { cwd: task.worktree }).catch((err) => {
+      // gh's error message repeats the whole command line (PR body included): show stderr only.
+      throw new UserError(`I couldn't open the PR. GitHub said:\n\`\`\`\n${String(err.stderr || "gh pr create failed").trim().slice(-800)}\n\`\`\``);
     });
     const url = stdout.trim().split("\n").pop();
     state.updateTask(issue.id, { pr_url: url });
@@ -368,9 +369,8 @@ function logTail(path, lines = 6) {
 }
 
 async function lastReport(issueId) {
-  const comments = await pc.comments(issueId);
-  const mine = comments.filter((c) => c.body?.includes("<!-- pennyworth-runner -->") && c.body.includes("## Summary"));
-  return mine.at(-1)?.body.replace(/<!--[\s\S]*?-->/g, "").split("\n---\n")[0].trim();
+  const comments = [...(await pc.comments(issueId))].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  return latestReport(comments.map((c) => c.body), RUNNER_MARKER);
 }
 
 async function findRealGh() {

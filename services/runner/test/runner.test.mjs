@@ -7,7 +7,7 @@ import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { findRepos, normalizeRepo, parseComment, repoAllowed, resolveEngine, resolveMode, resolveShells } from "../src/commands.mjs";
 import { inDevshells } from "../src/engines.mjs";
-import { commitMessage, firstPrompt, stripCommitLine } from "../src/prompt.mjs";
+import { commitMessage, firstPrompt, latestReport, prTitle, stripCommitLine } from "../src/prompt.mjs";
 
 const cfg = {
   allowed_orgs: ["0xsequence", "0xPolygon", "agglayer"],
@@ -101,6 +101,20 @@ describe("prompts", () => {
     assert.equal(commitMessage(r, "chore: x"), "fix(settlement): retry transient RPC errors");
     assert.equal(stripCommitLine(r), "## Summary\nDone.");
     assert.equal(commitMessage("no line", "chore: fallback"), "chore: fallback");
+  });
+
+  it("builds the PR body from the newest finished report, never from an error quoting one", () => {
+    const m = "<!-- pennyworth-runner -->";
+    const report = `**Done.** The changes are committed on the task branch.\n\n## Summary\n\nImplemented it.\n\n## Verification\n\nTests pass.\n---\nCodex · implement\n\n${m}`;
+    const error = `Runner error: \`Command failed: gh pr create --body Draft…\n\n## Summary\n\nThe repo\`\n\n${m}`;
+    assert.equal(latestReport([report, "pr", error], m), "## Summary\n\nImplemented it.\n\n## Verification\n\nTests pass.");
+    assert.equal(latestReport([`## Summary\n\nOld style.\n---\nfooter\n\n${m}`], m), "## Summary\n\nOld style.");
+    assert.equal(latestReport(["## Summary\n\nwritten by the user"], m), undefined);
+  });
+
+  it("titles a PR after its single commit, else the task", () => {
+    assert.equal(prTitle("4f2c1ab feat(tron): implement balance gateway\n", "Prepare Tron support"), "feat(tron): implement balance gateway");
+    assert.equal(prTitle("4f2c1ab feat: a\n9e8d7c6 fix: b", "Prepare Tron support"), "Prepare Tron support");
   });
 });
 
