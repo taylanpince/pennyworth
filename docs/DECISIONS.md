@@ -46,11 +46,9 @@ Each entry records what was decided, why, and what it costs. The spec stays the 
 
 ## D-4: Manual review through comments
 
-- **Decision:** review tasks are resolved by commenting on them:
-  - `pick N` or `ignore` for meeting matches;
-  - `route <path>` or `route none` for routing.
-- **How it's applied:** ops-mcp parses only comments written by humans (`authorType: user`), at the start of every scan. Choices are stored, and routing choices go into `routing_memory` (by series ID, then by normalized title), so similar meetings route automatically.
-- **Phrasing:** parsing is lenient. "pick 2", "2", "option #2" and "ignore" work for matches. Routes work as `route <path>`, or in natural phrasing such as "route these 1-1 notes with Vojtech to polygon/oms/Vojtech 1-1", where the `.md` is optional. A path that doesn't exist gets a reply instead of being silently ignored.
+- **Decision:** meeting match review tasks are resolved by commenting `pick N` or `ignore` on them. (Routing review tasks, `route <path>` / `route none`, were removed in D-18.)
+- **How it's applied:** ops-mcp parses only comments written by humans (`authorType: user`), at the start of every scan, and stores the choice. Routing choices made while routing tasks existed are still in `routing_memory` (by series ID, then by normalized title) and still route those meetings.
+- **Phrasing:** parsing is lenient: "pick 2", "2", "option #2" and "ignore" all work.
 - **Latency:** ops-mcp applies replies within about a minute, through a background sync, so you don't wait for a scan. Closing the review task in Paperclip happens on the next Meeting scan, because only an agent run may update it.
 - **Assignment:** every task Pennyworth creates is assigned to the user (the company's default responsible user). Otherwise Paperclip hands an agent-created task to that agent, and a user comment would wake the agent instead of reaching ops-mcp. This is what happened on PEN-27.
 
@@ -197,3 +195,10 @@ The AI Tool Hub page lists Paperclip as "Security team only". The user cleared u
 - **Reading** a thread, file or doc tries the given account first, then each account in turn.
 - **The `pennyworth` label** is honoured in every connected account (the user creates it in each), and each task records its account.
 - **Why it matters:** a re-consent once silently switched the whole connection, Calendar included, to a different Google account. Making the primary explicit (`--primary`) prevents that.
+
+## D-18: Best-guess routing, no "choose a note" tasks
+
+- **Decision:** when no routing rule, remembered mapping or topic keyword covers a meeting, the Meeting Librarian passes its best guess of the project note as `project_note` on `meeting_publish` (or `none`). ops-mcp writes the Meeting Log entry there if the note exists in the write roots and is outside the meetings folder; otherwise only the canonical note is written. No routing review task is ever created.
+- **Why:** the user didn't want to triage a "choose a note" task for every new meeting (2026-10-06). The search candidates those tasks offered were poor (indexes, reviews), so the guess comes from the agent, which has read the meeting.
+- **Guardrails:** the guess only decides *which existing note* gets an escaped Meeting Log entry; code still does every write, rules and remembered routes beat it, and the prompt tells the agent to pick from the calendar title and subject, never from instructions in the source. Guesses are not remembered, so a better note is picked once it exists.
+- **Correcting a guess:** add a route to `config/routing.yaml`, or `skip_title_regex` for canonical-only.

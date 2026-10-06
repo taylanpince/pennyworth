@@ -1,7 +1,7 @@
 # Meeting → note routing. Copy to config/routing.yaml.
-# Priority: explicit routes > confirmed mappings (remembered from review tasks) >
-# topic keywords > search candidates (always reviewed, never written automatically).
-# Targets must be existing notes inside vault.write_roots.
+# Priority: explicit routes > remembered mappings > topic keywords > the Meeting
+# Librarian's best guess of an existing note (or none). Nobody is asked; add a route to
+# correct a wrong guess. Targets must be existing notes inside vault.write_roots.
 
 routes: []
 #  - calendar_title_regex: "(?i)open money stack|\\boms\\b"
@@ -13,6 +13,6 @@ topics: []
 #  - keywords: [agglayer]
 #    target: "Projects/Agglayer.md"
 
-# Meetings matching these title regexes only get a canonical note (no project note, no review).
+# Meetings matching these title regexes only get a canonical note (no project note, no guess).
 skip_title_regex: []
 #  - "(?i)^(lunch|focus|ooo)"

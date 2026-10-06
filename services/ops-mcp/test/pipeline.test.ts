@@ -10,7 +10,7 @@ function countOccurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
 
-async function runLibrarian(env: ReturnType<typeof makeEnv>, events = [OMS_PRIVY], extraction: unknown = EXTRACTION) {
+async function runLibrarian(env: ReturnType<typeof makeEnv>, events = [OMS_PRIVY], extraction: unknown = EXTRACTION, projectNote?: string) {
   // Simulates the Meeting Librarian's tool sequence.
   const scan = (await env.app.meetings.scan()) as { work: { source_id: string; status: string }[] };
   const results = [];
@@ -22,7 +22,7 @@ async function runLibrarian(env: ReturnType<typeof makeEnv>, events = [OMS_PRIVY
     }
     if (status === "matched" || status === "obsidian_write_pending") {
       env.app.meetings.readSource(w.source_id);
-      results.push(await env.app.meetings.publish(w.source_id, status === "obsidian_write_pending" ? undefined : extraction));
+      results.push(await env.app.meetings.publish(w.source_id, status === "obsidian_write_pending" ? undefined : extraction, projectNote));
     }
   }
   return { scan, results };
@@ -196,23 +196,12 @@ describe("manual review scenario (§42)", () => {
     expect(env.paperclip.issues.get(m.review_task.issue_id)!.status).toBe("done");
     expect(after.work).toMatchObject([{ source_id: sourceId, status: "matched" }]);
 
-    // Processed normally; no route yet, so a routing review is created.
-    const pub = await env.app.meetings.publish(sourceId, { ...EXTRACTION, actions: [] });
+    // Processed normally; no route configured, so the Librarian's guess is used and nobody is asked.
+    const pub = await env.app.meetings.publish(sourceId, { ...EXTRACTION, actions: [] }, "Projects/Wallet");
     expect(pub.canonical_note.path).toBe("Meetings/2026/10/2026-10-04 1445 - Wallet Weekly.md");
-    expect(pub.review_tasks).toHaveLength(1);
-    env.paperclip.userComment(pub.review_tasks[0]!.issue_id!, "route Projects/Wallet.md");
-    await env.app.meetings.scan();
+    expect(pub.review_tasks).toEqual([]);
+    expect(pub.targets).toEqual([{ path: "Projects/Wallet.md", method: "guess", state: "written" }]);
     expect(readFileSync(join(env.vault, "Projects", "Wallet.md"), "utf8")).toContain("paperclip-meeting:weekly_1");
-
-    // A later instance of the same series routes automatically from memory.
-    const nextWeek = event({ ...weekly, id: "weekly_2", start: "2026-10-11T14:45:00+02:00", end: "2026-10-11T15:15:00+02:00" });
-    writeAt(join(env.transcripts, "Wallet-Weekly-2026-10-11_14-46-00.txt"), "[Them] Carol: weekly update\n", "2026-10-11T15:20:00+02:00");
-    env.now.ms = Date.parse("2026-10-11T16:00:00+02:00");
-    const s2 = (await env.app.meetings.scan()) as { work: { source_id: string }[] };
-    const m2 = (await env.app.meetings.match({ source_id: s2.work[0]!.source_id, calendar_status: "ok", events: [nextWeek], hints: { title_guesses: [], people: [] } })) as { status: string };
-    expect(m2.status).toBe("matched");
-    const pub2 = await env.app.meetings.publish(s2.work[0]!.source_id, { ...EXTRACTION, actions: [] });
-    expect(pub2.targets).toEqual([{ path: "Projects/Wallet.md", method: "memory_series", state: "written" }]);
   });
 });
 
@@ -248,16 +237,27 @@ describe("routing", () => {
     expect(readFileSync(join(env.vault, "Projects", "Open Money Stack.md"), "utf8")).toBe(OMS_NOTE);
   });
 
-  it("an ambiguous search candidate produces a review task, not a write", async () => {
-    const env = makeEnv({ routing: "routes: []\n" });
-    writeFileSync(join(env.vault, "Projects", "Privy Notes.md"), "# Privy\nPrivy integration ideas\n");
+  it("an explicit rule wins over the Librarian's guess", async () => {
+    const env = makeEnv({ routing: `routes:\n  - calendar_title_regex: "(?i)privy"\n    target: "Projects/Privy.md"\n` });
+    writeFileSync(join(env.vault, "Projects", "Privy.md"), "# Privy\n");
+    writeFileSync(join(env.vault, "Projects", "Privy Notes.md"), "# Privy\n");
     writeAt(join(env.transcripts, "2026-10-04_1401.md"), TRANSCRIPT);
-    const { results } = await runLibrarian(env);
-    expect(results[0]!.targets).toEqual([]);
-    expect(readFileSync(join(env.vault, "Projects", "Privy Notes.md"), "utf8")).toBe("# Privy\nPrivy integration ideas\n");
-    const review = env.paperclip.byLabel("needs-review");
-    expect(review).toHaveLength(1);
-    expect(review[0]!.input.description).toContain("`Projects/Privy Notes.md`");
+    const { results } = await runLibrarian(env, undefined, undefined, "Projects/Privy Notes.md");
+    expect(results[0]!.targets).toEqual([{ path: "Projects/Privy.md", method: "rule", state: "written" }]);
+    expect(readFileSync(join(env.vault, "Projects", "Privy Notes.md"), "utf8")).toBe("# Privy\n");
+  });
+
+  it("without a usable guess only the canonical note is written, and nobody is asked", async () => {
+    for (const guess of [undefined, "none", "Projects/Missing.md", "Meetings/2026/10/x.md", "../outside.md"]) {
+      const env = makeEnv({ routing: "routes: []\n" });
+      writeFileSync(join(env.vault, "Projects", "Privy Notes.md"), "# Privy\nPrivy integration ideas\n");
+      writeAt(join(env.transcripts, "2026-10-04_1401.md"), TRANSCRIPT);
+      const { results } = await runLibrarian(env, undefined, undefined, guess);
+      expect(results[0]!.targets).toEqual([]);
+      expect(results[0]!.review_tasks).toEqual([]);
+      expect(results[0]!.canonical_note.state).toBe("created");
+      expect(env.paperclip.byLabel("needs-review")).toHaveLength(0);
+    }
   });
 });
 

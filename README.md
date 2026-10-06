@@ -97,7 +97,7 @@ Then drop a transcript into `~/Documents/transcripts`, or have a Meet call that 
    A Drive document attached to exactly one event is matched to it directly.
 4. **Publish.** The agent reads the source and calls `meeting_publish` with a structured extraction (summary, decisions as explicit or probable, actions with owner and deadline only when stated, open questions). ops-mcp then:
    - creates `Meetings/YYYY/MM/YYYY-MM-DD HHMM - Title.md`;
-   - routes the meeting: explicit rules, then remembered choices, then topic keywords, else a "choose a note" task;
+   - routes the meeting: explicit rules, then remembered choices, then topic keywords, else the agent's best guess of an existing project note (or none). It never asks you;
    - appends the Meeting Log entry with a `<!-- paperclip-meeting:<event id> -->` marker (never twice);
    - creates action tasks with markers: `meeting-action` for yours, `waiting-on` for other people's.
 
@@ -106,11 +106,10 @@ Then drop a transcript into `~/Documents/transcripts`, or have a Meet call that 
 Comment on the task in Paperclip, then wait for the next scan, or click **Run now** on the Meeting scan routine:
 
 - **Which meeting was this?** `pick 2` (number from the list) or `ignore`.
-- **Which note should get it?** `route polygon/agglayer/JPM.md`, or `route none`. The answer is remembered for that recurring series and for similar titles.
 
 ### Routing rules
 
-Edit `config/routing.yaml` (examples inside). Explicit regex rules always win. Targets must be existing notes in the mounted vault folders.
+Edit `config/routing.yaml` (examples inside). Explicit regex rules always win, so add one to correct a wrong guess. Targets must be existing notes in the mounted vault folders.
 
 ## Todo list
 

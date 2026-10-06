@@ -44,7 +44,6 @@ routing:
   config_path: /config/routing.yaml
   auto_write_confidence: 0.8
   multi_target_confidence: 0.9
-  review_unrouted: true
 
 paperclip:
   base_url: http://paperclip:3100

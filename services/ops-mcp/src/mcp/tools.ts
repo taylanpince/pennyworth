@@ -126,11 +126,11 @@ export function buildServer(deps: ToolDeps): McpServer {
     {
       title: "Publish a matched meeting",
       description:
-        "Create/update the canonical Obsidian meeting note, append to routed project notes under the Meeting Log heading (deduplicated by marker), and create Paperclip tasks for action items (deduplicated). Requires a matched source. Omit `extraction` only to retry a publish that is obsidian_write_pending.",
-      inputSchema: { source_id: z.string(), extraction: ExtractionSchema.optional() },
+        "Create/update the canonical Obsidian meeting note, append to routed project notes under the Meeting Log heading (deduplicated by marker), and create Paperclip tasks for action items (deduplicated). Requires a matched source. Omit `extraction` only to retry a publish that is obsidian_write_pending. `project_note` is your best guess of the existing vault note this meeting belongs in (or 'none'); it is only used when no routing rule or remembered route applies, and only if the note exists.",
+      inputSchema: { source_id: z.string(), extraction: ExtractionSchema.optional(), project_note: z.string().max(512).optional() },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    wrap("meeting_publish", async (a: { source_id: string; extraction?: unknown }) => (await meetings.publish(a.source_id, a.extraction)) as unknown as Json),
+    wrap("meeting_publish", async (a: { source_id: string; extraction?: unknown; project_note?: string }) => (await meetings.publish(a.source_id, a.extraction, a.project_note)) as unknown as Json),
   );
 
   server.registerTool(

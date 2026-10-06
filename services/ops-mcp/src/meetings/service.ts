@@ -11,7 +11,7 @@ import type { Router } from "../routing/routing.js";
 import type { SourceMetadata, SourceRow, SourceStore } from "../sources/store.js";
 import { parseMeetDocTitle } from "../sources/parse.js";
 import { ACTIONABLE_STATUSES } from "../sources/store.js";
-import { parseMatchCommand, parseRouteCommand } from "./review-commands.js";
+import { parseMatchCommand } from "./review-commands.js";
 import type { TranscriptScanner } from "../sources/transcripts.js";
 import { ConflictError, UserFacingError } from "../util/errors.js";
 import { newId, nowIso, sha256, shortHash } from "../util/ids.js";
@@ -369,7 +369,7 @@ export class MeetingService {
   private syncing?: Promise<number>;
 
   /**
-   * Apply the user's replies on review tasks ("pick 2", "ignore", "route <note>", or natural
+   * Apply the user's replies on meeting match review tasks ("pick 2", "ignore", or natural
    * phrasing). Runs on every scan and periodically in the background; concurrent calls share one run.
    */
   syncReviews(): Promise<number> {
@@ -379,7 +379,7 @@ export class MeetingService {
 
   private async doSyncReviews(): Promise<number> {
     let applied = 0;
-    for (const row of this.tasks.listOpen(["meeting_review", "routing_review"])) {
+    for (const row of this.tasks.listOpen(["meeting_review"])) {
       let comments;
       try {
         comments = await this.tasks.userComments(row);
@@ -387,7 +387,7 @@ export class MeetingService {
         this.log.warn({ marker: row.marker, err: String(err) }, "could not read review comments");
         continue;
       }
-      const ctx = this.tasks.context<{ source_id?: string; meeting_id?: string }>(row);
+      const ctx = this.tasks.context<{ source_id?: string }>(row);
       // Newest command wins.
       for (const c of [...comments].reverse()) {
         try {
@@ -395,18 +395,6 @@ export class MeetingService {
             const cmd = parseMatchCommand(c.body);
             if (!cmd) continue;
             await this.resolve(ctx.source_id, cmd.kind === "ignore" ? "ignore" : cmd.choice, "user");
-            applied++;
-            break;
-          }
-          if (row.kind === "routing_review" && ctx.meeting_id) {
-            const cmd = parseRouteCommand(c.body);
-            if (!cmd) continue;
-            const missing = cmd.kind === "route" ? cmd.targets.filter((t) => !this.noteExists(t)) : [];
-            if (cmd.kind === "route" && missing.length === cmd.targets.length) {
-              this.tasks.noteProblem(row.marker, c.id, `Couldn't find ${missing.map((m) => `\`${m}\``).join(", ")} in the vault folders Pennyworth can see. Check the path (folders: ${this.cfg.vault.write_roots.join(", ")}) and reply again.`);
-              break;
-            }
-            await this.resolveRouting(ctx.meeting_id, cmd.kind === "none" ? ["none"] : cmd.targets, row.marker);
             applied++;
             break;
           }
@@ -428,38 +416,9 @@ export class MeetingService {
     }
   }
 
-  async resolveRouting(meetingId: string, routes: string[], marker?: string): Promise<Record<string, unknown>> {
-    const meeting = this.meeting(meetingId);
-    const none = routes.length === 1 && /^none$/i.test(routes[0]!);
-    const results: { path: string; state: string }[] = [];
-    if (none) {
-      this.router.remember({ title: meeting.title, series_id: meeting.calendar_series_id }, "");
-    } else {
-      for (const raw of routes) {
-        const path = raw.endsWith(".md") ? raw : `${raw}.md`;
-        if (!this.vault.exists(path)) {
-          results.push({ path, state: "not_found" });
-          continue;
-        }
-        this.router.remember({ title: meeting.title, series_id: meeting.calendar_series_id }, path);
-        if (meeting.extraction_json) {
-          const state = this.writeTarget(meeting, JSON.parse(meeting.extraction_json) as Extraction, { path, method: "manual", confidence: 1, reason: "user" });
-          results.push({ path, state });
-        } else {
-          results.push({ path, state: "remembered" });
-        }
-      }
-    }
-    if (marker) {
-      const summary = none ? "no project note (remembered)" : results.map((r) => `${r.path}: ${r.state}`).join(", ");
-      await this.tasks.resolve(marker, `Resolved routing: ${summary}. Future meetings like this will route the same way. (applied by ops-mcp)`);
-    }
-    return { meeting_id: meetingId, routes: results, none };
-  }
-
   // ---------------------------------------------------------------- publishing
 
-  async publish(sourceId: string, extractionInput?: unknown): Promise<PublishResult> {
+  async publish(sourceId: string, extractionInput?: unknown, projectNote?: string): Promise<PublishResult> {
     const s = this.requireSource(sourceId);
     const decision = this.decision(s.id);
     if (!decision || decision.status !== "matched" || !decision.chosen_event_id) {
@@ -541,9 +500,12 @@ export class MeetingService {
           result.review_tasks.push(await this.conflictTask(meeting, t.path, "The note kept changing while the Meeting Log entry was being added (two attempts). Nothing was overwritten."));
         }
       }
-      const written = result.targets.some((t) => t.state === "written" || t.state === "exists");
-      if (!written && !routing.skipped && this.cfg.routing.review_unrouted) {
-        result.review_tasks.push(await this.routingReviewTask(meeting, notePath, routing.candidates, routing.missing));
+      // Nothing configured or remembered: use the Librarian's best guess, else the canonical note only.
+      // Never a task: the user asked for a best guess over a review.
+      const guess = this.validGuess(projectNote);
+      if (!result.targets.length && !routing.skipped && guess) {
+        const state = this.writeTarget(meeting, extraction, { path: guess, method: "guess", confidence: 0.5, reason: "best guess" });
+        result.targets.push({ path: guess, method: "guess", state });
       }
     }
 
@@ -760,30 +722,13 @@ export class MeetingService {
     return outcome;
   }
 
-  private async routingReviewTask(meeting: MeetingRow, notePath: string, candidates: { path: string; reason: string }[], missing: string[]): Promise<TaskOutcome> {
-    const p = localParts(Date.parse(meeting.start_at), this.cfg.timezone);
-    const body = candidates.length ? candidates.map((c, i) => `${i + 1}. \`${c.path}\` (${c.reason})`).join("\n") : "No candidates found.";
-    return this.tasks.upsert(
-      `review:route:${meeting.calendar_event_id}`,
-      "routing_review",
-      {
-        title: `Choose a note for meeting: ${inline(meeting.title)} (${p.date})`,
-        provenance: [
-          { label: "Type", value: "Meeting" },
-          { label: "Meeting", value: `${inline(meeting.title)} — ${p.date} ${p.time}` },
-          { label: "Calendar event", value: meeting.calendar_event_id },
-          { label: "Canonical note", value: `[[${wikiTarget(notePath)}]]` },
-        ],
-        reason: "No routing rule or confirmed mapping covers this meeting, so no project note was updated.",
-        suggested_action: "Pick the note that should get this meeting under `## Meeting Log`, or say none.",
-        extra_sections: [
-          { heading: "Candidates", body: body + (missing.length ? `\n\nConfigured targets that do not exist: ${missing.map((m) => `\`${m}\``).join(", ")}` : "") },
-          { heading: "How to resolve", body: "Add a comment with one or more lines:\n\n- `route polygon/oms/OMS.md` to append to that note (remembered for similar meetings)\n- `route none` to keep only the canonical note (also remembered)" },
-        ],
-        labels: [this.cfg.paperclip.labels.needs_review],
-      },
-      { meeting_id: meeting.id },
-    );
+  /** The Librarian's project-note guess, if it names an existing note outside the meetings folder. */
+  private validGuess(raw?: string): string | undefined {
+    const t = raw?.trim().replace(/^\[\[|\]\]$/g, "");
+    if (!t || /^none$/i.test(t)) return undefined;
+    const path = t.toLowerCase().endsWith(".md") ? t : `${t}.md`;
+    if (path.startsWith(`${this.cfg.vault.meetings_root}/`) || !this.noteExists(path)) return undefined;
+    return path;
   }
 
   private async conflictTask(meeting: MeetingRow, path: string, reason: string): Promise<TaskOutcome> {

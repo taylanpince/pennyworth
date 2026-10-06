@@ -55,7 +55,7 @@ You can only create or edit the brief task itself, close your run task, and clos
    - 15:30–16:00 Partner call
 
    ## Needs response
-   - PEN-20 — Choose a note for "Wallet Weekly" (Pennyworth review)
+   - PEN-20 — Resolve meeting match: 2026-10-04_1501.md (Pennyworth review)
 
    ## Waiting on
    - PEN-9 — Alice Martin: revised architecture diagram — 3 days

@@ -60,8 +60,6 @@ const RoutingSchema = z.object({
   auto_write_confidence: z.number().min(0).max(1).default(0.8),
   // Minimum confidence for each target when writing to more than one note.
   multi_target_confidence: z.number().min(0).max(1).default(0.9),
-  // Create a review task when no target can be routed with confidence.
-  review_unrouted: z.boolean().default(true),
 });
 
 const PaperclipSchema = z.object({
