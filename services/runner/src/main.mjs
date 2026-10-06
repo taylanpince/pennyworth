@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { RUNNER_MARKER, branchFor, findRepos, isClaudeModel, normalizeRepo, parseComment, repoAllowed, resolveEngine, resolveMode, resolveShells } from "./commands.mjs";
+import { RUNNER_MARKER, branchFor, ownRequest, findRepos, isClaudeModel, normalizeRepo, parseComment, repoAllowed, resolveEngine, resolveMode, resolveShells } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree, startFreshBranch, nextBranchName } from "./git.mjs";
@@ -59,10 +59,12 @@ async function handleIssue(issue, engineerId) {
   const fresh = comments.filter((c) => known || Date.parse(c.createdAt) >= horizon);
   for (const c of comments.filter((x) => !fresh.includes(x))) state.markHandled(c.id, issue.id);
   if (!fresh.length) {
-    // Newly assigned to the Engineer and nobody has said anything yet: say so, once.
-    if (engineerId && issue.assigneeAgentId === engineerId && !userComments.length && !state.get(`greeted:${issue.id}`) && !running.has(issue.id)) {
+    // Newly assigned to the Engineer without comments. A task the user wrote themselves is the
+    // request (its description); otherwise ask, once.
+    if (engineerId && issue.assigneeAgentId === engineerId && !userComments.length && !running.has(issue.id) && !state.get(`greeted:${issue.id}`)) {
       state.set(`greeted:${issue.id}`, new Date().toISOString());
-      await pc.comment(issue.id, "Ready. Tell me in a comment what you'd like done and which repository to work in.");
+      if (ownRequest(await pc.issue(issue.id))) return dispatch({ issue, directives: {}, instructions: "" }); // startJob adds the description
+      await pc.comment(issue.id, "Ready. What would you like me to do, and in which repository?");
     }
     return;
   }
@@ -85,7 +87,11 @@ async function handleIssue(issue, engineerId) {
     await pc.comment(issue.id, `Settings updated: ${Object.entries(directives).map(([k, v]) => `${k}=${v}`).join(", ")}. Comment with instructions to start a run.`);
     return;
   }
-  const job = { issue, directives, instructions: instructions.join("\n\n") };
+  return dispatch({ issue, directives, instructions: instructions.join("\n\n") });
+}
+
+async function dispatch(job) {
+  const { issue } = job;
   if (running.has(issue.id)) {
     queue.push(job);
     await pc.comment(issue.id, "Queued: I'll pick this up as soon as the current run on this task finishes.");
@@ -167,6 +173,14 @@ async function startJob({ issue, directives, instructions }) {
   let jobId;
   try {
     const full = await pc.issue(issue.id);
+    // First run on a task the user wrote: its description is part of the request.
+    if (!state.get(`history:${issue.id}`)) {
+      const own = parseComment(ownRequest(full));
+      if (own.instructions) {
+        directives = { ...own.directives, ...directives };
+        instructions = [`${full.title}\n\n${own.instructions}`, instructions].filter(Boolean).join("\n\n");
+      }
+    }
     // A request still waiting on an answer (e.g. which repository) is combined with the answer.
     const pendingKey = `pending:${issue.id}`;
     const pending = state.get(pendingKey);

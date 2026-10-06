@@ -399,3 +399,14 @@ describe("after the task's PR is merged", () => {
     assert.equal(await git(clone, "branch", "--list", "pennyworth/pen-18-2"), "");
   });
 });
+
+describe("tasks the user wrote", async () => {
+  const { ownRequest } = await import("../src/commands.mjs");
+  it("uses the description only when the user wrote the task", () => {
+    const desc = "Review npm audit CI results in https://github.com/0xPolygon/tron-indexer-gateway\n\nUse glm5.3-flash";
+    assert.equal(ownRequest({ createdByUserId: "u", createdByAgentId: null, description: desc }), desc);
+    assert.equal(ownRequest({ createdByUserId: null, createdByAgentId: "a", description: desc }), "");
+    assert.equal(ownRequest({ createdByUserId: "u", createdByAgentId: null, description: `${desc}\n<!-- source:slack:C1:1 -->` }), "");
+    assert.equal(ownRequest({ createdByUserId: "u", createdByAgentId: null, description: "" }), "");
+  });
+});

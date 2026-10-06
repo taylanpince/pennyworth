@@ -111,4 +111,15 @@ export function resolveShells(directives, detected, instructions, cfg) {
   return [cfg.devshells.engine_shell, ...shells.filter((s) => s !== cfg.devshells.engine_shell)];
 }
 
+/**
+ * The request in a task's description, when the user wrote the task themselves: created with
+ * their own key, by no agent, and without the source marker that Pennyworth's generated tasks
+ * carry. Descriptions of generated tasks hold Slack/email text and stay untrusted context.
+ */
+export function ownRequest(issue) {
+  const text = String(issue?.description ?? "");
+  if (!issue?.createdByUserId || issue.createdByAgentId || /<!--\s*source:/.test(text)) return "";
+  return stripHidden(text).trim();
+}
+
 export const branchFor = (identifier) => `pennyworth/${identifier.toLowerCase()}`;
