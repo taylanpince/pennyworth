@@ -43,7 +43,7 @@ export function resolveModelAlias(name, models) {
   return models.find((m) => m.toLowerCase().split(/[-_.\s]+/).includes(n) || m.toLowerCase().endsWith(`-${n}`));
 }
 
-export function intakePrompt({ user, title, description, instructions, latest, candidates, models, known, previousMode, busy }) {
+export function intakePrompt({ user, title, description, instructions, latest, candidates, models, known, previousMode, busy, hasWork }) {
   return `You read ${user}'s request to a coding agent and extract its settings as JSON. Do not do the task itself and do not run any tools.
 
 Fields:
@@ -52,7 +52,8 @@ Fields:
   - "status": how the runner's work on this task is going (progress, what it is doing). Not a question about the code.
   - "reset": start the agent's conversation afresh (forget the session), keeping the code.
   - "cleanup": remove the local working copy; the work on this task is finished.
-  - "push": publish the work to GitHub. "pr": open a pull request.
+  - "push": publish work that is ALREADY done on this task to GitHub. "pr": open a pull request for work ALREADY done.
+    Work done on this task so far: ${hasWork ? "yes, there are unpublished or published commits" : "NONE, nothing has been built yet"}. A request to build, change or prepare something (even "…and open a PR" or "prepare a PR that…") is "run": the work has to be done first.
   - "run": anything else, i.e. a question, research, a review or changes for the agent. When in doubt, "run".
 - repo: the repository the work happens in (code is written or investigated there). Pick exactly one slug from the candidates, or "" if this task already has one (${known ? `it does: ${known}` : "it does not"}) and the request doesn't name a different one, or if you truly cannot tell.
 - references: other candidate repositories mentioned only as examples, inspiration or context to read.
@@ -101,7 +102,7 @@ export function validateIntake(raw, { candidates, models }) {
 }
 
 /** Run the intake call. Resolves with validated settings; rejects on failure (callers fall back). */
-export async function readRequest({ cfg, user, title, description, instructions, latest, candidates, known, previousMode, busy }) {
+export async function readRequest({ cfg, user, title, description, instructions, latest, candidates, known, previousMode, busy, hasWork }) {
   const models = codexModels();
   const dir = mkdtempSync(join(tmpdir(), "pennyworth-intake-"));
   try {
@@ -127,7 +128,7 @@ export async function readRequest({ cfg, user, title, description, instructions,
         clearTimeout(timer);
         code === 0 && existsSync(out) ? resolve() : reject(new Error(`intake exited with ${code}: ${err.trim().split("\n").pop() ?? ""}`));
       });
-      child.stdin.end(intakePrompt({ user, title, description, instructions, latest, candidates, models, known, previousMode, busy }));
+      child.stdin.end(intakePrompt({ user, title, description, instructions, latest, candidates, models, known, previousMode, busy, hasWork }));
     });
     return validateIntake(JSON.parse(readFileSync(out, "utf8")), { candidates, models });
   } finally {

@@ -103,9 +103,11 @@ async function handleRequest(issue, latest) {
   const candidates = findRepos(`${instructions}\n${full.title}\n${full.description ?? ""}`, cfg.allowed_orgs).map((r) => r.slug);
   const before = state.task(issue.id);
   const busy = running.has(issue.id) || queue.some((j) => j.issue.id === issue.id);
-  const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, latest, candidates, known: before.repo, previousMode: before.mode, busy })
+  const hasWork = await taskHasCommits(before);
+  const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, latest, candidates, known: before.repo, previousMode: before.mode, busy, hasWork })
     .catch((err) => (log("intake failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }), undefined));
-  const action = read?.action ?? "run";
+  // Publishing needs something to publish: "build X and prepare a PR" on a fresh task is a run.
+  const action = (read?.action === "push" || read?.action === "pr") && !hasWork ? "run" : (read?.action ?? "run");
   log("request read", { issue: issue.identifier, action, mode: read?.mode });
 
   if (["stop", "status", "reset", "cleanup"].includes(action)) {
@@ -371,7 +373,9 @@ async function runCommand(issue, task, command) {
     state.updateTask(issue.id, { session_id: null });
     return void (await pc.comment(issue.id, "Session cleared: the next run starts a fresh agent conversation (the worktree and branch are kept)."));
   }
-  if (!task?.worktree || !task.repo) return void (await pc.comment(issue.id, "There is no worktree for this task yet."));
+  if (!task?.worktree || !task.repo) {
+    return void (await pc.comment(issue.id, `There's nothing to ${command === "pr" ? "open a PR for" : command} yet: no work has been done on this task. Tell me what to build and I'll start; ${command === "pr" ? "**pr**" : "**push**"} works once there are commits.`));
+  }
   if (running.has(issue.id)) return void (await pc.comment(issue.id, `Can't ${command} while a run is in progress. Comment **stop** first, or wait for it to finish.`));
   const repo = normalizeRepo(task.repo);
   const clone = join(cfg.workDir, "repos", repo.org, repo.name);
@@ -483,6 +487,12 @@ async function leaveFinishedPr(issue, task, clone) {
   state.updateTask(issue.id, { branch: next, pr_url: null, pushed: 0 });
   log("moved off merged PR", { issue: issue.identifier, pr: pr.number, branch: next, carried });
   return `PR #${pr.number} is merged, so this work continues on a new branch \`${next}\` from the latest \`${task.base}\`${carried ? ` (${carried} commit${carried === 1 ? "" : "s"} made since the merge carried over)` : ""}.`;
+}
+
+/** True when the task has a worktree with commits on its branch (something to push or open a PR for). */
+async function taskHasCommits(task) {
+  if (!task?.worktree || !task.base) return false;
+  return Boolean((await changesSummary(task.worktree, task.base).catch(() => ({}))).commits);
 }
 
 async function findRealGh() {
