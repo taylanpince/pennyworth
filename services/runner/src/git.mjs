@@ -90,6 +90,11 @@ export async function remoteHasBranch(clone, branch) {
   return out.length > 0;
 }
 
+/** The commit a branch points to on GitHub, or "" when it doesn't exist there. */
+export async function remoteBranchHead(clone, branch) {
+  return (await git(clone, "ls-remote", "--heads", "origin", branch)).split(/\s/)[0] ?? "";
+}
+
 /** True when the repository on GitHub has no branches at all (a freshly created, empty repo). */
 export async function remoteIsEmpty(clone) {
   return (await git(clone, "ls-remote", "--heads", "origin")).length === 0;

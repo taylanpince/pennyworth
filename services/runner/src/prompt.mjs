@@ -79,7 +79,15 @@ ${REPORT(mode)}
 export function runOutcome({ code, timedOut, lastMessage, timeoutMinutes, mode, dirty }) {
   const finished = !code && !timedOut && /^\s*##\s*Summary/im.test(lastMessage ?? "");
   const leftover = dirty ? " Its partial changes are in the worktree, uncommitted." : " Nothing was changed.";
-  if (finished) return { finished, headline: mode === "implement" && dirty ? "**Done.** The changes are committed on the task branch." : "**Done.**" };
+  if (finished) {
+    const headline =
+      mode !== "implement"
+        ? "**Done. Report only: no code was changed.** Ask me to make the changes when you're ready."
+        : dirty
+          ? "**Done.** The changes are committed on the task branch."
+          : "**Done. No files were changed**, so there is nothing new to commit.";
+    return { finished, headline };
+  }
   if (timedOut) return { finished, headline: `**Timed out** after ${timeoutMinutes} minutes.${leftover} Reply **continue** to pick up where it stopped.` };
   if (code) return { finished, headline: `**Failed** (exit code ${code}).${leftover}` };
   return { finished, headline: `**Stopped before finishing.** The agent ended without writing its report.${leftover} Reply **continue** to pick up where it stopped.` };

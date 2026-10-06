@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { RUNNER_MARKER, branchFor, findRepos, normalizeRepo, parseComment, repoAllowed, resolveEngine, resolveMode, resolveShells } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
-import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteHasBranch, remoteIsEmpty, removeWorktree } from "./git.mjs";
+import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree } from "./git.mjs";
 import { codexModels, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
 import { commitMessage, firstPrompt, followUpPrompt, latestReport, prTitle, runOutcome, stripCommitLine } from "./prompt.mjs";
@@ -327,6 +327,14 @@ async function runCommand(issue, task, command) {
   }
   // "pr" always pushes the task branch first: it may never have been pushed (the first push into an
   // empty repository goes to the base branch instead), and an open PR should get the latest commits.
+  const head = await git(task.worktree, "log", "-1", "--format=%H %s");
+  const upToDate = (await remoteBranchHead(clone, task.branch)) === head.split(" ")[0];
+  if (command === "push" && upToDate) {
+    return void (await pc.comment(
+      issue.id,
+      `**Nothing new to push.** GitHub already has the latest commit on \`${task.branch}\` (\`${head.slice(0, 7)}\` ${head.slice(41)})${task.pr_url ? `, and ${task.pr_url} shows it` : ""}. No commits have been made since the last push.`,
+    ));
+  }
   if (command === "push" || command === "pr") {
     if (!task.branch?.startsWith("pennyworth/")) throw new Error(`refusing to push unexpected branch ${task.branch}`);
     const target = await pushBranch(clone, task.worktree, task.branch, { initialBranch: task.base }).catch((err) => {
@@ -338,13 +346,15 @@ async function runCommand(issue, task, command) {
       return void (await pc.comment(
         issue.id,
         target === task.branch
-          ? `Pushed \`${task.branch}\` → https://github.com/${repo.slug}/compare/${task.base}...${encodeURIComponent(task.branch)}?expand=1`
+          ? task.pr_url
+            ? `Pushed \`${head.slice(0, 7)}\` ${head.slice(41)} to \`${task.branch}\`. The PR is updated: ${task.pr_url}`
+            : `Pushed \`${task.branch}\` → https://github.com/${repo.slug}/compare/${task.base}...${encodeURIComponent(task.branch)}?expand=1`
           : `The repository was empty, so I pushed this as its first commit on \`${target}\` → https://github.com/${repo.slug}/tree/${encodeURIComponent(target)}\nLater changes on this task go to \`${task.branch}\` as usual.`,
       ));
     }
   }
   if (command === "pr") {
-    if (task.pr_url) return void (await pc.comment(issue.id, `The PR is already open and now has the latest commits: ${task.pr_url}`));
+    if (task.pr_url) return void (await pc.comment(issue.id, upToDate ? `The PR is already open and up to date: ${task.pr_url}` : `Pushed the new commits to the open PR: ${task.pr_url}`));
     const full = await pc.issue(issue.id);
     const body = `Draft opened by Pennyworth for Paperclip task ${issue.identifier}.\n\n${(await lastReport(issue.id)) ?? ""}`.trim().slice(0, 60_000);
     const realGh = await findRealGh();

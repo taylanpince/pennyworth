@@ -263,6 +263,9 @@ describe("first push to an empty repository", () => {
     await commit("feat: more");
     assert.equal(await pushBranch(clone, wt, "pennyworth/pen-18", { initialBranch: base }), "pennyworth/pen-18");
     assert.equal(await remoteHasBranch(clone, "pennyworth/pen-18"), true);
+    const { remoteBranchHead } = await import("../src/git.mjs");
+    assert.equal(await remoteBranchHead(clone, "pennyworth/pen-18"), await git(wt, "rev-parse", "HEAD"));
+    assert.equal(await remoteBranchHead(clone, "nope"), "");
     assert.equal(execFileSync("git", ["-C", remote, "log", "--format=%s", "main"]).toString().trim(), "docs: spec");
   });
 });
@@ -281,6 +284,8 @@ describe("run outcome", async () => {
   const { runOutcome } = await import("../src/prompt.mjs");
   it("only treats a clean exit with a report as finished", () => {
     assert.equal(runOutcome({ code: 0, lastMessage: "## Summary\nok", mode: "implement", dirty: true }).finished, true);
+    assert.match(runOutcome({ code: 0, lastMessage: "## Summary\nok", mode: "investigate", dirty: false }).headline, /Report only: no code was changed/);
+    assert.match(runOutcome({ code: 0, lastMessage: "## Summary\nok", mode: "implement", dirty: false }).headline, /No files were changed/);
     const early = runOutcome({ code: 0, lastMessage: "The spec is thorough. Now let me study the reference.", mode: "implement", dirty: false });
     assert.equal(early.finished, false);
     assert.match(early.headline, /Stopped before finishing[\s\S]*Nothing was changed[\s\S]*continue/);
