@@ -138,7 +138,7 @@ todo --all                           # include reviews and briefs
 | Slack Scout | every 30 min, weekdays 08–20 | Slack read/search only; Paperclip task search/create/update/close |
 | Inbox Agent | every 30 min, weekdays 08–19: one todo per email thread you label `pennyworth` in Gmail (archived or not), closed when you remove the label | Gmail read/search only; Paperclip task search/create/update/close |
 | Assistant | when assigned, and on your task replies | Slack/Docs/Drive/Calendar read; notes read + meeting-note corrections; Paperclip tasks incl. hand-back |
-| pennyworth-runner (host service, not a Paperclip agent) | your comments on `engineer` tasks | Codex/OpenRouter in its own git worktrees, as you; read-only gh; no pushes except your `push`/`pr` |
+| pennyworth-runner (host service, not a Paperclip agent) | your comments on `engineer` tasks | Codex, Claude Code or OpenRouter in its own git worktrees, as you; read-only gh; no pushes except your `push`/`pr` |
 
 Each agent sees only the MCP servers and tools listed for it in `config/paperclip.yaml` (`mcp_servers`, `enabled_tools`). Everything else is disabled in its Codex arguments. Run a routine on demand with "Run now" in Paperclip.
 
@@ -162,14 +162,15 @@ It never sends messages and never edits Slack, Docs or Calendar. In your notes i
 Comment on a task and the work happens in a repository on this machine, the way you'd run Codex in a terminal tab, but tracked in Paperclip.
 
 1. Assign the task to **Engineer**, or add the label **engineer**. If you assign it and haven't commented yet, it replies "Ready".
-2. Comment with what you want, in plain words: which repository to work in (link or org/name), any repositories to use as references, whether you want a report/spec first or the change made, and optionally a model ("use the astra model", "use GLM"). A short Codex call reads the request; the runner checks its answers against the repositories you mentioned and the known models, and asks you in plain words if it can't tell which repository you mean (reply with just the name). Reference repositories are cloned read-only next to the worktree. Empty repositories work too: the task branch starts from scratch.
+2. Comment with what you want, in plain words: which repository to work in (link or org/name), any repositories to use as references, whether you want a report/spec first or the change made, and optionally an engine or model ("use the astra model", "use Claude", "use opus", "use GLM"). A short Codex call reads the request; the runner checks its answers against the repositories you mentioned and the known models, and asks you in plain words if it can't tell which repository you mean (reply with just the name). Reference repositories are cloned read-only next to the worktree. Empty repositories work too: the task branch starts from scratch.
 
    Explicit `key: value` lines anywhere in the comment still override what it reads:
 
    ```text
    repo: 0xPolygon/omsx          # any repo in 0xsequence, 0xPolygon or agglayer (or a GitHub URL)
    mode: implement               # default: investigate (report only, no changes)
-   engine: glm                   # default: codex; glm = OpenRouter z-ai/glm-5.3-flash; or openrouter:<model>
+   engine: claude                # default: codex; claude = Claude Code; glm = OpenRouter z-ai/glm-5.3-flash; or openrouter:<model>
+   model: opus                   # optional: a Codex model, or a Claude one (opus, sonnet, claude-…)
    shells: go,pulumi             # devshells from ~/config/nixos; default: detected (+ pulumi when you mention gcloud)
    base: release/v2              # branch to start from; default: the repo's default branch
    Find why the settlement test is flaky and fix it.
@@ -209,6 +210,8 @@ journalctl --user -u pennyworth-runner -f
 ```
 
 OpenRouter jobs read the key from `~/.config/pennyworth/openrouter_key` (0600).
+
+Claude Code jobs use a long-lived subscription token, not your interactive login: run `claude setup-token` once and save the token it prints to `~/.config/pennyworth/claude_oauth_token` (0600). They run in a runner-owned Claude home (`~/.local/state/pennyworth-runner/claude`) with no settings files, MCP servers, plugins or claude.ai connectors, a fixed set of built-in tools (shell, files, web, subagents), and `codex sandbox` around the whole process.
 
 ## Slack
 

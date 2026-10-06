@@ -22,6 +22,11 @@ engines:
   openrouter:                         # "engine: glm" / "engine: openrouter" / "engine: openrouter:<model>"
     model: z-ai/glm-5.3-flash
     key_file: ~/.config/pennyworth/openrouter_key
+  claude:                             # "engine: claude" / "use Claude": Claude Code, headless, inside codex sandbox
+    model: ""                         # empty = Claude Code's default; or opus, sonnet, haiku, fable, claude-…
+    token_file: ~/.config/pennyworth/claude_oauth_token   # from `claude setup-token` (0600)
+    # Runner-owned Claude Code home: none of your plugins, hooks, MCP servers or claude.ai connectors.
+    config_dir: ~/.local/state/pennyworth-runner/claude
 
 # Reads plain-language requests (target repo, reference repos, mode, model) with a short Codex call.
 intake:

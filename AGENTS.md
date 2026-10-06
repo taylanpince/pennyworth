@@ -7,7 +7,7 @@ Guidance for coding agents working on **Pennyworth**, a personal executive assis
 ```text
 host (NixOS, user taylan)
 ├── pennyworth-runner (systemd --user, node, runs AS THE USER)   services/runner/
-│     polls Paperclip: engineer tasks → Codex/OpenRouter jobs in ~/pennyworth worktrees
+│     polls Paperclip: engineer tasks → Codex/Claude Code/OpenRouter jobs in ~/pennyworth worktrees
 │                      user replies on own tasks → "Process task replies" routine (Assistant)
 ├── transcript watcher (systemd --user .path) → signed webhook → "Meeting scan"
 └── docker compose (project "pennyworth")
@@ -134,7 +134,9 @@ scripts/verify-security.sh                         # also scans for secrets; run
 ### Runner engines
 
 - **opencode auto-rejects unanswered permission prompts and still exits 0.** Its defaults `ask` for `external_directory` and `doom_loop`, so they are set to `allow` (the `codex sandbox` around it is the write boundary). Never treat exit 0 as success: a run only counts as finished if its report has `## Summary` (`runOutcome`).
-- **Sessions are engine-specific.** A Codex thread ID can't be resumed by opencode (`ses_…` IDs); switching engines starts fresh with the task's earlier requests as context.
+- **Sessions are engine-specific.** A Codex thread ID can't be resumed by opencode (`ses_…` IDs) or Claude Code; switching engines starts fresh with the task's earlier requests as context.
+- **Claude Code must not inherit the user's Claude setup.** By default `claude -p` loads every MCP server, plugin, hook and claude.ai connector (Slack send, Calendar writes, GitHub MCP pushes…). The runner uses its own `CLAUDE_CONFIG_DIR`, a `setup-token` OAuth token, `--setting-sources ""`, `--strict-mcp-config` with no servers, `ENABLE_CLAUDEAI_MCP_SERVERS=false` and a `--tools` allowlist. Don't point it at `~/.claude`: writable hooks or settings there would run unsandboxed in the user's own sessions.
+- **`claude --mcp-config` is variadic** and swallows a trailing prompt argument; the runner sends the prompt on stdin.
 
 ### Slack
 
@@ -146,7 +148,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Tasks:**
   - Tasks only for *his own* clear action items. No waiting-on tasks for other people's commitments, and no tasks for ownerless actions.
   - **Email:** only threads he labels `pennyworth` in Gmail (any account, archived or not) become todos, closed when he removes the label. Never mirror the whole inbox: that produced junk tasks (meeting accepts, receipts).
-  - Replies on review tasks (`route …`, `pick N`, `ignore`) are handled by ops-mcp. Replies on other tasks go to the Assistant. Code work is assigned to Engineer (default engine Codex; `engine: glm` = OpenRouter `z-ai/glm-5.3-flash`).
+  - Replies on review tasks (`route …`, `pick N`, `ignore`) are handled by ops-mcp. Replies on other tasks go to the Assistant. Code work is assigned to Engineer (default engine Codex; `engine: claude` = Claude Code; `engine: glm` = OpenRouter `z-ai/glm-5.3-flash`).
 - **Writing:** drafts (agendas, documents) go in task comments for him to review and paste. No Docs writes for now (option 1).
 - **Routing:** meeting notes go into the existing notes he names. Routes are remembered per calendar series or title. Don't guess routing rules.
 - **Working style:** he likes being asked crisp decision questions with a recommendation, and otherwise expects you to proceed end to end and verify on the real system.

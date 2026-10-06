@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Pennyworth runner: turns your comments on Paperclip tasks labelled "engineer" into
-// Codex / OpenRouter coding jobs in runner-owned git worktrees on this machine.
+// Codex / Claude Code / OpenRouter coding jobs in runner-owned git worktrees on this machine.
 import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { RUNNER_MARKER, branchFor, findRepos, normalizeRepo, parseComment, repoAllowed, resolveEngine, resolveMode, resolveShells } from "./commands.mjs";
+import { RUNNER_MARKER, branchFor, findRepos, isClaudeModel, normalizeRepo, parseComment, repoAllowed, resolveEngine, resolveMode, resolveShells } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree } from "./git.mjs";
@@ -24,7 +24,8 @@ mkdirSync(logsDir, { recursive: true, mode: 0o700 });
 const running = new Map(); // issueId → { controller, jobId }
 const queue = []; // { issue, instructions, directives }
 const log = (msg, extra = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), msg, ...extra }));
-const engineLabel = (e) => (e.kind === "codex" ? `Codex${e.model ? ` (${e.model})` : ""}` : `OpenRouter ${e.model}`);
+const engineLabel = (e) =>
+  e.kind === "codex" ? `Codex${e.model ? ` (${e.model})` : ""}` : e.kind === "claude" ? `Claude Code${e.model ? ` (${e.model})` : ""}` : `OpenRouter ${e.model}`;
 
 // ------------------------------------------------------------------ polling
 
@@ -150,7 +151,7 @@ async function applyDirectives(issue, task, directives) {
     fields.repo = repo.slug;
   }
   if (directives.base) fields.base = directives.base.trim();
-  if (directives.model) directives.model = resolveModelAlias(directives.model, codexModels()) ?? directives.model;
+  if (directives.model && !isClaudeModel(directives.model)) directives.model = resolveModelAlias(directives.model, codexModels()) ?? directives.model;
   if (directives.engine || directives.model) fields.engine = resolveEngine(directives, cfg, task.engine);
   if (directives.mode) fields.mode = resolveMode(directives, task.mode);
   if (Object.keys(fields).length) state.updateTask(issue.id, fields);
@@ -180,6 +181,7 @@ async function startJob({ issue, directives, instructions }) {
     if (read?.repo && !before.repo) inferred.repo = read.repo;
     if (read?.mode) inferred.mode = read.mode;
     if (read?.engine === "glm") inferred.engine = "glm";
+    else if (read?.engine === "claude") Object.assign(inferred, { engine: "claude" }, read.model ? { model: read.model } : {});
     else if (read?.model) Object.assign(inferred, { engine: "codex", model: read.model });
     let task = await applyDirectives(issue, before, { ...inferred, ...directives });
 
@@ -224,8 +226,8 @@ async function startJob({ issue, directives, instructions }) {
     const logPath = join(logsDir, `${issue.identifier}-${Date.now()}.log`);
     jobId = state.startJob(issue.id, engineLabel(engine), logPath);
     running.get(issue.id).jobId = jobId;
-    // A saved session can only be continued by the engine that created it (Codex and opencode
-    // sessions are not interchangeable). After a switch the new engine starts fresh, with the
+    // A saved session can only be continued by the engine that created it (Codex, Claude Code and
+    // opencode sessions are not interchangeable). After a switch the new engine starts fresh, with the
     // earlier requests on this task and the work already on the branch as context.
     const sessionEngine = state.get(`session_engine:${issue.id}`) || (String(task.session_id).startsWith("ses_") ? "openrouter" : "codex");
     const resumed = Boolean(task.session_id && sessionEngine === engine.kind);
@@ -389,7 +391,7 @@ async function findRealGh() {
 }
 
 async function reportError(issue, err) {
-  const userFacing = err instanceof UserError || /not allowed|Which repository|Several repositories|unknown (engine|mode|devshell)/.test(String(err.message));
+  const userFacing = err instanceof UserError || /not allowed|Which repository|Several repositories|unknown (engine|mode|devshell)|isn't set up/.test(String(err.message));
   log("error", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 500) });
   try {
     await pc.comment(issue.id, userFacing ? err.message : `Runner error: \`${String(err.message ?? err).slice(0, 400)}\``);

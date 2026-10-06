@@ -38,6 +38,8 @@ export function loadConfig() {
     paperclipUrl: env.PAPERCLIP_URL ?? cfg.paperclip_url ?? "http://localhost:3100",
     boardKeyFile: join(secrets, "paperclip_board_key"),
     openrouterKeyFile: expand(cfg.engines?.openrouter?.key_file ?? join(secrets, "openrouter_key")),
+    claudeTokenFile: expand(cfg.engines?.claude?.token_file ?? join(secrets, "claude_oauth_token")),
+    claudeConfigDir: expand(cfg.engines?.claude?.config_dir ?? join(cfg.state_dir ?? "~/.local/state/pennyworth-runner", "claude")),
     workDir: expand(cfg.work_dir ?? "~/pennyworth"),
     stateDir: expand(cfg.state_dir ?? "~/.local/state/pennyworth-runner"),
     devshells: { ...cfg.devshells, flake: expand(cfg.devshells.flake) },

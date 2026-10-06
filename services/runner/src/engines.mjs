@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createWriteStream, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -20,7 +20,23 @@ function sandboxConfig(cfg, worktree) {
   ];
 }
 
-/** Command line for one engine run. Codex sandboxes its own tool calls; opencode runs inside `codex sandbox`. */
+/** `codex sandbox` around a whole process: writes only in the worktree, the given state dirs and the build caches. */
+function codexSandbox(cfg, worktree, stateRoots, argv) {
+  return [
+    "codex", "sandbox",
+    "-c", 'sandbox_mode="workspace-write"',
+    "-c", "sandbox_workspace_write.network_access=true", // the engine itself talks to its model API
+    "-c", `sandbox_workspace_write.writable_roots=${JSON.stringify([worktree, ...stateRoots, ...(cfg.sandbox?.extra_writable_roots ?? []).map(expand)])}`,
+    "--", ...argv,
+  ];
+}
+
+// Claude Code's built-in tools for coding jobs. Everything else (scheduling, remote triggers,
+// notifications, messaging, workflows) is left out; MCP servers, plugins and claude.ai connectors
+// are off entirely.
+const CLAUDE_TOOLS = "Bash,Read,Edit,Write,NotebookEdit,Task,TaskStop,WebFetch,WebSearch";
+
+/** Command line for one engine run. Codex sandboxes its own tool calls; opencode and Claude Code run inside `codex sandbox`. */
 export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile }) {
   if (engine.kind === "codex") {
     const base = sessionId ? ["codex", "exec", "resume", sessionId] : ["codex", "exec"];
@@ -35,15 +51,8 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
     if (sessionId) opencode.push("--session", sessionId);
     // OS-level confinement for opencode's tools: Codex's sandbox around the whole process.
     const stateRoots = ["~/.local/share/opencode", "~/.local/state/opencode", "~/.cache/opencode", "~/.config/opencode"].map(expand);
-    const sandboxed = [
-      "codex", "sandbox",
-      "-c", 'sandbox_mode="workspace-write"',
-      "-c", "sandbox_workspace_write.network_access=true",
-      "-c", `sandbox_workspace_write.writable_roots=${JSON.stringify([worktree, ...stateRoots, ...(cfg.sandbox?.extra_writable_roots ?? []).map(expand)])}`,
-      "--", ...opencode,
-    ];
     return {
-      argv: sandboxed,
+      argv: codexSandbox(cfg, worktree, stateRoots, opencode),
       env: {
         OPENROUTER_API_KEY: key,
         // Non-interactive: opencode must not stop to ask for permission, because an unanswered prompt
@@ -56,6 +65,32 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
         }),
       },
       promptAsArg: true,
+    };
+  }
+  if (engine.kind === "claude") {
+    if (!existsSync(cfg.claudeTokenFile)) throw new Error(`Claude Code isn't set up for the runner: run \`claude setup-token\` and save the token to \`${cfg.claudeTokenFile}\` (0600).`);
+    const token = readFileSync(cfg.claudeTokenFile, "utf8").trim();
+    mkdirSync(cfg.claudeConfigDir, { recursive: true, mode: 0o700 });
+    // Headless, no prompts (the codex sandbox is the write boundary), and nothing from your own
+    // Claude setup: a runner-owned config dir, no settings files (yours or the repo's: no hooks),
+    // no MCP servers and no claude.ai connectors.
+    const claude = [
+      "claude", "-p", "--output-format", "stream-json", "--verbose",
+      "--permission-mode", "bypassPermissions",
+      "--setting-sources", "",
+      "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+      "--tools", CLAUDE_TOOLS,
+    ];
+    if (engine.model) claude.push("--model", engine.model);
+    if (sessionId) claude.push("--resume", sessionId);
+    return {
+      argv: codexSandbox(cfg, worktree, [cfg.claudeConfigDir], claude),
+      env: {
+        CLAUDE_CODE_OAUTH_TOKEN: token,
+        CLAUDE_CONFIG_DIR: cfg.claudeConfigDir,
+        ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+        DISABLE_AUTOUPDATER: "1",
+      },
     };
   }
   throw new Error(`unsupported engine ${engine.kind}`);
@@ -79,20 +114,23 @@ export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, log
     PENNYWORTH_TASK_WORKTREE: worktree,
   };
   delete agentEnv.SSH_AUTH_SOCK;
+  if (engine.kind === "claude") delete agentEnv.ANTHROPIC_API_KEY; // the subscription token, never an API key
 
   return new Promise((resolve) => {
     const log = createWriteStream(logPath, { flags: "a" });
     log.write(`# ${new Date().toISOString()} ${engine.kind}${engine.model ? ` (${engine.model})` : ""} in ${worktree}\n# shells: ${shells.join(", ")}\n`);
     const child = spawn(full[0], full.slice(1), { cwd: worktree, env: agentEnv, detached: true, stdio: ["pipe", "pipe", "pipe"] });
     let found = sessionId;
-    let opencodeText = "";
+    let finalText = "";
     let buffer = "";
     const onLine = (line) => {
       try {
         const e = JSON.parse(line);
         if (e.type === "thread.started" && e.thread_id) found = e.thread_id; // codex
         if (e.sessionID && !found) found = e.sessionID; // opencode
-        if (e.type === "text" && e.part?.text) opencodeText = e.part.text; // opencode: keep last text part
+        if (e.type === "text" && e.part?.text) finalText = e.part.text; // opencode: keep last text part
+        if (e.type === "system" && e.subtype === "init" && e.session_id && !found) found = e.session_id; // claude
+        if (e.type === "result" && typeof e.result === "string") finalText = e.result; // claude: the final message
       } catch {
         /* non-JSON output */
       }
@@ -133,8 +171,8 @@ export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, log
     child.on("close", (code) => {
       clearTimeout(timer);
       log.end();
-      let lastMessage = existsSync(lastMessageFile) ? readFileSync(lastMessageFile, "utf8").trim() : opencodeText.trim();
-      if (!lastMessage && engine.kind === "openrouter") lastMessage = opencodeText.trim();
+      let lastMessage = existsSync(lastMessageFile) ? readFileSync(lastMessageFile, "utf8").trim() : finalText.trim();
+      if (!lastMessage && engine.kind !== "codex") lastMessage = finalText.trim();
       if (lastMessage) writeFileSync(lastMessageFile, lastMessage);
       resolve({ code, sessionId: found, lastMessage, timedOut, cancelled });
     });

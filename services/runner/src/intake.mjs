@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { isClaudeModel } from "./commands.mjs";
 import { inDevshells } from "./engines.mjs";
 
 export const INTAKE_SCHEMA = {
@@ -15,7 +16,7 @@ export const INTAKE_SCHEMA = {
     repo: { type: "string" },
     references: { type: "array", items: { type: "string" } },
     mode: { type: "string", enum: ["investigate", "implement", ""] },
-    engine: { type: "string", enum: ["codex", "glm", ""] },
+    engine: { type: "string", enum: ["codex", "claude", "glm", ""] },
     model: { type: "string" },
     question: { type: "string" },
   },
@@ -46,8 +47,8 @@ Fields:
 - repo: the repository the work happens in (code is written or investigated there). Pick exactly one slug from the candidates, or "" if this task already has one (${known ? `it does: ${known}` : "it does not"}) and the request doesn't name a different one, or if you truly cannot tell.
 - references: other candidate repositories mentioned only as examples, inspiration or context to read.
 - mode: "implement" if ${user} asks for code or files to be written or changed now; "investigate" if they ask for research, a report, a spec, a plan or a review first; "" if the request doesn't say.
-- engine: "glm" if they ask for GLM/OpenRouter, "codex" if they name Codex, otherwise "".
-- model: a model they name (e.g. "astra"), mapped to one of the known models if possible; otherwise "".
+- engine: "glm" if they ask for GLM/OpenRouter, "claude" if they ask for Claude or Claude Code, "codex" if they name Codex, otherwise "".
+- model: a model they name (e.g. "astra"), mapped to one of the known Codex models if possible; for Claude, "opus", "sonnet", "haiku", "fable" or a full claude-… id; otherwise "".
 - question: only if repo is "" and the task has no repository yet, one short plain-language question asking which repository to use. Otherwise "".
 
 Candidate repositories: ${candidates.length ? candidates.join(", ") : "(none)"}
@@ -72,8 +73,9 @@ export function validateIntake(raw, { candidates, models }) {
   const repo = pick(raw?.repo);
   const references = [...new Set((raw?.references ?? []).map(pick).filter((r) => r && r !== repo))];
   const mode = ["investigate", "implement"].includes(raw?.mode) ? raw.mode : undefined;
-  const model = resolveModelAlias(raw?.model, models);
-  const engine = raw?.engine === "glm" ? "glm" : raw?.engine === "codex" || model ? "codex" : undefined;
+  const claude = raw?.engine === "claude" || (raw?.engine !== "codex" && isClaudeModel(raw?.model));
+  const model = claude ? (isClaudeModel(raw?.model) ? String(raw.model).trim().toLowerCase() : undefined) : resolveModelAlias(raw?.model, models);
+  const engine = raw?.engine === "glm" ? "glm" : claude ? "claude" : raw?.engine === "codex" || model ? "codex" : undefined;
   const question = String(raw?.question ?? "").trim().slice(0, 500) || undefined;
   return { repo, references, mode, engine, model, question };
 }

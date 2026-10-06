@@ -61,20 +61,28 @@ export function findRepos(text, allowedOrgs) {
 }
 
 /**
- * Resolve the engine for a job: `engine: codex` (default), `engine: glm` / `openrouter`
- * (configured default OpenRouter model), `engine: openrouter:<model>`, or a bare
- * OpenRouter model id like `z-ai/glm-5.3`.
+ * Resolve the engine for a job: `engine: codex` (default), `engine: claude` (Claude Code),
+ * `engine: glm` / `openrouter` (configured default OpenRouter model), `engine: openrouter:<model>`,
+ * or a bare OpenRouter model id like `z-ai/glm-5.3`. A Claude model name alone (`model: opus`)
+ * picks Claude Code.
  */
 export function resolveEngine(directives, cfg, previous) {
   const raw = (directives.engine ?? "").trim().toLowerCase();
   const model = directives.model?.trim();
   if (!raw && !model) return previous ?? { kind: "codex", model: cfg.engines.codex.model || undefined };
   if (raw === "codex") return { kind: "codex", model: model || cfg.engines.codex.model || undefined };
+  if (["claude", "claude-code", "claude code", "anthropic"].includes(raw)) return { kind: "claude", model: model || cfg.engines.claude?.model || undefined };
   if (raw === "glm" || raw === "openrouter" || raw === "opencode") return { kind: "openrouter", model: model || cfg.engines.openrouter.model };
   if (raw.startsWith("openrouter:")) return { kind: "openrouter", model: directives.engine.trim().slice("openrouter:".length) };
   if (raw.includes("/")) return { kind: "openrouter", model: directives.engine.trim() };
-  if (!raw && model) return { kind: previous?.kind ?? "codex", model };
-  throw new Error(`unknown engine "${directives.engine}" (use codex, glm, or openrouter:<model>)`);
+  if (!raw && isClaudeModel(model)) return { kind: "claude", model };
+  if (!raw && model) return { kind: previous?.kind === "claude" ? "codex" : previous?.kind ?? "codex", model };
+  throw new Error(`unknown engine "${directives.engine}" (use codex, claude, glm, or openrouter:<model>)`);
+}
+
+/** Claude Code model names: the aliases (opus, sonnet, haiku, fable) or a full `claude-…` id. */
+export function isClaudeModel(model) {
+  return /^(opus|sonnet|haiku|fable|claude-[a-z0-9.-]+)(\[1m\])?$/i.test(String(model ?? "").trim());
 }
 
 export function resolveMode(directives, previous) {

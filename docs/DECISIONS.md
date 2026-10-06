@@ -155,11 +155,12 @@ The AI Tool Hub page lists Paperclip as "Security team only". The user cleared u
 - **Rejected alternatives:**
   - *A dedicated OS user* means duplicating and re-authenticating every credential.
   - *Running coding agents inside the Paperclip container* means no toolchains, and a shell next to Paperclip's secrets.
-- **Decision:** `services/runner` is a systemd user service that polls Paperclip for the user's comments on tasks labelled `engineer`. It runs Codex (or OpenCode via OpenRouter) in runner-owned clones and per-task worktrees, inside the user's devshells, and posts the results back.
+- **Decision:** `services/runner` is a systemd user service that polls Paperclip for the user's comments on tasks labelled `engineer`. It runs Codex (or Claude Code, or OpenCode via OpenRouter) in runner-owned clones and per-task worktrees, inside the user's devshells, and posts the results back.
 - **Guardrails:**
   - Only human comments are instructions; task text is fenced as untrusted.
   - Orgs are allowlisted.
-  - Codex's workspace-write sandbox applies, with network on. OpenCode runs inside `codex sandbox`.
+  - Codex's workspace-write sandbox applies, with network on. OpenCode and Claude Code run inside `codex sandbox`.
+  - Claude Code runs from a runner-owned config dir with a `setup-token` token: none of the user's settings, hooks, plugins, MCP servers or claude.ai connectors, and only built-in coding tools.
   - `gh` is read-only through a wrapper.
   - Pushes are blocked: `pushurl` disabled, a pre-push hook, an ssh wrapper refusing `git-receive-pack`, and `SSH_AUTH_SOCK` removed from the agent's environment. The runner checks the remote after every run.
   - The runner, not the agent, commits.

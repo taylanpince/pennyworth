@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { findRepos, normalizeRepo, parseComment, repoAllowed, resolveEngine, resolveMode, resolveShells } from "../src/commands.mjs";
-import { inDevshells } from "../src/engines.mjs";
+import { buildCommand, inDevshells } from "../src/engines.mjs";
 import { commitMessage, firstPrompt, latestReport, prTitle, stripCommitLine } from "../src/prompt.mjs";
 
 const cfg = {
@@ -59,6 +59,36 @@ describe("engines, modes and shells", () => {
     assert.deepEqual(resolveEngine({ engine: "openrouter:z-ai/glm-5.3" }, cfg), { kind: "openrouter", model: "z-ai/glm-5.3" });
     assert.deepEqual(resolveEngine({ engine: "z-ai/glm-5.3" }, cfg), { kind: "openrouter", model: "z-ai/glm-5.3" });
     assert.throws(() => resolveEngine({ engine: "gpt-banana" }, cfg), /unknown engine/);
+  });
+
+  it("supports Claude Code, picked by name or by a Claude model", () => {
+    assert.deepEqual(resolveEngine({ engine: "claude" }, cfg), { kind: "claude", model: undefined });
+    assert.deepEqual(resolveEngine({ engine: "Claude Code", model: "opus" }, cfg), { kind: "claude", model: "opus" });
+    assert.deepEqual(resolveEngine({ model: "sonnet" }, cfg), { kind: "claude", model: "sonnet" });
+    assert.deepEqual(resolveEngine({ model: "claude-opus-5-5" }, cfg, { kind: "codex" }), { kind: "claude", model: "claude-opus-5-5" });
+    // A Codex model after a Claude run switches back to Codex.
+    assert.deepEqual(resolveEngine({ model: "gpt-6-astra" }, cfg, { kind: "claude", model: "opus" }), { kind: "codex", model: "gpt-6-astra" });
+  });
+
+  it("runs Claude Code headless inside the codex sandbox, without the user's Claude setup", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pw-claude-"));
+    const tokenFile = join(dir, "token");
+    writeFileSync(tokenFile, "tok\n");
+    const c = { ...cfg, claudeTokenFile: tokenFile, claudeConfigDir: join(dir, "home"), sandbox: { extra_writable_roots: [] } };
+    const { argv, env, promptAsArg } = buildCommand({ cfg: c, engine: { kind: "claude", model: "opus" }, worktree: "/w", sessionId: "abc", lastMessageFile: "/x" });
+    assert.deepEqual(argv.slice(0, 2), ["codex", "sandbox"]);
+    assert.ok(argv.includes(`sandbox_workspace_write.writable_roots=${JSON.stringify(["/w", join(dir, "home")])}`));
+    const claude = argv.slice(argv.indexOf("--") + 1);
+    assert.deepEqual(claude.slice(0, 2), ["claude", "-p"]);
+    for (const flag of ["--strict-mcp-config", "--setting-sources", "--tools"]) assert.ok(claude.includes(flag), flag);
+    assert.equal(claude[claude.indexOf("--setting-sources") + 1], "");
+    assert.doesNotMatch(claude[claude.indexOf("--tools") + 1], /RemoteTrigger|PushNotification|Cron|SendMessage|Workflow/);
+    assert.deepEqual(claude.slice(-4), ["--model", "opus", "--resume", "abc"]);
+    assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "tok");
+    assert.equal(env.CLAUDE_CONFIG_DIR, join(dir, "home"));
+    assert.equal(env.ENABLE_CLAUDEAI_MCP_SERVERS, "false");
+    assert.ok(!promptAsArg);
+    assert.throws(() => buildCommand({ cfg: { ...c, claudeTokenFile: join(dir, "missing") }, engine: { kind: "claude" }, worktree: "/w" }), /claude setup-token/);
   });
 
   it("modes default to investigate", () => {
@@ -206,6 +236,15 @@ describe("plain-language intake", async () => {
     assert.deepEqual(v, { repo: "0xPolygon/tron-indexer-gateway", references: ["0xPolygon/solana-indexer-gateway"], mode: "investigate", engine: "codex", model: "gpt-6-astra", question: undefined });
     assert.equal(validateIntake({ repo: "evil/repo", references: [], mode: "rm -rf", engine: "x", model: "", question: "" }, { candidates, models }).repo, undefined);
     assert.equal(validateIntake({ repo: "evil/repo", references: [], mode: "rm -rf", engine: "x", model: "", question: "" }, { candidates, models }).mode, undefined);
+  });
+
+  it("reads requests for Claude Code", () => {
+    const read = (engine, model) => validateIntake({ repo: "", references: [], mode: "", engine, model, question: "" }, { candidates, models });
+    assert.deepEqual([read("claude", "").engine, read("claude", "").model], ["claude", undefined]);
+    assert.deepEqual([read("claude", "Opus").engine, read("claude", "Opus").model], ["claude", "opus"]);
+    assert.deepEqual([read("", "sonnet").engine, read("", "sonnet").model], ["claude", "sonnet"]);
+    assert.equal(read("claude", "astra").model, undefined);
+    assert.deepEqual([read("", "astra").engine, read("", "astra").model], ["codex", "gpt-6-astra"]);
   });
 
   it("fences untrusted task text in the intake prompt", () => {
