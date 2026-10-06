@@ -325,9 +325,13 @@ async function runCommand(issue, task, command) {
   if (command === "pr" && (await remoteIsEmpty(clone))) {
     return void (await pc.comment(issue.id, `The repository is still empty, so there's no branch to open a PR against. Reply **push** to publish this work as \`${task.base}\`.`));
   }
-  if (command === "push" || (command === "pr" && !task.pushed)) {
+  // "pr" always pushes the task branch first: it may never have been pushed (the first push into an
+  // empty repository goes to the base branch instead), and an open PR should get the latest commits.
+  if (command === "push" || command === "pr") {
     if (!task.branch?.startsWith("pennyworth/")) throw new Error(`refusing to push unexpected branch ${task.branch}`);
-    const target = await pushBranch(clone, task.worktree, task.branch, { initialBranch: task.base });
+    const target = await pushBranch(clone, task.worktree, task.branch, { initialBranch: task.base }).catch((err) => {
+      throw new UserError(`I couldn't push \`${task.branch}\`. Git said:\n\`\`\`\n${String(err.stderr || err.message).trim().slice(-800)}\n\`\`\``);
+    });
     state.updateTask(issue.id, { pushed: 1 });
     log("branch pushed", { issue: issue.identifier, repo: repo.slug, branch: target });
     if (command === "push") {
@@ -340,11 +344,13 @@ async function runCommand(issue, task, command) {
     }
   }
   if (command === "pr") {
-    if (task.pr_url) return void (await pc.comment(issue.id, `PR already open: ${task.pr_url} (pushed the latest commits).`));
+    if (task.pr_url) return void (await pc.comment(issue.id, `The PR is already open and now has the latest commits: ${task.pr_url}`));
     const full = await pc.issue(issue.id);
     const body = `Draft opened by Pennyworth for Paperclip task ${issue.identifier}.\n\n${(await lastReport(issue.id)) ?? ""}`.slice(0, 60_000);
     const realGh = await findRealGh();
-    const { stdout } = await execFileP(realGh, ["pr", "create", "--draft", "--repo", repo.slug, "--head", task.branch, "--base", task.base, "--title", full.title.slice(0, 200), "--body", body], { cwd: task.worktree });
+    const { stdout } = await execFileP(realGh, ["pr", "create", "--draft", "--repo", repo.slug, "--head", task.branch, "--base", task.base, "--title", full.title.slice(0, 200), "--body", body], { cwd: task.worktree }).catch((err) => {
+      throw new UserError(`I couldn't open the PR. GitHub said:\n\`\`\`\n${String(err.stderr || err.message).trim().slice(-800)}\n\`\`\``);
+    });
     const url = stdout.trim().split("\n").pop();
     state.updateTask(issue.id, { pr_url: url });
     log("draft PR opened", { issue: issue.identifier, url });
