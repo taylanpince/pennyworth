@@ -25,7 +25,7 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`:
 | Meeting Librarian | meeting memory |
 | Chief of Staff | daily brief |
 | Slack Scout | Slack items for the user |
-| Inbox Agent | inbox zero: every inbox thread is a todo |
+| Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
 | Assistant | research and drafts, plus acting on the user's replies |
 | Engineer | assignment target only, never woken; pennyworth-runner does the work |
 
@@ -145,7 +145,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 
 - **Tasks:**
   - Tasks only for *his own* clear action items. No waiting-on tasks for other people's commitments, and no tasks for ownerless actions.
-  - **Inbox zero:** every thread in any connected inbox is a todo, closed when archived.
+  - **Email:** only threads he labels `pennyworth` in Gmail (any account, archived or not) become todos, closed when he removes the label. Never mirror the whole inbox: that produced junk tasks (meeting accepts, receipts).
   - Replies on review tasks (`route …`, `pick N`, `ignore`) are handled by ops-mcp. Replies on other tasks go to the Assistant. Code work is assigned to Engineer (default engine Codex; `engine: glm` = OpenRouter `z-ai/glm-5.3-flash`).
 - **Writing:** drafts (agendas, documents) go in task comments for him to review and paste. No Docs writes for now (option 1).
 - **Routing:** meeting notes go into the existing notes he names. Routes are remembered per calendar series or title. Don't guess routing rules.

@@ -66,10 +66,10 @@ async function ownerUserId() {
   return ownerId ?? undefined;
 }
 
-async function findByMarker(marker) {
+async function findByMarker(marker, statuses = OPEN_STATUSES) {
   if (!COMPANY) return undefined;
   const token = marker.split(":").pop();
-  const q = new URLSearchParams({ q: token.slice(0, 200), status: OPEN_STATUSES, limit: "50", excludeRoutineExecutions: "true" });
+  const q = new URLSearchParams({ q: token.slice(0, 200), status: statuses, limit: "50", excludeRoutineExecutions: "true" });
   const list = await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/issues?${q}`);
   const needle = `<!-- source:${marker} -->`;
   return list.find((i) => String(i.description ?? "").includes(needle));
@@ -157,18 +157,19 @@ const TOOLS = {
         marker: { type: "string", description: "stable dedup key, e.g. brief:2026-10-05 or source:gmail:thread:<id>" },
         labels: { type: "array", items: { type: "string" } },
         priority: { type: "string", enum: PRIORITIES },
+        dedupe_closed: { type: "boolean", description: "also return a done or cancelled task with this marker instead of creating one (never recreate what the user closed)" },
       },
       required: ["title", "description", "marker"],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    run: async ({ title, description, marker, labels, priority }) => {
+    run: async ({ title, description, marker, labels, priority, dedupe_closed }) => {
       if (!COMPANY) throw new Error("PAPERCLIP_COMPANY_ID not set");
       const m = String(marker).trim();
       if (!/^[A-Za-z0-9:._\/-]{3,200}$/.test(m)) throw new Error("invalid marker");
       // Idempotency keys expire after 7 days in Paperclip, so also look for an open task
-      // that already carries this marker (e.g. an email kept in the inbox for weeks).
-      const existing = await findByMarker(m);
+      // (or, with dedupe_closed, a closed one) that already carries this marker.
+      const existing = await findByMarker(m, dedupe_closed ? `${OPEN_STATUSES},done,cancelled` : OPEN_STATUSES);
       if (existing) return { ...brief(existing), deduplicated: true };
       const body = {
         title: String(title).slice(0, 200),

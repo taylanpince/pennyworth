@@ -179,12 +179,13 @@ The AI Tool Hub page lists Paperclip as "Security team only". The user cleared u
 ## D-16: Gmail, read-only
 
 - `google-workspace-mcp` adds `gmail_search` and `gmail_read_thread` under the `gmail.readonly` scope. Nothing can send, draft, label or delete mail.
-- The **Inbox Agent** runs hourly during work hours. The user practises inbox zero, so the inbox *is* the to-do list:
-  - every thread in the inbox becomes one `todo` task, read or unread, any age or category;
-  - the title says the action ("Reply to …", "Sign …", "Read: …"), with priority from deadlines (low for receipts and notifications);
-  - the task is closed when the thread is archived, and cancelled if it's deleted;
-  - tasks are deduplicated by `source:gmail:thread:<id>`.
-- **Deduplication beyond 7 days:** Paperclip idempotency keys expire after 7 days, so the task bridge's `task_create` also looks for an open task carrying the same marker before creating one. This matters for emails left in the inbox, and for long-running Slack items.
+- The **Inbox Agent** runs every 30 minutes during work hours. The user chooses what becomes a task by applying the Gmail label `pennyworth`:
+  - every labelled thread becomes one task (labels `todo` and `email`), whether it's in the inbox or archived;
+  - the title says the action ("Reply to …", "Sign …", "Read: …"), with priority from deadlines;
+  - the task is closed when the label is removed. It is never closed for an account whose search failed or was cut off at 50 results;
+  - tasks are deduplicated by `source:gmail:label:<id>` with `dedupe_closed`, so a task the user closed isn't recreated while the label is still on.
+- **Superseded design (2026-10):** the agent first mirrored the whole inbox, one task per thread, closed on archive. That produced junk tasks (meeting accepts, receipts, notifications), so it was replaced by the label. Labelling also lets the user archive and still keep the task.
+- **Deduplication beyond 7 days:** Paperclip idempotency keys expire after 7 days, so the task bridge's `task_create` also looks for an open task carrying the same marker before creating one; `dedupe_closed: true` extends that to done and cancelled tasks. This matters for long-lived labels and long-running Slack items.
 - The **Assistant** can also read Gmail, for assigned research tasks.
 
 ## D-17: Several Google accounts
@@ -193,5 +194,5 @@ The AI Tool Hub page lists Paperclip as "Security team only". The user cleared u
 - **Primary account:** Calendar and meeting documents (Meet transcripts, Gemini notes), unless a tool call names another account.
 - **All accounts:** Gmail and Drive search, with each result tagged with its `account`.
 - **Reading** a thread, file or doc tries the given account first, then each account in turn.
-- **Inbox zero** covers every connected inbox, and each task records its account.
+- **The `pennyworth` label** is honoured in every connected account (the user creates it in each), and each task records its account.
 - **Why it matters:** a re-consent once silently switched the whole connection, Calendar included, to a different Google account. Making the primary explicit (`--primary`) prevents that.

@@ -136,7 +136,7 @@ todo --all                           # include reviews and briefs
 | Meeting Librarian | file watcher + every 15 min, weekdays 08–20 | ops-mcp; Calendar/Drive read; close or comment on its own tasks |
 | Chief of Staff | weekdays 08:30 → "Daily Brief — date" | Calendar read (list/get events only); Paperclip task list/create/update |
 | Slack Scout | every 30 min, weekdays 08–20 | Slack read/search only; Paperclip task search/create/update/close |
-| Inbox Agent | hourly, weekdays 08–19: mirrors your inbox (inbox zero) as todos, closes them when archived | Gmail read/search only; Paperclip task search/create/update/close |
+| Inbox Agent | every 30 min, weekdays 08–19: one todo per email thread you label `pennyworth` in Gmail (archived or not), closed when you remove the label | Gmail read/search only; Paperclip task search/create/update/close |
 | Assistant | when assigned, and on your task replies | Slack/Docs/Drive/Calendar read; notes read + meeting-note corrections; Paperclip tasks incl. hand-back |
 | pennyworth-runner (host service, not a Paperclip agent) | your comments on `engineer` tasks | Codex/OpenRouter in its own git worktrees, as you; read-only gh; no pushes except your `push`/`pr` |
 
