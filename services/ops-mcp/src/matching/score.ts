@@ -128,11 +128,16 @@ function linkScore(ev: SourceEvidence, event: CalendarEvent, notes: string[]): {
   return { score: 0, explicit: false };
 }
 
-export function eligibleEvent(event: CalendarEvent, ctx: { selfEmails: string[] }): boolean {
+/**
+ * Declined events stay eligible for shared meeting documents: the user still gets Gemini
+ * notes for meetings he declined. A local transcript is his own recording, so a declined
+ * event can't be its source.
+ */
+export function eligibleEvent(event: CalendarEvent, ctx: { selfEmails: string[] }, sharedDocument = false): boolean {
   if (event.all_day) return false;
   if (event.status === "cancelled") return false;
   const self = event.attendees.find((a) => a.self || (a.email && ctx.selfEmails.includes(a.email.toLowerCase())));
-  if (self?.response_status === "declined") return false;
+  if (self?.response_status === "declined" && !sharedDocument) return false;
   return true;
 }
 
@@ -147,7 +152,7 @@ export function scoreCandidates(ev: SourceEvidence, events: CalendarEvent[], cfg
   const hintTokens = [...ev.titleHints, ...(ev.filenameTitle ? [ev.filenameTitle] : [])].map((h) => normalizeTokens(h, ctx.stop));
   const out: ScoredCandidate[] = [];
   for (const event of events) {
-    if (!eligibleEvent(event, ctx)) continue;
+    if (!eligibleEvent(event, ctx, ev.driveFileId !== undefined)) continue;
     const startMs = Date.parse(event.start);
     const endMs = Date.parse(event.end);
     if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs < startMs) continue;

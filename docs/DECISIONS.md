@@ -64,6 +64,7 @@ Also:
 
 - Local whisper transcripts often have only a date in the filename. Their time evidence then comes from the file's mtime, which marks when the transcript finished, close to the meeting's end. This is scored against the event's end, capped at 45.
 - Person names in filenames (`Kira-2026-09-21.txt`) count as "filename hints" when they match an attendee.
+- Events the user declined stay candidates for Drive documents: Gemini notes are shared for meetings he declined, and their notes and actions still matter. Excluding them made those notes match unrelated blocks like "Family Time" and go to review (2026-10-06). Local transcripts are his own recordings, so declined events are still excluded for them.
 - `transcripts.ignore_before` keeps the 36 existing transcripts from being backfilled on day one. Remove it to backfill.
 
 ## D-6: Networking: explicit 10.x subnets

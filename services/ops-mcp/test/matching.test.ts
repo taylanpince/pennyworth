@@ -132,6 +132,14 @@ describe("meeting matching", () => {
     expect(scoreCandidates(ev({ startMs: at("2026-10-04T14:00:00+02:00") }), [declined, cancelled, allDay], cfg)).toEqual([]);
   });
 
+  it("matches a shared meeting document to an event the user declined", () => {
+    const rtb = event({ id: "rtb", title: "OMS RTB (weekly)", start: "2026-10-05T19:00:00+02:00", end: "2026-10-05T19:30:00+02:00", attendees: [...people("Vojtech"), { email: "taylan@example.com", self: true, response_status: "declined" }] });
+    const family = event({ id: "family", title: "Family Time (ask before booking)", start: "2026-10-05T19:00:00+02:00", end: "2026-10-05T20:00:00+02:00" });
+    const d = run(ev({ startMs: at("2026-10-05T19:02:00+02:00"), filenameTitle: "OMS RTB (weekly)", driveFileId: "doc1" }), [family, rtb]);
+    expect(d.status).toBe("matched");
+    expect(d.chosen?.event_id).toBe("rtb");
+  });
+
   it("a Drive document attached to the event is an explicit match", () => {
     const withDoc = event({ ...omsPrivy, id: "withdoc", attachments: [{ file_id: "drive123", title: "Transcript" }] });
     const sibling = event({ ...omsPrivy, id: "sibling" });
