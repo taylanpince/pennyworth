@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { RUNNER_MARKER, branchFor, findRepos, isClaudeModel, normalizeRepo, parseComment, repoAllowed, resolveEngine, resolveMode, resolveShells } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
-import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree } from "./git.mjs";
+import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree, startFreshBranch, nextBranchName } from "./git.mjs";
 import { codexModels, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
 import { commitMessage, firstPrompt, followUpPrompt, latestReport, prTitle, runOutcome, stripCommitLine } from "./prompt.mjs";
@@ -217,8 +217,15 @@ async function startJob({ issue, directives, instructions }) {
 
     const clone = await ensureClone(cfg.workDir, repo);
     const base = task.base ?? (await defaultBranch(clone));
-    const branch = task.branch ?? branchFor(issue.identifier);
+    let branch = task.branch ?? branchFor(issue.identifier);
     const worktree = await ensureWorktree(cfg.workDir, clone, issue.identifier, repo, branch, base);
+    // The task's PR may have been merged or closed since the last run: never keep working on it.
+    const prNote = await leaveFinishedPr(issue, { ...task, base, branch, worktree }, clone);
+    if (prNote) {
+      task = state.task(issue.id);
+      branch = task.branch;
+      instructions = `(Runner note: ${prNote} Build on what is there now.)\n\n${instructions}`;
+    }
     // Devshells: an explicit "shells:" wins, then the ones chosen for this task earlier, then detection.
     const shells = directives.shells || !task.shells ? resolveShells(directives, detectShells(worktree, cfg.devshells.detect), instructions, cfg) : task.shells;
     state.updateTask(issue.id, { base, branch, worktree, shells, engine, mode });
@@ -237,7 +244,7 @@ async function startJob({ issue, directives, instructions }) {
     const refsNote = references.length ? `, reading ${references.map((r) => `\`${r.slug}\``).join(", ")} for reference` : "";
     await pc.startWork(
       issue.id,
-      `${resumed ? "Continuing" : "On it"}: ${mode === "implement" ? "making the change" : "investigating"} in \`${repo.slug}\`${refsNote}, with ${engineLabel(engine)}. I'll post the result here.\n\n_Branch \`${branch}\` · worktree \`${worktree}\` · shells ${shells.join(", ")}_`,
+      `${prNote ? `${prNote}\n\n` : ""}${resumed ? "Continuing" : "On it"}: ${mode === "implement" ? "making the change" : "investigating"} in \`${repo.slug}\`${refsNote}, with ${engineLabel(engine)}. I'll post the result here.\n\n_Branch \`${branch}\` · worktree \`${worktree}\` · shells ${shells.join(", ")}_`,
     );
     log("job started", { issue: issue.identifier, repo: repo.slug, engine: engine.kind, mode, resumed });
 
@@ -322,8 +329,10 @@ async function runCommand(issue, task, command) {
     state.updateTask(issue.id, { worktree: null, session_id: null });
     return void (await pc.comment(issue.id, `Removed the worktree. The local branch \`${task.branch}\` is kept${task.pushed ? " (and pushed)" : ""}.`));
   }
+  const prNote = await leaveFinishedPr(issue, task, clone);
+  if (prNote) task = state.task(issue.id);
   const { commits } = await changesSummary(task.worktree, task.base);
-  if (!commits) return void (await pc.comment(issue.id, "The task branch has no commits to publish."));
+  if (!commits) return void (await pc.comment(issue.id, `${prNote ? `${prNote} ` : ""}There are no new commits to publish.`));
   if (command === "pr" && (await remoteIsEmpty(clone))) {
     return void (await pc.comment(issue.id, `The repository is still empty, so there's no branch to open a PR against. Reply **push** to publish this work as \`${task.base}\`.`));
   }
@@ -345,6 +354,7 @@ async function runCommand(issue, task, command) {
     state.updateTask(issue.id, { pushed: 1 });
     log("branch pushed", { issue: issue.identifier, repo: repo.slug, branch: target });
     if (command === "push") {
+      if (prNote) await pc.comment(issue.id, prNote);
       return void (await pc.comment(
         issue.id,
         target === task.branch
@@ -367,7 +377,7 @@ async function runCommand(issue, task, command) {
     const url = stdout.trim().split("\n").pop();
     state.updateTask(issue.id, { pr_url: url });
     log("draft PR opened", { issue: issue.identifier, url });
-    await pc.comment(issue.id, `Opened draft PR: ${url}`);
+    await pc.comment(issue.id, `${prNote ? `${prNote}\n\n` : ""}Opened draft PR: ${url}`);
   }
 }
 
@@ -383,6 +393,41 @@ function logTail(path, lines = 6) {
 async function lastReport(issueId) {
   const comments = [...(await pc.comments(issueId))].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
   return latestReport(comments.map((c) => c.body), RUNNER_MARKER);
+}
+
+/**
+ * If the task's PR was merged, move the work to a fresh branch from the latest base, carrying over
+ * any commits made after the merge; if it was closed unmerged, forget it so "pr" opens a new one.
+ * Returns a sentence for the user (empty when the PR is still open or there is none).
+ */
+async function leaveFinishedPr(issue, task, clone) {
+  if (!task.pr_url || !task.worktree) return "";
+  let pr;
+  try {
+    const { stdout } = await execFileP(await findRealGh(), ["pr", "view", task.pr_url, "--json", "state,number,headRefOid"]);
+    pr = JSON.parse(stdout);
+  } catch (err) {
+    log("pr state check failed", { issue: issue.identifier, err: String(err.stderr || err.message).slice(0, 300) });
+    return "";
+  }
+  if (pr.state === "OPEN") return "";
+  if (pr.state === "CLOSED") {
+    state.updateTask(issue.id, { pr_url: null });
+    return `PR #${pr.number} was closed without merging, so **pr** will open a new one.`;
+  }
+  if (await git(task.worktree, "status", "--porcelain")) {
+    throw new UserError(`PR #${pr.number} was merged, but the worktree has uncommitted changes, so I didn't move them to a new branch. Reply **cleanup** to start over from the latest \`${task.base}\`.`);
+  }
+  const next = await nextBranchName(clone, branchFor(issue.identifier));
+  let carried;
+  try {
+    carried = await startFreshBranch(clone, task.worktree, { base: task.base, since: pr.headRefOid, branch: next });
+  } catch (err) {
+    throw new UserError(`PR #${pr.number} was merged, and the commits made since don't apply cleanly on the latest \`${task.base}\`. They are still on \`${task.branch}\`. Git said:\n\`\`\`\n${String(err.stderr || err.message).trim().slice(-600)}\n\`\`\``);
+  }
+  state.updateTask(issue.id, { branch: next, pr_url: null, pushed: 0 });
+  log("moved off merged PR", { issue: issue.identifier, pr: pr.number, branch: next, carried });
+  return `PR #${pr.number} is merged, so this work continues on a new branch \`${next}\` from the latest \`${task.base}\`${carried ? ` (${carried} commit${carried === 1 ? "" : "s"} made since the merge carried over)` : ""}.`;
 }
 
 async function findRealGh() {

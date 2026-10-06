@@ -118,3 +118,34 @@ export function detectShells(worktree, detect) {
   for (const [file, shell] of Object.entries(detect)) if (existsSync(join(worktree, file)) && !shells.includes(shell)) shells.push(shell);
   return shells;
 }
+
+/**
+ * Move a task worktree onto a new branch from the latest origin/<base>, carrying over the commits
+ * made after `since` (the merged PR's last head). Commits that are already merged therefore never
+ * reappear, whether the PR was merged, squashed or rebased. Returns the number of commits carried.
+ * On a conflict the worktree is put back on its old branch and the new one is deleted.
+ */
+export async function startFreshBranch(clone, worktree, { base, since, branch }) {
+  await git(clone, "fetch", "--quiet", "--prune", "origin");
+  const old = await git(worktree, "rev-parse", "--abbrev-ref", "HEAD");
+  const range = (await hasRef(worktree, `${since}^{commit}`)) ? `${since}..HEAD` : `origin/${base}..HEAD`;
+  const carry = (await git(worktree, "rev-list", "--reverse", "--no-merges", range)).split("\n").filter(Boolean);
+  await git(worktree, "switch", "--quiet", "-c", branch, `origin/${base}`);
+  try {
+    for (const sha of carry) await git(worktree, "-c", "core.hooksPath=/dev/null", "cherry-pick", "--allow-empty", sha);
+  } catch (err) {
+    await git(worktree, "cherry-pick", "--abort").catch(() => {});
+    await git(worktree, "switch", "--quiet", old);
+    await git(worktree, "branch", "-D", branch);
+    throw err;
+  }
+  return carry.length;
+}
+
+/** Next free branch name for a task: <root>-2, -3, … (free locally and on GitHub). */
+export async function nextBranchName(clone, root) {
+  for (let n = 2; ; n++) {
+    const name = `${root}-${n}`;
+    if (!(await git(clone, "branch", "--list", name)) && !(await remoteHasBranch(clone, name))) return name;
+  }
+}

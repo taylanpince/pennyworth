@@ -332,3 +332,70 @@ describe("run outcome", async () => {
     assert.match(runOutcome({ timedOut: true, timeoutMinutes: 60, lastMessage: "## Summary\nx" }).headline, /Timed out\*\* after 60 minutes/);
   });
 });
+
+describe("after the task's PR is merged", () => {
+  const setup = async () => {
+    const { ensureWorktree, git } = await import("../src/git.mjs");
+    const dir = mkdtempSync(join(tmpdir(), "merged-"));
+    const remote = join(dir, "remote.git");
+    execFileSync("git", ["init", "--bare", "-q", "-b", "main", remote]);
+    const seed = join(dir, "seed");
+    execFileSync("git", ["clone", "-q", remote, seed], { stdio: "ignore" });
+    const c = (cwd, m) => execFileSync("git", ["-C", cwd, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", m]);
+    c(seed, "init");
+    execFileSync("git", ["-C", seed, "push", "-q", "origin", "HEAD:main"]);
+    const clone = join(dir, "clone");
+    execFileSync("git", ["clone", "-q", remote, clone]);
+    const wt = await ensureWorktree(dir, clone, "PEN-18", { name: "r" }, "pennyworth/pen-18", "main");
+    const commit = async (m, file) => {
+      writeFileSync(join(wt, file), m);
+      await git(wt, "add", file);
+      await git(wt, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "-m", m);
+      return git(wt, "rev-parse", "HEAD");
+    };
+    await commit("feat: one", "a.txt");
+    const prHead = await commit("fix: two", "b.txt");
+    execFileSync("git", ["-C", wt, "push", "-q", remote, "HEAD:refs/heads/pennyworth/pen-18"]);
+    return { dir, remote, seed, clone, wt, commit, prHead, c, git };
+  };
+  const log = (cwd) => execFileSync("git", ["-C", cwd, "log", "--format=%s"]).toString().trim().split("\n");
+
+  for (const style of ["merge", "squash"]) {
+    it(`continues on a fresh branch with only the newer commits (${style} merge)`, async () => {
+      const { startFreshBranch, nextBranchName } = await import("../src/git.mjs");
+      const { remote, seed, clone, wt, commit, prHead } = await setup();
+      // Merge the PR on "GitHub", then keep working on the old branch locally.
+      execFileSync("git", ["-C", seed, "fetch", "-q", "origin"]);
+      const mergeArgs = style === "merge" ? ["merge", "-q", "--no-ff", "-m", "Merge PR #1", "origin/pennyworth/pen-18"] : ["merge", "-q", "--squash", "origin/pennyworth/pen-18"];
+      execFileSync("git", ["-C", seed, "-c", "user.email=a@b", "-c", "user.name=a", ...mergeArgs]);
+      if (style === "squash") execFileSync("git", ["-C", seed, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "-m", "feat: one and two (#1)"]);
+      execFileSync("git", ["-C", seed, "push", "-q", "origin", "HEAD:main"]);
+      await commit("build: three", "c.txt");
+
+      const next = await nextBranchName(clone, "pennyworth/pen-18");
+      assert.equal(next, "pennyworth/pen-18-2");
+      assert.equal(await startFreshBranch(clone, wt, { base: "main", since: prHead, branch: next }), 1);
+      const subjects = log(wt);
+      assert.equal(subjects[0], "build: three");
+      assert.equal(subjects.filter((s) => s === "fix: two").length, style === "merge" ? 1 : 0); // only via main's history
+      assert.equal(execFileSync("git", ["-C", wt, "rev-parse", "--abbrev-ref", "HEAD"]).toString().trim(), "pennyworth/pen-18-2");
+      assert.deepEqual(execFileSync("git", ["-C", wt, "log", "--format=%s", "origin/main..HEAD"]).toString().trim().split("\n"), ["build: three"]);
+      void remote;
+    });
+  }
+
+  it("puts the worktree back when the newer commits conflict", async () => {
+    const { startFreshBranch } = await import("../src/git.mjs");
+    const { seed, clone, wt, commit, prHead, git } = await setup();
+    execFileSync("git", ["-C", seed, "fetch", "-q", "origin"]);
+    execFileSync("git", ["-C", seed, "-c", "user.email=a@b", "-c", "user.name=a", "merge", "-q", "--no-ff", "-m", "Merge", "origin/pennyworth/pen-18"]);
+    writeFileSync(join(seed, "c.txt"), "someone else");
+    execFileSync("git", ["-C", seed, "add", "c.txt"]);
+    execFileSync("git", ["-C", seed, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "-m", "other"]);
+    execFileSync("git", ["-C", seed, "push", "-q", "origin", "HEAD:main"]);
+    await commit("build: three", "c.txt");
+    await assert.rejects(startFreshBranch(clone, wt, { base: "main", since: prHead, branch: "pennyworth/pen-18-2" }));
+    assert.equal(await git(wt, "rev-parse", "--abbrev-ref", "HEAD"), "pennyworth/pen-18");
+    assert.equal(await git(clone, "branch", "--list", "pennyworth/pen-18-2"), "");
+  });
+});

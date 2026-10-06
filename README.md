@@ -182,7 +182,7 @@ Comment on a task and the work happens in a repository on this machine, the way 
    - it posts the report on the task and sets the status to *in review*.
 
    In implement mode, the runner commits the changes with the agent's proposed conventional commit message.
-4. Follow-up comments continue the same agent session in the same worktree.
+4. Follow-up comments continue the same agent session in the same worktree. If the task's PR has been merged in the meantime, the work moves to a new branch (`pennyworth/<task>-2`, …) from the latest base branch, carrying over any commits made since the merge, and **pr** opens a new PR. If the PR was closed without merging, **pr** opens a new one from the same branch.
 
 Commands (a comment containing only the word):
 
