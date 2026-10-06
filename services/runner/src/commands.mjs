@@ -88,9 +88,10 @@ export function isClaudeModel(model) {
 export function resolveMode(directives, previous) {
   const m = (directives.mode ?? "").trim().toLowerCase();
   if (!m) return previous ?? "investigate";
+  if (["answer", "question", "ask"].includes(m)) return "answer";
   if (["investigate", "investigation", "report", "read"].includes(m)) return "investigate";
   if (["implement", "implementation", "fix", "change", "write"].includes(m)) return "implement";
-  throw new Error(`unknown mode "${directives.mode}" (use investigate or implement)`);
+  throw new Error(`unknown mode "${directives.mode}" (use answer, investigate or implement)`);
 }
 
 /** Devshells: explicit `shells:` wins; otherwise detected from repo files and the request. */

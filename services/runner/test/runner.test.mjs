@@ -410,3 +410,22 @@ describe("tasks the user wrote", async () => {
     assert.equal(ownRequest({ createdByUserId: "u", createdByAgentId: null, description: "" }), "");
   });
 });
+
+describe("questions", async () => {
+  const { runOutcome, stripAnswerHeading } = await import("../src/prompt.mjs");
+  const { validateIntake } = await import("../src/intake.mjs");
+  it("answers are finished with an Answer heading, and post without it", () => {
+    const msg = "## Answer\nAny long random string works; use `openssl rand -base64 48`.";
+    const o = runOutcome({ code: 0, lastMessage: msg, mode: "answer", dirty: false });
+    assert.deepEqual(o, { finished: true, headline: "" });
+    assert.equal(stripAnswerHeading(msg), "Any long random string works; use `openssl rand -base64 48`.");
+    assert.equal(runOutcome({ code: 0, lastMessage: "Let me look at the code first.", mode: "answer" }).finished, false);
+  });
+  it("accepts answer as a mode and asks the agent for an answer only", () => {
+    assert.equal(validateIntake({ repo: "", references: [], mode: "answer", engine: "", model: "", question: "" }, { candidates: [], models: [] }).mode, "answer");
+    assert.equal(resolveMode({ mode: "question" }), "answer");
+    const p = firstPrompt({ user: "Taylan", task: { identifier: "PEN-18", title: "t", description: "" }, repo: normalizeRepo("0xPolygon/x"), worktree: "/w", branch: "b", base: "main", mode: "answer", shells: ["llm"], instructions: "Can I use any JWT_SECRET?" });
+    assert.match(p, /Start your reply with the line `## Answer`/);
+    assert.doesNotMatch(p, /## Verification/);
+  });
+});

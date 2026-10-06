@@ -11,7 +11,7 @@ import { runAgent } from "./engines.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree, startFreshBranch, nextBranchName } from "./git.mjs";
 import { codexModels, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
-import { commitMessage, firstPrompt, followUpPrompt, latestReport, prTitle, runOutcome, stripCommitLine } from "./prompt.mjs";
+import { commitMessage, firstPrompt, followUpPrompt, latestReport, prTitle, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
 import { State } from "./state.mjs";
 
 const execFileP = promisify(execFile);
@@ -189,11 +189,11 @@ async function startJob({ issue, directives, instructions }) {
     // Plain-language request → settings. Explicit "key: value" lines still win.
     const candidates = findRepos(`${instructions}\n${full.title}\n${full.description ?? ""}`, cfg.allowed_orgs).map((r) => r.slug);
     const before = state.task(issue.id);
-    const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, candidates, known: before.repo })
+    const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, candidates, known: before.repo, previousMode: before.mode })
       .catch((err) => (log("intake failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }), undefined));
     const inferred = {};
     if (read?.repo && !before.repo) inferred.repo = read.repo;
-    if (read?.mode) inferred.mode = read.mode;
+    inferred.mode = read?.mode ?? "investigate"; // judged per request; if unreadable, change nothing
     if (read?.engine === "glm") inferred.engine = "glm";
     else if (read?.engine === "claude") Object.assign(inferred, { engine: "claude" }, read.model ? { model: read.model } : {});
     else if (read?.model) Object.assign(inferred, { engine: "codex", model: read.model });
@@ -258,7 +258,9 @@ async function startJob({ issue, directives, instructions }) {
     const refsNote = references.length ? `, reading ${references.map((r) => `\`${r.slug}\``).join(", ")} for reference` : "";
     await pc.startWork(
       issue.id,
-      `${prNote ? `${prNote}\n\n` : ""}${resumed ? "Continuing" : "On it"}: ${mode === "implement" ? "making the change" : "investigating"} in \`${repo.slug}\`${refsNote}, with ${engineLabel(engine)}. I'll post the result here.\n\n_Branch \`${branch}\` · worktree \`${worktree}\` · shells ${shells.join(", ")}_`,
+      mode === "answer"
+        ? `Looking into your question in \`${repo.slug}\` with ${engineLabel(engine)}. I'll answer here.`
+        : `${prNote && mode === "implement" ? `${prNote}\n\n` : ""}${resumed ? "Continuing" : "On it"}: ${mode === "implement" ? "making the change" : "investigating"} in \`${repo.slug}\`${refsNote}, with ${engineLabel(engine)}. I'll post the result here.\n\n_Branch \`${branch}\` · worktree \`${worktree}\` · shells ${shells.join(", ")}_`,
     );
     log("job started", { issue: issue.identifier, repo: repo.slug, engine: engine.kind, mode, resumed });
 
@@ -290,6 +292,12 @@ async function startJob({ issue, directives, instructions }) {
     const unexpectedPush = !task.pushed && (await remoteHasBranch(clone, branch));
 
     const report = stripCommitLine(result.lastMessage);
+    if (mode === "answer" && outcome.finished) {
+      await pc.setStatus(issue.id, "in_review", `${stripAnswerHeading(report)}\n\n_${engineLabel(engine)} · \`${repo.slug}\`${summaryBefore.dirty ? " · note: the worktree has uncommitted changes" : ""}_`);
+      state.finishJob(jobId, "done");
+      log("job finished", { issue: issue.identifier, code: result.code, mode });
+      return;
+    }
     const parts = [
       outcome.headline,
       outcome.finished ? "" : `\nLast lines of the log:\n\`\`\`\n${logTail(logPath)}\n\`\`\`${report ? `\n\nThe agent's last message:\n\n> ${report.slice(0, 1500).replace(/\n/g, "\n> ")}` : ""}`,
@@ -299,7 +307,7 @@ async function startJob({ issue, directives, instructions }) {
       `${engineLabel(engine)} · ${mode} · \`${repo.slug}\` · branch \`${branch}\` (from \`${base}\`)`,
     ];
     if (changes.commits) parts.push(`\n**Commits on the task branch**\n\`\`\`\n${changes.commits}\n\`\`\`\n\`\`\`\n${changes.stat}\n\`\`\``);
-    if (mode === "investigate" && summaryBefore.dirty) parts.push("\n_Note: the investigation left uncommitted changes in the worktree._");
+    if (mode !== "implement" && summaryBefore.dirty) parts.push("\n_Note: the worktree has uncommitted changes._");
     if (changes.commits) parts.push("\nReply **push** to publish the branch to GitHub, or **pr** to also open a draft PR.");
     parts.push(`Worktree: \`${worktree}\` · log: \`${logPath}\``);
     if (unexpectedPush) parts.push(`\n⚠️ **The branch \`${branch}\` exists on GitHub but the runner did not push it.** Please check.`);

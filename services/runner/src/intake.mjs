@@ -15,7 +15,7 @@ export const INTAKE_SCHEMA = {
   properties: {
     repo: { type: "string" },
     references: { type: "array", items: { type: "string" } },
-    mode: { type: "string", enum: ["investigate", "implement", ""] },
+    mode: { type: "string", enum: ["answer", "investigate", "implement"] },
     engine: { type: "string", enum: ["codex", "claude", "glm", ""] },
     model: { type: "string" },
     question: { type: "string" },
@@ -40,13 +40,17 @@ export function resolveModelAlias(name, models) {
   return models.find((m) => m.toLowerCase().split(/[-_.\s]+/).includes(n) || m.toLowerCase().endsWith(`-${n}`));
 }
 
-export function intakePrompt({ user, title, description, instructions, candidates, models, known }) {
+export function intakePrompt({ user, title, description, instructions, candidates, models, known, previousMode }) {
   return `You read ${user}'s request to a coding agent and extract its settings as JSON. Do not do the task itself and do not run any tools.
 
 Fields:
 - repo: the repository the work happens in (code is written or investigated there). Pick exactly one slug from the candidates, or "" if this task already has one (${known ? `it does: ${known}` : "it does not"}) and the request doesn't name a different one, or if you truly cannot tell.
 - references: other candidate repositories mentioned only as examples, inspiration or context to read.
-- mode: "implement" if ${user} asks for code or files to be written or changed now; "investigate" if they ask for research, a report, a spec, a plan or a review first; "" if the request doesn't say.
+- mode: what this request asks for, judged on this request alone:
+  - "answer": a question to answer (how, what, why, can I, should I…). No files change.
+  - "investigate": research, a report, a spec, a plan or a review. No files change.
+  - "implement": code or files to be written or changed now (fix, add, implement, update, change…).
+  If unsure whether changes are wanted, do not pick "implement". A bare follow-up such as "continue", "go on" or "try again" keeps the previous mode${previousMode ? ` (it was "${previousMode}")` : ""}.
 - engine: "glm" if they ask for GLM/OpenRouter, "claude" if they ask for Claude or Claude Code, "codex" if they name Codex, otherwise "".
 - model: a model they name (e.g. "astra"), mapped to one of the known Codex models if possible; for Claude, "opus", "sonnet", "haiku", "fable" or a full claude-… id; otherwise "".
 - question: only if repo is "" and the task has no repository yet, one short plain-language question asking which repository to use. Otherwise "".
@@ -72,7 +76,7 @@ export function validateIntake(raw, { candidates, models }) {
   const pick = (slug) => candidates.find((c) => c.toLowerCase() === String(slug ?? "").trim().toLowerCase());
   const repo = pick(raw?.repo);
   const references = [...new Set((raw?.references ?? []).map(pick).filter((r) => r && r !== repo))];
-  const mode = ["investigate", "implement"].includes(raw?.mode) ? raw.mode : undefined;
+  const mode = ["answer", "investigate", "implement"].includes(raw?.mode) ? raw.mode : undefined;
   const claude = raw?.engine === "claude" || (raw?.engine !== "codex" && isClaudeModel(raw?.model));
   const model = claude ? (isClaudeModel(raw?.model) ? String(raw.model).trim().toLowerCase() : undefined) : resolveModelAlias(raw?.model, models);
   const engine = raw?.engine === "glm" ? "glm" : claude ? "claude" : raw?.engine === "codex" || model ? "codex" : undefined;
@@ -81,7 +85,7 @@ export function validateIntake(raw, { candidates, models }) {
 }
 
 /** Run the intake call. Resolves with validated settings; rejects on failure (callers fall back). */
-export async function readRequest({ cfg, user, title, description, instructions, candidates, known }) {
+export async function readRequest({ cfg, user, title, description, instructions, candidates, known, previousMode }) {
   const models = codexModels();
   const dir = mkdtempSync(join(tmpdir(), "pennyworth-intake-"));
   try {
@@ -107,7 +111,7 @@ export async function readRequest({ cfg, user, title, description, instructions,
         clearTimeout(timer);
         code === 0 && existsSync(out) ? resolve() : reject(new Error(`intake exited with ${code}: ${err.trim().split("\n").pop() ?? ""}`));
       });
-      child.stdin.end(intakePrompt({ user, title, description, instructions, candidates, models, known }));
+      child.stdin.end(intakePrompt({ user, title, description, instructions, candidates, models, known, previousMode }));
     });
     return validateIntake(JSON.parse(readFileSync(out, "utf8")), { candidates, models });
   } finally {

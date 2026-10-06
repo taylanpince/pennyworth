@@ -164,6 +164,8 @@ Comment on a task and the work happens in a repository on this machine, the way 
 1. Assign the task to **Engineer**, or add the label **engineer**. If you wrote the task yourself, its title and description are the request and work starts right away. Tasks Pennyworth created (from Slack, email or meetings) wait for your comment: their descriptions are other people's words, so they're never taken as instructions.
 2. Comment with what you want, in plain words: which repository to work in (link or org/name), any repositories to use as references, whether you want a report/spec first or the change made, and optionally an engine or model ("use the astra model", "use Claude", "use opus", "use GLM"). A short Codex call reads the request; the runner checks its answers against the repositories you mentioned and the known models, and asks you in plain words if it can't tell which repository you mean (reply with just the name). Reference repositories are cloned read-only next to the worktree. Empty repositories work too: the task branch starts from scratch.
 
+   Each comment is judged on its own: a question gets a direct answer and no code changes, a request for research, a review or a spec gets a report, and only an explicit request for changes gets them. Short follow-ups such as "continue" keep the previous kind.
+
    Explicit `key: value` lines anywhere in the comment still override what it reads:
 
    ```text
