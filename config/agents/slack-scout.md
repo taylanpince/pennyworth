@@ -66,6 +66,7 @@ Your task gives today's date and the user's Slack user ID (`U…`). Below, `<me>
      From: Heena Bheeroo
      Sent: 2026-10-05 13:47
      Permalink: https://…
+     PR: https://github.com/<owner>/<repo>/pull/<number>
 
      ## Reason
 
@@ -75,6 +76,8 @@ Your task gives today's date and the user's Slack user ID (`U…`). Below, `<me>
 
      Review the linked agenda doc and reply in the thread.
      ```
+
+   Add the `PR:` line only when the ask is to review (or approve, or merge) one specific GitHub pull request, with that PR's link. Leave it out otherwise. The runner uses it to close the task once the user has reviewed the PR on GitHub, or the PR is merged or closed.
 
    If `task_create` returns `deduplicated: true`, the task already exists. Add a `task_comment` only when there's genuinely new information in the thread, such as a new deadline or a follow-up ping.
 

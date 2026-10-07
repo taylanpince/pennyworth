@@ -212,11 +212,10 @@ scripts/slack-auth.sh         # once: open the printed URL, approve; then:
 node scripts/paperclip-setup.mjs   # re-activates the Slack scan routine
 ```
 
-The Slack Scout creates three kinds of tasks:
+The Slack Scout creates two kinds of tasks:
 
-- `needs-response`: someone is waiting for your reply. It is closed automatically once you answer in the thread.
+- `needs-response`: someone is waiting for your reply. It is closed automatically once you answer in the thread. A request to review a GitHub PR also closes once you've submitted a review on GitHub after the ask, or the PR is merged (done) or closed (cancelled). The runner checks every 5 minutes with read-only `gh` queries and comments with what it saw.
 - `todo`: something you promised.
-- `waiting-on`: something someone promised you.
 
 Every task carries a permalink and the marker `source:slack:<channel>:<ts>`, so nothing is duplicated. `todo` lists the needs-response items as `reply`.
 

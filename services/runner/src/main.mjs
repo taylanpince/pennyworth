@@ -12,6 +12,7 @@ import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktre
 import { codexModels, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
 import { commitMessage, firstPrompt, followUpPrompt, latestReport, prTitle, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
+import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import { State } from "./state.mjs";
 
 const execFileP = promisify(execFile);
@@ -47,8 +48,43 @@ async function poll() {
     lastReplyCheck = Date.now();
     await dispatchReplies().catch((err) => log("reply dispatch failed", { err: String(err.message ?? err).slice(0, 300) }));
   }
+  // Review requests you already handled on GitHub (D-21).
+  if (cfg.reviews?.enabled !== false && Date.now() - lastReviewCheck >= (cfg.reviews?.interval_minutes ?? 5) * 60_000) {
+    lastReviewCheck = Date.now();
+    await closeReviewedTasks().catch((err) => log("review check failed", { err: String(err.stderr || err.message || err).slice(0, 300) }));
+  }
   state.set("last_poll", now);
   drainQueue();
+}
+
+// ------------------------------------------------------------------ review requests → GitHub
+
+let lastReviewCheck = 0;
+let githubLogin;
+
+/** Close your open review-request tasks once GitHub shows you reviewed the PR, or it was merged or closed. */
+async function closeReviewedTasks() {
+  const gh = await findRealGh();
+  for (let issue of await pc.myOpenIssues()) {
+    if ((issue.labels ?? []).some((l) => l.name === cfg.label)) continue; // coding tasks are the runner's own
+    if (issue.descriptionTruncated) issue = await pc.issue(issue.id);
+    const target = reviewTarget(issue);
+    if (!target) continue;
+    // Read-only GraphQL queries with your gh login; nothing is written to GitHub.
+    githubLogin ??= (await execFileP(gh, ["api", "user", "--jq", ".login"])).stdout.trim();
+    let pr;
+    try {
+      const { stdout } = await execFileP(gh, ["api", "graphql", "-f", `query=${PR_QUERY}`, "-f", `owner=${target.owner}`, "-f", `repo=${target.repo}`, "-F", `number=${target.number}`]);
+      pr = JSON.parse(stdout).data?.repository?.pullRequest;
+    } catch (err) {
+      log("pr review check failed", { issue: issue.identifier, pr: `${target.owner}/${target.repo}#${target.number}`, err: String(err.stderr || err.message).slice(0, 200) });
+      continue;
+    }
+    const outcome = reviewOutcome(pr, githubLogin, target.asked);
+    if (!outcome) continue;
+    await pc.setStatus(issue.id, outcome.status, outcome.comment);
+    log("review task closed", { issue: issue.identifier, status: outcome.status, pr: pr.url });
+  }
 }
 
 async function handleIssue(issue, engineerIds) {

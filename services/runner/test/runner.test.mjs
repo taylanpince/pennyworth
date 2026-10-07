@@ -506,3 +506,46 @@ describe("intake regression set", async () => {
     assert.deepEqual(mismatches(read, { mode: "implement" }), ['mode: got "answer", want "implement"']);
   });
 });
+
+describe("review requests handled on GitHub", async () => {
+  const { prLinks, reviewOutcome, reviewTarget } = await import("../src/reviews.mjs");
+  const slackTask = {
+    title: "Reply to Michael: review live-contracts PR #127",
+    createdAt: "2026-10-06T22:30:00.000Z",
+    description: "## Source\n\nType: Slack\n\n## Suggested action\n\nCheck whether https://github.com/0xsequence/live-contracts/pull/127 still needs your review.\n\n<!-- source:source:slack:D0AC9RNC52B:1791325167.737489 -->",
+  };
+
+  it("finds the PR a review task is about, and when you were asked", () => {
+    assert.deepEqual(prLinks("a https://github.com/o/r/pull/1 b https://github.com/o/r/pull/1#files c https://github.com/o/r/pull/2"), [
+      { owner: "o", repo: "r", number: 1 },
+      { owner: "o", repo: "r", number: 2 },
+    ]);
+    assert.deepEqual(reviewTarget(slackTask), { owner: "0xsequence", repo: "live-contracts", number: 127, asked: "2026-10-06T22:19:27.000Z" });
+    // An explicit PR line wins, whatever the title says and whichever other links are there.
+    assert.deepEqual(reviewTarget({ title: "Reply to Leo", createdAt: "2026-10-07T08:00:00.000Z", description: "PR: https://github.com/a/b/pull/9\nSee also https://github.com/a/b/pull/8" }), { owner: "a", repo: "b", number: 9, asked: "2026-10-07T08:00:00.000Z" });
+  });
+
+  it("leaves other tasks alone", () => {
+    assert.equal(reviewTarget({ title: "Follow up after https://github.com/a/b/pull/1 merges", description: "" }), undefined);
+    assert.equal(reviewTarget({ title: "Review two PRs", description: "https://github.com/a/b/pull/1 and https://github.com/a/b/pull/2" }), undefined);
+    assert.equal(reviewTarget({ title: "Reply to Leo: review Agglayer monorepo proposal", description: "a doc" }), undefined);
+  });
+
+  const pr = (extra = {}) => ({ number: 127, title: "Deploy", url: "https://github.com/0xsequence/live-contracts/pull/127", state: "OPEN", merged: false, reviews: { nodes: [] }, ...extra });
+  const asked = "2026-10-06T22:19:27.000Z";
+
+  it("closes when you reviewed after the ask, or the PR is merged or closed", () => {
+    assert.equal(reviewOutcome(pr(), "taylanpince", asked), undefined);
+    const review = (login, state, submittedAt) => ({ author: { login }, state, submittedAt });
+    assert.equal(reviewOutcome(pr({ reviews: { nodes: [review("taylanpince", "APPROVED", "2026-10-06T20:00:00Z")] } }), "taylanpince", asked), undefined, "an earlier review doesn't count");
+    assert.equal(reviewOutcome(pr({ reviews: { nodes: [review("someone", "APPROVED", "2026-10-07T08:00:00Z")] } }), "taylanpince", asked), undefined);
+    assert.equal(reviewOutcome(pr({ reviews: { nodes: [review("taylanpince", "PENDING", "2026-10-07T08:00:00Z")] } }), "taylanpince", asked), undefined, "a pending review isn't submitted");
+    const done = reviewOutcome(pr({ reviews: { nodes: [review("TaylanPince", "APPROVED", "2026-10-07T08:05:00Z")] } }), "taylanpince", asked);
+    assert.equal(done.status, "done");
+    assert.match(done.comment, /You approved \[#127 Deploy\]\(https:\/\/github\.com\/0xsequence\/live-contracts\/pull\/127\) on GitHub \(2026-10-07 08:05 UTC\)/);
+    assert.match(reviewOutcome(pr({ reviews: { nodes: [review("taylanpince", "CHANGES_REQUESTED", "2026-10-07T08:05:00Z")] } }), "taylanpince", asked).comment, /requested changes on/);
+    assert.deepEqual(reviewOutcome(pr({ state: "MERGED", merged: true, mergedBy: { login: "michael" } }), "taylanpince", asked).status, "done");
+    assert.deepEqual(reviewOutcome(pr({ state: "CLOSED" }), "taylanpince", asked).status, "cancelled");
+    assert.equal(reviewOutcome(undefined, "taylanpince", asked), undefined);
+  });
+});

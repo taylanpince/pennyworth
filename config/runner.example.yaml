@@ -63,6 +63,12 @@ sandbox:
     - ~/.cargo/git
     - ~/.gradle
 
+# Review-request tasks close themselves once GitHub shows you reviewed the PR (after the ask), or the
+# PR was merged or closed (D-21). Read-only GraphQL queries with your gh login.
+reviews:
+  enabled: true
+  interval_minutes: 5
+
 # Your comments on your own open tasks → the Assistant ("Process task replies" routine).
 replies:
   enabled: true
