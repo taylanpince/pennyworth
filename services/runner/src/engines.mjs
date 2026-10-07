@@ -42,6 +42,7 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
     const base = sessionId ? ["codex", "exec", "resume", sessionId] : ["codex", "exec"];
     const args = [...base, "--json", "-o", lastMessageFile, ...sandboxConfig(cfg, worktree)];
     if (engine.model) args.push("-m", engine.model);
+    if (engine.effort) args.push("-c", `model_reasoning_effort="${engine.effort}"`);
     args.push("-");
     return { argv: args, env: {} };
   }
@@ -82,6 +83,7 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
       "--tools", CLAUDE_TOOLS,
     ];
     if (engine.model) claude.push("--model", engine.model);
+    if (engine.effort) claude.push("--effort", engine.effort === "minimal" ? "low" : engine.effort);
     if (sessionId) claude.push("--resume", sessionId);
     return {
       argv: codexSandbox(cfg, worktree, [cfg.claudeConfigDir], claude),

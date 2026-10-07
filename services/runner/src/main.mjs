@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { RUNNER_MARKER, branchFor, ownRequest, findRepos, isClaudeModel, normalizeRepo, parseCommand, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
+import { RUNNER_MARKER, branchFor, ownRequest, findRepos, isClaudeModel, normalizeRepo, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree, startFreshBranch, nextBranchName } from "./git.mjs";
@@ -24,8 +24,10 @@ mkdirSync(logsDir, { recursive: true, mode: 0o700 });
 const running = new Map(); // issueId → { controller, jobId }
 const queue = []; // { issue, instructions, read, candidates }
 const log = (msg, extra = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), msg, ...extra }));
-const engineLabel = (e) =>
-  e.kind === "codex" ? `Codex${e.model ? ` (${e.model})` : ""}` : e.kind === "claude" ? `Claude Code${e.model ? ` (${e.model})` : ""}` : `OpenRouter ${e.model}`;
+const engineLabel = (e) => {
+  const details = [e.model, e.effort && `${e.effort} effort`].filter(Boolean).join(", ");
+  return e.kind === "codex" ? `Codex${details ? ` (${details})` : ""}` : e.kind === "claude" ? `Claude Code${details ? ` (${details})` : ""}` : `OpenRouter ${e.model}`;
+};
 
 // ------------------------------------------------------------------ polling
 
@@ -34,11 +36,12 @@ async function poll() {
   const now = new Date().toISOString();
   // Overlap the window so comments landing during a poll are never missed (handled IDs dedupe).
   const updatedSince = since ? new Date(Date.parse(since) - 120_000).toISOString() : undefined;
-  // Tasks labelled "engineer" or assigned to the Engineer agent.
+  // Tasks labelled "engineer" or assigned to an Engineer agent.
   const byId = new Map((await pc.labelledIssues(cfg.label, updatedSince)).map((i) => [i.id, i]));
-  const engineer = await pc.engineerAgentId().catch(() => undefined);
-  if (engineer) for (const i of await pc.assignedIssues(engineer, updatedSince)) byId.set(i.id, i);
-  for (const issue of byId.values()) await handleIssue(issue, engineer).catch((err) => reportError(issue, err));
+  const engineers = await pc.engineerAgents().catch(() => []);
+  for (const a of engineers) for (const i of await pc.assignedIssues(a.id, updatedSince)) byId.set(i.id, i);
+  const engineerIds = new Set(engineers.map((a) => a.id));
+  for (const issue of byId.values()) await handleIssue(issue, engineerIds).catch((err) => reportError(issue, err));
   // Replies: all of your open tasks (comments don't reliably bump "updated"), at most once a minute.
   if (cfg.replies?.enabled !== false && Date.now() - lastReplyCheck >= 60_000) {
     lastReplyCheck = Date.now();
@@ -48,7 +51,7 @@ async function poll() {
   drainQueue();
 }
 
-async function handleIssue(issue, engineerId) {
+async function handleIssue(issue, engineerIds) {
   const known = state.task(issue.id);
   const task = known ?? state.ensureTask(issue.id, issue.identifier);
   // Comments written before the runner first saw the task only count if they are recent
@@ -59,9 +62,9 @@ async function handleIssue(issue, engineerId) {
   const fresh = comments.filter((c) => known || Date.parse(c.createdAt) >= horizon);
   for (const c of comments.filter((x) => !fresh.includes(x))) state.markHandled(c.id, issue.id);
   if (!fresh.length) {
-    // Newly assigned to the Engineer without comments. A task the user wrote themselves is the
+    // Newly assigned to an Engineer without comments. A task the user wrote themselves is the
     // request (its description); otherwise ask, once.
-    if (engineerId && issue.assigneeAgentId === engineerId && !userComments.length && !running.has(issue.id) && !state.get(`greeted:${issue.id}`)) {
+    if (engineerIds.has(issue.assigneeAgentId) && !userComments.length && !running.has(issue.id) && !state.get(`greeted:${issue.id}`)) {
       state.set(`greeted:${issue.id}`, new Date().toISOString());
       if (ownRequest(await pc.issue(issue.id))) return handleRequest(issue, ""); // the description is the request
       await pc.comment(issue.id, "Ready. What would you like me to do, and in which repository?");
@@ -199,6 +202,30 @@ async function applySettings(issue, task, settings) {
   return state.task(issue.id);
 }
 
+/**
+ * The executor picked on the task (D-20): its Engineer assignee and model override. A comment that
+ * switches engine or names a model moves the picker, so the task always shows what runs it; so does
+ * an engine remembered from before the picker existed. Otherwise the picker wins.
+ */
+async function syncPicker(issue, full, task, named) {
+  const engineers = await pc.engineerAgents();
+  const picked = pickedEngine(full, engineers, cfg);
+  if (!picked) return task;
+  const seenKey = `picker:${issue.id}`;
+  const chosen = task.engine && ((named && (task.engine.kind !== picked.kind || task.engine.model)) || (!state.get(seenKey) && task.engine.kind !== picked.kind));
+  let engine = picked;
+  if (chosen) {
+    const fields = pickerFor({ ...task.engine, ...(task.engine.kind === picked.kind && picked.effort ? { effort: picked.effort } : {}) }, engineers);
+    if (fields) {
+      await pc.setPicker(issue.id, fields);
+      engine = pickedEngine({ ...full, ...fields }, engineers, cfg);
+    } else engine = task.engine;
+  }
+  state.set(seenKey, new Date().toISOString());
+  state.updateTask(issue.id, { engine });
+  return state.task(issue.id);
+}
+
 class UserError extends Error {}
 
 async function startJob({ issue, instructions, read, candidates }) {
@@ -217,6 +244,7 @@ async function startJob({ issue, instructions, read, candidates }) {
     else if (read?.engine === "claude") Object.assign(inferred, { engine: "claude" }, read.model ? { model: read.model } : {});
     else if (read?.model) Object.assign(inferred, { engine: "codex", model: read.model });
     let task = await applySettings(issue, before, inferred);
+    task = await syncPicker(issue, full, task, Boolean(inferred.engine || inferred.model));
 
     if (!task.repo) {
       if (candidates.length === 1) state.updateTask(issue.id, { repo: candidates[0] });

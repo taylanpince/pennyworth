@@ -182,7 +182,32 @@ async function ensureLabels(companyId) {
   }
 }
 
-function agentBody(key, a) {
+// Executors for pennyworth-runner (D-20): the assignee picks the engine, Paperclip's per-task
+// model override picks the model. Paperclip never runs them.
+const RUNNER_ADAPTERS = ["codex_local", "claude_local", "opencode_local"];
+
+function runnerAgentBody(key, a, existing) {
+  if (!RUNNER_ADAPTERS.includes(a.adapter)) fail(`agent ${key}: dispatch: runner needs one of ${RUNNER_ADAPTERS.join(", ")}`);
+  if (a.mcp_servers?.length) fail(`agent ${key}: runner agents get no MCP servers`);
+  // A primary model chosen in the Paperclip UI survives re-running setup unless the YAML sets one.
+  const model = a.model || existing?.adapterConfig?.model || "";
+  if (a.adapter === "opencode_local" && !/^openrouter\/\S+$/.test(model)) fail(`agent ${key}: opencode_local needs model: openrouter/<model>`);
+  const adapterConfig = { ...(model ? { model } : {}) };
+  if (a.adapter === "codex_local") adapterConfig.dangerouslyBypassApprovalsAndSandbox = false;
+  if (a.adapter === "claude_local") adapterConfig.dangerouslySkipPermissions = false;
+  return {
+    name: a.name,
+    role: "general",
+    title: a.title ?? null,
+    adapterType: a.adapter,
+    adapterConfig,
+    runtimeConfig: { heartbeat: { enabled: false, intervalSec: 0, wakeOnDemand: false, maxConcurrentRuns: 1 } },
+    metadata: { setupKey: `pennyworth:${key}`, runnerEngine: true },
+  };
+}
+
+function agentBody(key, a, existing) {
+  if (a.dispatch === "runner") return runnerAgentBody(key, a, existing);
   if (a.adapter !== "codex_local") fail(`agent ${key}: only codex_local agents receive Paperclip tool connections`);
   const base = cfg.codex_args ?? ["--sandbox", "read-only"];
   if (!base.includes("--sandbox")) fail("codex_args must include --sandbox (never run agents without Codex's sandbox)");
@@ -229,13 +254,14 @@ async function ensureAgents(companyId) {
   const result = {};
   for (const [key, a] of Object.entries(cfg.agents ?? {})) {
     const instructions = readFileSync(resolve(repo, a.instructions), "utf8");
-    const body = agentBody(key, a);
     let agent = agents.find((x) => x.metadata?.setupKey === `pennyworth:${key}` && x.status !== "terminated") ?? agents.find((x) => x.name === a.name && x.status !== "terminated");
+    const body = agentBody(key, a, agent);
+    if (agent && agent.adapterType !== body.adapterType) fail(`agent ${a.name}: adapter is ${agent.adapterType} in Paperclip, ${body.adapterType} in the config`);
     if (!agent) {
       agent = (await api("POST", `/api/companies/${companyId}/agents`, { ...body, instructionsBundle: { entryFile: "AGENTS.md", files: { "AGENTS.md": instructions } } })).json;
       step(`Created agent ${a.name}`);
     } else {
-      await api("PATCH", `/api/agents/${agent.id}`, { title: body.title, adapterConfig: body.adapterConfig, runtimeConfig: body.runtimeConfig, metadata: body.metadata });
+      await api("PATCH", `/api/agents/${agent.id}`, { name: body.name, title: body.title, adapterConfig: body.adapterConfig, runtimeConfig: body.runtimeConfig, metadata: body.metadata });
       await api("PUT", `/api/agents/${agent.id}/instructions-bundle/file`, { path: "AGENTS.md", content: instructions });
       step(`Updated agent ${a.name}`);
     }

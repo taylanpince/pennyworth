@@ -35,14 +35,23 @@ export class Paperclip {
     return this.api("GET", `/api/companies/${this.company}/issues?${q}`);
   }
 
-  /** The Engineer agent (assignment target for coding jobs), if provisioned. */
-  async engineerAgentId() {
-    if (this.engineerId === undefined) {
-      const agents = await this.api("GET", `/api/companies/${this.company}/agents`);
-      const a = agents.find((x) => x.metadata?.setupKey === "pennyworth:engineer" && x.status !== "terminated") ?? agents.find((x) => x.name === "Engineer");
-      this.engineerId = a?.id ?? null;
+  /**
+   * The Engineer agents (assignment targets for coding jobs, one per engine: D-20), refreshed every few
+   * minutes so a primary model changed in the Paperclip UI applies. Before the split there was one.
+   */
+  async engineerAgents() {
+    if (!this.engineers || Date.now() - this.engineers.at > 300_000) {
+      const agents = (await this.api("GET", `/api/companies/${this.company}/agents`)).filter((x) => x.status !== "terminated");
+      let list = agents.filter((x) => /^pennyworth:engineer(-|$)/.test(x.metadata?.setupKey ?? ""));
+      if (!list.length) list = agents.filter((x) => x.name === "Engineer");
+      this.engineers = { at: Date.now(), list };
     }
-    return this.engineerId ?? undefined;
+    return this.engineers.list;
+  }
+
+  /** Show the executor on the task: assign it to an Engineer and set (or clear) its model override. */
+  setPicker(issueId, fields) {
+    return this.api("PATCH", `/api/issues/${encodeURIComponent(issueId)}`, fields);
   }
 
   async assignedIssues(agentId, updatedSince) {
@@ -87,14 +96,14 @@ export class Paperclip {
   }
 
   /**
-   * Mark a task in progress. Paperclip requires an assignee for that: tasks assigned to the
+   * Mark a task in progress. Paperclip requires an assignee for that: tasks assigned to an
    * Engineer keep it; anything else is assigned to the user.
    */
   async startWork(issueId, comment) {
     const issue = await this.issue(issueId);
-    const engineer = await this.engineerAgentId();
+    const engineers = await this.engineerAgents();
     const body = { status: "in_progress", comment: `${comment}\n\n${RUNNER_MARKER}` };
-    if (!(engineer && issue.assigneeAgentId === engineer)) Object.assign(body, { assigneeUserId: await this.me(), assigneeAgentId: null });
+    if (!engineers.some((a) => a.id === issue.assigneeAgentId)) Object.assign(body, { assigneeUserId: await this.me(), assigneeAgentId: null });
     return this.api("PATCH", `/api/issues/${encodeURIComponent(issueId)}`, body);
   }
 

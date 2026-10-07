@@ -72,6 +72,48 @@ export function resolveEngine(directives, cfg, previous) {
   throw new Error(`unknown engine "${directives.engine}" (use codex, claude, glm, or openrouter:<model>)`);
 }
 
+// The Engineer agents (D-20): Paperclip adapter type ↔ runner engine.
+const ADAPTER_ENGINE = { codex_local: "codex", claude_local: "claude", opencode_local: "openrouter" };
+const ENGINE_ADAPTER = Object.fromEntries(Object.entries(ADAPTER_ENGINE).map(([a, e]) => [e, a]));
+const EFFORT_KEY = { codex: "modelReasoningEffort", claude: "effort" }; // where Paperclip's picker stores it
+const EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
+
+/**
+ * The executor picked on the task in Paperclip: the Engineer agent it's assigned to sets the engine;
+ * the task's model override, else the agent's primary model, else config/runner.yaml sets the model.
+ * Undefined when the task isn't assigned to an Engineer.
+ */
+export function pickedEngine(issue, engineers, cfg) {
+  const agent = engineers.find((a) => a.id === issue?.assigneeAgentId);
+  const kind = ADAPTER_ENGINE[agent?.adapterType];
+  if (!kind) return undefined;
+  const override = issue.assigneeAdapterOverrides?.adapterConfig ?? {};
+  const primary = agent.adapterConfig ?? {};
+  // opencode ids are provider/model; only OpenRouter models are runnable here.
+  const usable = (m) => {
+    const v = typeof m === "string" ? m.trim() : "";
+    if (kind !== "openrouter") return v;
+    return v.startsWith("openrouter/") ? v.slice("openrouter/".length) : "";
+  };
+  const fallback = kind === "codex" ? cfg.engines.codex.model : kind === "claude" ? cfg.engines.claude?.model : cfg.engines.openrouter.model;
+  const model = usable(override.model) || usable(primary.model) || fallback || undefined;
+  const key = EFFORT_KEY[kind];
+  const effort = key ? String(override[key] ?? primary[key] ?? "").trim().toLowerCase() : "";
+  return { kind, model, ...(EFFORTS.has(effort) ? { effort } : {}) };
+}
+
+/**
+ * The Paperclip fields that show `engine` as the task's picker: the matching Engineer as assignee,
+ * and a model override unless the model is that Engineer's primary model. Undefined if no Engineer runs it.
+ */
+export function pickerFor(engine, engineers) {
+  const agent = engineers.find((a) => a.adapterType === ENGINE_ADAPTER[engine.kind]);
+  if (!agent) return undefined;
+  const model = engine.model && engine.kind === "openrouter" ? `openrouter/${engine.model}` : engine.model;
+  const config = { ...(model && model !== agent.adapterConfig?.model ? { model } : {}), ...(engine.effort && EFFORT_KEY[engine.kind] ? { [EFFORT_KEY[engine.kind]]: engine.effort } : {}) };
+  return { assigneeAgentId: agent.id, assigneeAdapterOverrides: Object.keys(config).length ? { adapterConfig: config } : null };
+}
+
 /** Claude Code model names: the aliases (opus, sonnet, haiku, fable) or a full `claude-…` id. */
 export function isClaudeModel(model) {
   return /^(opus|sonnet|haiku|fable|claude-[a-z0-9.-]+)(\[1m\])?$/i.test(String(model ?? "").trim());

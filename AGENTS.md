@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-19) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-20) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -27,7 +27,7 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`:
 | Slack Scout | Slack items for the user |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
 | Assistant | research and drafts, plus acting on the user's replies |
-| Engineer | assignment target only, never woken; pennyworth-runner does the work |
+| Engineer · Codex / · Claude / · GLM | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20) |
 
 ## Everyday commands
 
@@ -135,6 +135,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 ### Runner engines
 
 - **opencode auto-rejects unanswered permission prompts and still exits 0.** Its defaults `ask` for `external_directory` and `doom_loop`, so they are set to `allow` (the `codex sandbox` around it is the write boundary). Never treat exit 0 as success: a run only counts as finished if its report has `## Summary` (`runOutcome`).
+- **The executor picker is Paperclip's own** (D-20): the Engineer agent's adapter type maps to the engine, and `assigneeAdapterOverrides.adapterConfig` holds the model and effort. When a comment names an engine or model, the runner rewrites the assignee and override to match, so don't keep a second copy of the engine anywhere else.
 - **Sessions are engine-specific.** A Codex thread ID can't be resumed by opencode (`ses_…` IDs) or Claude Code; switching engines starts fresh with the task's earlier requests as context.
 - **Claude Code must not inherit the user's Claude setup.** By default `claude -p` loads every MCP server, plugin, hook and claude.ai connector (Slack send, Calendar writes, GitHub MCP pushes…). The runner uses its own `CLAUDE_CONFIG_DIR`, a `setup-token` OAuth token, `--setting-sources ""`, `--strict-mcp-config` with no servers, `ENABLE_CLAUDEAI_MCP_SERVERS=false` and a `--tools` allowlist. Don't point it at `~/.claude`: writable hooks or settings there would run unsandboxed in the user's own sessions.
 - **`claude --mcp-config` is variadic** and swallows a trailing prompt argument; the runner sends the prompt on stdin.
@@ -149,7 +150,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Tasks:**
   - Tasks only for *his own* clear action items. No waiting-on tasks for other people's commitments, and no tasks for ownerless actions.
   - **Email:** only threads he labels `pennyworth` in Gmail (any account, archived or not) become todos, closed when he removes the label. Never mirror the whole inbox: that produced junk tasks (meeting accepts, receipts).
-  - Replies on meeting match review tasks (`pick N`, `ignore`) are handled by ops-mcp. Replies on other tasks go to the Assistant. Code work is assigned to Engineer (default engine Codex; "use Claude" = Claude Code; "use GLM" = OpenRouter `z-ai/glm-5.3-flash`).
+  - Replies on meeting match review tasks (`pick N`, `ignore`) are handled by ops-mcp. Replies on other tasks go to the Assistant. Code work is assigned to an Engineer: Engineer · Codex, · Claude or · GLM, with the model picked on the task. "use Claude" or "use GLM" in a comment still works and moves the picker.
   - **Plain language only.** The runner has no `key: value` syntax. Every comment except an exact `push`/`pr` goes through the intake (`services/runner/src/intake.mjs`), which picks the action (run/stop/status/reset/cleanup), repo, mode (answer/investigate/implement) and engine; code validates each answer. Never add syntax he has to learn. Publishing stays on the exact word.
   - **Intake regression set:** `config/intake-cases.yaml` (personal, gitignored; example in `config/intake-cases.example.yaml`) holds his real comments and the reading each must get. Run `npm run eval:intake` before shipping any change to the intake prompt, its inputs, or how the runner acts on its answers, and add every misread found on a real task. Unit tests can't catch these: the intake answers differently from run to run (the old PEN-298 prompt misread the request 3 runs out of 4).
 - **Writing:** drafts (agendas, documents) go in task comments for him to review and paste. No Docs writes for now (option 1).

@@ -298,6 +298,55 @@ describe("first push to an empty repository", () => {
   });
 });
 
+describe("executor picker (Engineer agents)", async () => {
+  const { pickedEngine, pickerFor } = await import("../src/commands.mjs");
+  const engineers = [
+    { id: "cx", adapterType: "codex_local", adapterConfig: {} },
+    { id: "cl", adapterType: "claude_local", adapterConfig: { model: "claude-opus-5-5" } },
+    { id: "gl", adapterType: "opencode_local", adapterConfig: { model: "openrouter/z-ai/glm-5.3-flash" } },
+  ];
+
+  it("reads the engine from the assignee and the model from the override, the primary model or the config", () => {
+    assert.equal(pickedEngine({ assigneeAgentId: "someone-else" }, engineers, cfg), undefined);
+    assert.equal(pickedEngine({ assigneeUserId: "u" }, engineers, cfg), undefined);
+    assert.deepEqual(pickedEngine({ assigneeAgentId: "cx" }, engineers, cfg), { kind: "codex", model: undefined });
+    assert.deepEqual(pickedEngine({ assigneeAgentId: "cl" }, engineers, cfg), { kind: "claude", model: "claude-opus-5-5" });
+    assert.deepEqual(
+      pickedEngine({ assigneeAgentId: "cx", assigneeAdapterOverrides: { adapterConfig: { model: "gpt-5.6-sol", modelReasoningEffort: "xhigh" } } }, engineers, cfg),
+      { kind: "codex", model: "gpt-5.6-sol", effort: "xhigh" },
+    );
+    assert.deepEqual(pickedEngine({ assigneeAgentId: "cl", assigneeAdapterOverrides: { adapterConfig: { effort: "high" } } }, engineers, cfg), { kind: "claude", model: "claude-opus-5-5", effort: "high" });
+    assert.deepEqual(pickedEngine({ assigneeAgentId: "gl" }, engineers, cfg), { kind: "openrouter", model: "z-ai/glm-5.3-flash" });
+  });
+
+  it("only runs OpenRouter models through opencode and ignores unknown efforts", () => {
+    assert.deepEqual(pickedEngine({ assigneeAgentId: "gl", assigneeAdapterOverrides: { adapterConfig: { model: "openrouter/moonshotai/kimi-k3" } } }, engineers, cfg), { kind: "openrouter", model: "moonshotai/kimi-k3" });
+    assert.deepEqual(pickedEngine({ assigneeAgentId: "gl", assigneeAdapterOverrides: { adapterConfig: { model: "opencode/big-pickle" } } }, engineers, cfg), { kind: "openrouter", model: "z-ai/glm-5.3-flash" });
+    assert.deepEqual(pickedEngine({ assigneeAgentId: "cx", assigneeAdapterOverrides: { adapterConfig: { modelReasoningEffort: "--yolo" } } }, engineers, cfg), { kind: "codex", model: undefined });
+  });
+
+  it("writes an engine back as the picker, without overriding the primary model", () => {
+    assert.deepEqual(pickerFor({ kind: "claude", model: "claude-opus-5-5" }, engineers), { assigneeAgentId: "cl", assigneeAdapterOverrides: null });
+    assert.deepEqual(pickerFor({ kind: "claude", model: "sonnet" }, engineers), { assigneeAgentId: "cl", assigneeAdapterOverrides: { adapterConfig: { model: "sonnet" } } });
+    assert.deepEqual(pickerFor({ kind: "codex", model: "gpt-6-astra", effort: "high" }, engineers), { assigneeAgentId: "cx", assigneeAdapterOverrides: { adapterConfig: { model: "gpt-6-astra", modelReasoningEffort: "high" } } });
+    assert.deepEqual(pickerFor({ kind: "openrouter", model: "z-ai/glm-5.3" }, engineers), { assigneeAgentId: "gl", assigneeAdapterOverrides: { adapterConfig: { model: "openrouter/z-ai/glm-5.3" } } });
+    assert.equal(pickerFor({ kind: "claude" }, engineers.slice(0, 1)), undefined);
+    // Round trip.
+    const fields = pickerFor({ kind: "codex", model: "gpt-6-astra", effort: "high" }, engineers);
+    assert.deepEqual(pickedEngine(fields, engineers, cfg), { kind: "codex", model: "gpt-6-astra", effort: "high" });
+  });
+
+  it("passes the effort to Codex and Claude Code", () => {
+    const codex = buildCommand({ cfg: { ...cfg, sandbox: { extra_writable_roots: [] } }, engine: { kind: "codex", model: "gpt-5.6-sol", effort: "high" }, worktree: "/w", lastMessageFile: "/x" }).argv;
+    assert.ok(codex.includes('model_reasoning_effort="high"'));
+    const dir = mkdtempSync(join(tmpdir(), "pw-claude-"));
+    writeFileSync(join(dir, "token"), "tok\n");
+    const c = { ...cfg, claudeTokenFile: join(dir, "token"), claudeConfigDir: join(dir, "home"), sandbox: { extra_writable_roots: [] } };
+    const claude = buildCommand({ cfg: c, engine: { kind: "claude", model: "opus", effort: "xhigh" }, worktree: "/w", lastMessageFile: "/x" }).argv;
+    assert.equal(claude[claude.indexOf("--effort") + 1], "xhigh");
+  });
+});
+
 describe("engine switches", () => {
   it("gives a fresh engine the earlier requests as context", () => {
     const p = firstPrompt({

@@ -128,12 +128,32 @@ agents:
       ops_mcp: [obsidian_search, obsidian_read, obsidian_read_document_map, meeting_note_correct]
       google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
 
+  # Executors for coding jobs (D-20). Assignment targets only: Paperclip never wakes them; the
+  # host runner does the work. The assignee picks the engine; the task's model override (or the
+  # agent's primary model) picks the model. Empty model = the runner's default (config/runner.yaml).
   engineer:
-    name: Engineer
-    title: Coding jobs on this machine (pennyworth-runner)
+    name: Engineer · Codex
+    title: Coding jobs with Codex (pennyworth-runner)
     instructions: config/agents/engineer.md
     adapter: codex_local
-    # Assignment target only: Paperclip never wakes it; the host runner does the work.
+    dispatch: runner
+    mcp_servers: []
+
+  engineer-claude:
+    name: Engineer · Claude
+    title: Coding jobs with Claude Code (pennyworth-runner)
+    instructions: config/agents/engineer.md
+    adapter: claude_local
+    model: claude-opus-5-5
+    dispatch: runner
+    mcp_servers: []
+
+  engineer-glm:
+    name: Engineer · GLM
+    title: Coding jobs with OpenRouter models via opencode (pennyworth-runner)
+    instructions: config/agents/engineer.md
+    adapter: opencode_local
+    model: openrouter/z-ai/glm-5.3-flash
     dispatch: runner
     mcp_servers: []
 
