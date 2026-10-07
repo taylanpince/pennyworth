@@ -102,6 +102,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 ### Docker and networking (this host)
 
 - **172.16.0.0/12 is blocked.** The NordVPN firewall drops host traffic to Docker's default 172.16/12 pools, except `docker0`. Compose pins `10.231.0.0/24` (backplane, internal) and `10.231.1.0/24` (egress). Don't remove `ipam`.
+- **Containers keep the DNS servers they started with.** When Cloudflare WARP or a network switch changed the host's DNS (2026-10-07), every container started earlier failed to resolve names, and every Codex agent run died at startup with "timed out waiting for cloud config bundle". The services that reach the internet (paperclip, google-workspace-mcp, slack-mcp) pin `dns: [1.1.1.1, 8.8.8.8]`; Docker still resolves service names itself. A new service with egress needs the same.
 - **Docker is rootful,** and the user is in the `docker` group. Containers run as `1000:100` (`PUID`/`PGID`), so vault files keep their owner.
 - **Secret-file env vars:** Paperclip's entrypoint `export`s `BETTER_AUTH_SECRET`, the agent JWT secret, and the MCP bearer tokens from `/run/secrets`. Verify with `docker compose exec -u 1000:100 paperclip node -e "…/proc/<pid>/environ…"`; `exec` shells don't inherit them.
 

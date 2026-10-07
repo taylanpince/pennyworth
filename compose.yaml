@@ -60,6 +60,9 @@ services:
       - google_mcp_token
       - slack_mcp_token
     pids_limit: 2048
+    # Fixed public resolvers: containers keep the host's DNS servers from when they started, and
+    # a network or WARP change left every agent run failing at startup (2026-10-07).
+    dns: [1.1.1.1, 8.8.8.8]
     networks:
       egress:
         gw_priority: 1   # published port and outbound traffic go through egress
@@ -116,6 +119,7 @@ services:
     secrets:
       - google_oauth
       - google_mcp_token
+    dns: [1.1.1.1, 8.8.8.8]   # see paperclip
     networks:
       - backplane
       - egress
@@ -137,6 +141,7 @@ services:
       - ${PENNYWORTH_SECRETS_DIR}/slack:/state
     secrets:
       - slack_mcp_token
+    dns: [1.1.1.1, 8.8.8.8]   # see paperclip
     networks:
       - backplane
       - egress
