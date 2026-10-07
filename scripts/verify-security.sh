@@ -41,6 +41,15 @@ for c in $containers; do
         pass "ops-mcp: no Internet egress"
       fi
       ;;
+    *board*)
+      ports="$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')"
+      echo "$ports" | grep -q '"HostIp":"127.0.0.1"' && ! echo "$ports" | grep -q '"HostIp":""' && ! echo "$ports" | grep -q '"HostIp":"0.0.0.0"' \
+        && pass "board: published on 127.0.0.1 only" || fail "board port binding is not loopback-only: $ports"
+      code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -H 'Origin: http://evil.example' -H 'x-pennyworth-board: 1' http://127.0.0.1:3120/api/issues -d '{}')"
+      [ "$code" = "403" ] && pass "board: refuses cross-origin writes" || fail "board accepted a cross-origin write ($code)"
+      code="$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example:3120' http://127.0.0.1:3120/api/board)"
+      [ "$code" = "403" ] && pass "board: refuses unknown Host headers" || fail "board answered an unknown Host ($code)"
+      ;;
   esac
 done
 

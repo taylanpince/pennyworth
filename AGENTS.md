@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-21) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-22) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -15,7 +15,8 @@ host (NixOS, user taylan)
     ├── paperclip            pinned ghcr image, 127.0.0.1:3100, Codex agents inside
     ├── ops-mcp              TypeScript: transcripts, matcher, vault writer, routing, review replies, tasks
     ├── google-workspace-mcp read-only Calendar/Drive/Docs/Gmail, multi-account
-    └── slack-mcp            read-only proxy to mcp.slack.com (allowlisted read tools)
+    ├── slack-mcp            read-only proxy to mcp.slack.com (allowlisted read tools)
+    └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22)
 services/paperclip-tasks-mcp  stdio MCP bridge (mounted into paperclip) for task updates by agents
 ```
 
@@ -38,11 +39,12 @@ npm test --prefix services/ops-mcp                 # vitest
 npm test --prefix services/google-workspace-mcp
 npm test --prefix services/slack-mcp
 npm test --prefix services/runner                  # node --test
+npm test --prefix services/board                   # vitest (server); npm run typecheck --prefix services/board covers the web app
 npm run eval:intake --prefix services/runner       # real comments through the real intake, 3 runs each (~2 min)
 npx tsc --noEmit -p services/<svc>/tsconfig.json   # typecheck TS services
 
 # deploy
-docker compose up -d --build <ops-mcp|google-workspace-mcp|slack-mcp>   # after code changes
+docker compose up -d --build <ops-mcp|google-workspace-mcp|slack-mcp|board>   # after code changes
 docker compose up -d paperclip                     # after compose env/entrypoint changes
 node scripts/paperclip-setup.mjs                   # after config/paperclip.yaml or config/agents/*.md changes (idempotent)
 systemctl --user restart pennyworth-runner         # after services/runner changes

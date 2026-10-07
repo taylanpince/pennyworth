@@ -52,6 +52,8 @@ else
   printf '  skip  slack (not connected: %s)\n' "$(echo "$s_health" | cut -c1-80)"
 fi
 
+check "board (127.0.0.1:3120)" sh -c 'curl -fsS --max-time 5 http://127.0.0.1:3120/healthz | grep -q ok && curl -fsS --max-time 10 http://127.0.0.1:3120/api/board | grep -q "\"buckets\""'
+
 check "watcher webhook configured" test -s "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/meeting_webhook_url"
 if systemctl --user list-unit-files pennyworth-transcripts.path >/dev/null 2>&1; then
   check "transcript watcher active" systemctl --user is-active --quiet pennyworth-transcripts.path

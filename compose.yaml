@@ -141,6 +141,38 @@ services:
       - backplane
       - egress
 
+  # The task board (D-22): Today/Tomorrow/Later over your Paperclip tasks. Acts as you through the
+  # board key, kept server-side; loopback only (put `tailscale serve` in front for the phone).
+  board:
+    <<: *hardening
+    build: ./services/board
+    image: pennyworth/board:local
+    user: "${PUID:-1000}:${PGID:-100}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    environment:
+      BOARD_SYSTEM_CONFIG: /config/system.yaml
+      BOARD_KEY_FILE: /run/secrets/paperclip_board_key
+      BOARD_DB: /data/board/board.sqlite
+      PAPERCLIP_URL: http://paperclip:3100
+      # Host names the board answers to (DNS-rebinding guard); add your tailnet name for the phone.
+      BOARD_ALLOWED_HOSTS: "${BOARD_ALLOWED_HOSTS:-localhost:3120,127.0.0.1:3120}"
+    volumes:
+      - ${PENNYWORTH_CONFIG_DIR:-./config}/system.yaml:/config/system.yaml:ro
+      - ${PENNYWORTH_DATA_DIR:-./data}/board:/data/board
+    secrets:
+      - paperclip_board_key
+    ports:
+      - "127.0.0.1:3120:3120"
+    # backplane reaches Paperclip; egress only carries the published port (the board makes no outbound calls).
+    networks:
+      - backplane
+      - egress
+    depends_on:
+      paperclip:
+        condition: service_started
+
 networks:
   # Explicit 10.x subnets: some host firewalls (here: NordVPN's) drop traffic to Docker's
   # default 172.16.0.0/12 pools, which breaks the published 127.0.0.1:3100 port.
@@ -171,3 +203,5 @@ secrets:
     file: ${PENNYWORTH_SECRETS_DIR}/google_mcp_token
   slack_mcp_token:
     file: ${PENNYWORTH_SECRETS_DIR}/slack_mcp_token
+  paperclip_board_key:
+    file: ${PENNYWORTH_SECRETS_DIR}/paperclip_board_key

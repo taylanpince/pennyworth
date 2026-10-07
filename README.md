@@ -111,6 +111,21 @@ Comment on the task in Paperclip, then wait for the next scan, or click **Run no
 
 Edit `config/routing.yaml` (examples inside). Explicit regex rules always win, so add one to correct a wrong guess. Targets must be existing notes in the mounted vault folders.
 
+## Board
+
+**http://localhost:3120** is where you work your tasks. It shows every open task assigned to you, the Assistant or an Engineer, in five columns:
+
+- **Triage**: every new task lands here (from Slack, email, meetings, or added on the board). Sort it into one of the others.
+- **Today**, **Tomorrow**, **Later**, **Backlog**: ranked top to bottom. At midnight (your `timezone` in `config/system.yaml`), Tomorrow moves into Today, below what's still there.
+
+Drag cards to rank or move them; on a phone, use a card's arrow. Open a card to do everything else: edit the title and description, change priority, status and labels, assign it to yourself, the Assistant or an Engineer (with model and effort), read the whole thread and reply, and mark it done or cancelled (with undo). Replies reach the same handlers as before (the Assistant, the runner or the review flow); the box says which. **Brief** opens today's Daily Brief with clickable task references; **Done** shows what closed in the last 48 hours, so you can reopen it.
+
+Keyboard: `j`/`k` and `h`/`l` (or arrows) to move around, `Enter` to open, `e` done, `1`–`5` to move to Triage…Backlog, `J`/`K` to rank, `c` new task, `/` search, `b` brief, `?` for the rest.
+
+Bucket and rank are the board's own (`data/board/board.sqlite`); everything else is the Paperclip task. The board acts as you with the board key, which stays in the container; it's published on 127.0.0.1 only and refuses requests for other host names or from other sites.
+
+**On your phone (later):** run `tailscale serve --bg --https=443 http://127.0.0.1:3120` on this machine, add the tailnet name to `BOARD_ALLOWED_HOSTS` in `.env` (e.g. `localhost:3120,127.0.0.1:3120,bloomware.<tailnet>.ts.net`), `docker compose up -d board`, and add the page to your home screen.
+
 ## Todo list
 
 Your todo list lives in Paperclip. It contains your own items (label `todo`) plus action items from meetings (`meeting-action`). The Chief of Staff ranks it every weekday at 08:30 in the **Daily Brief** task. It only *suggests* priority changes; you decide.
