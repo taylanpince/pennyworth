@@ -580,3 +580,19 @@ describe("run report footer", async () => {
     assert.equal(latestReport(["older", body], M), "## Summary\nFive issues.\n\n## Next steps\nFix them.");
   });
 });
+
+describe("parent summary (D-24)", async () => {
+  const { subtaskSummary } = await import("../src/prompt.mjs");
+  it("tables every sub-task and counts what needs a look", () => {
+    const s = subtaskSummary([
+      { identifier: "PEN-390", title: "Deprecation notice: cdk-validium-node", status: "in_review", job: "done", committed: true },
+      { identifier: "PEN-391", title: "Deprecation notice: zkevm-bench", status: "in_review", job: "failed", committed: false },
+      { identifier: "PEN-392", title: "Deprecation notice: zkevm-rom", status: "cancelled", job: undefined, committed: false },
+    ]);
+    assert.match(s, /^\*\*All 3 Engineer tasks have finished\.\*\* 1 committed changes, 1 needs a look\./);
+    assert.match(s, /\| PEN-390 Deprecation notice: cdk-validium-node \| Done, changes committed \|/);
+    assert.match(s, /\| PEN-391 Deprecation notice: zkevm-bench \| Failed \|/);
+    assert.match(s, /\| PEN-392 Deprecation notice: zkevm-rom \| Cancelled \|/);
+    assert.match(s, /Reply \*\*pr\*\* on a task to open its PR\./);
+  });
+});

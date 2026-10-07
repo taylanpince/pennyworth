@@ -144,6 +144,30 @@ export function publishFooter({ unpublished, stat, prUrl, onGitHub }) {
   return "";
 }
 
+/**
+ * The summary posted on a parent once all its approved Engineer sub-tasks have finished (D-24).
+ * rows: { identifier, title, status (issue status), job (last job status), committed }.
+ */
+export function subtaskSummary(rows) {
+  const outcome = (r) =>
+    r.status === "cancelled" ? "Cancelled"
+      : r.job === "done" ? (r.committed ? "Done, changes committed" : "Done, nothing changed")
+        : r.job === "failed" ? "Failed" : r.job === "timeout" ? "Timed out" : r.job === "incomplete" ? "Stopped before finishing"
+          : r.job === "cancelled" ? "Stopped" : "Didn't start (see the task)";
+  const ok = rows.filter((r) => r.job === "done" && r.status !== "cancelled");
+  const committed = ok.filter((r) => r.committed);
+  const look = rows.filter((r) => r.status !== "cancelled" && r.job !== "done");
+  return [
+    `**All ${rows.length} Engineer task${rows.length === 1 ? " has" : "s have"} finished.** ${committed.length} committed changes${look.length ? `, ${look.length} need${look.length === 1 ? "s" : ""} a look` : ""}.`,
+    "",
+    "| Task | Outcome |",
+    "|---|---|",
+    ...rows.map((r) => `| ${r.identifier} ${String(r.title).replace(/\|/g, "/")} | ${outcome(r)} |`),
+    "",
+    committed.length ? "Each task's report has the details. Reply **pr** on a task to open its PR." : "Each task's report has the details.",
+  ].join("\n");
+}
+
 export function latestReport(bodies, marker) {
   for (const body of [...bodies].reverse()) {
     if (!String(body ?? "").includes(marker)) continue;

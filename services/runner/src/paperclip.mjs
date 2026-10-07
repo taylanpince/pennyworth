@@ -60,9 +60,9 @@ export class Paperclip {
     return this.api("GET", `/api/companies/${this.company}/issues?${q}`);
   }
 
-  /** Open sub-tasks of a task. */
-  async children(parentId) {
-    const q = new URLSearchParams({ parentId, status: "backlog,todo,in_progress,in_review,blocked", limit: "200" });
+  /** Sub-tasks of a task (open ones unless statuses say otherwise). */
+  async children(parentId, statuses = "backlog,todo,in_progress,in_review,blocked") {
+    const q = new URLSearchParams({ parentId, status: statuses, limit: "200" });
     return (await this.api("GET", `/api/companies/${this.company}/issues?${q}`)).filter((i) => i.parentId === parentId);
   }
 

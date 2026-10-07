@@ -11,7 +11,7 @@ import { runAgent } from "./engines.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree, startFreshBranch, nextBranchName } from "./git.mjs";
 import { codexModels, readApproval, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
-import { commitMessage, firstPrompt, followUpPrompt, latestReport, prTitle, publishFooter, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
+import { commitMessage, firstPrompt, followUpPrompt, latestReport, prTitle, publishFooter, subtaskSummary, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import { State } from "./state.mjs";
 
@@ -471,7 +471,31 @@ async function startJob({ issue, instructions, read, candidates }) {
   } finally {
     running.delete(issue.id);
     drainQueue();
+    void reportToParent(issue).catch((err) => log("parent summary failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }));
   }
+}
+
+/**
+ * When the last of a parent's approved Engineer sub-tasks finishes, post one summary on the parent
+ * (D-24): otherwise the parent stays silent after "Starting N tasks" while the results are spread over
+ * N tasks. Once per batch: keyed on the newest job among the siblings.
+ */
+async function reportToParent(issue) {
+  const full = await pc.issue(issue.id);
+  if (!isAgentSubtask(full) || !state.get(`approved:${issue.id}`)) return;
+  const siblings = (await pc.children(full.parentId, "backlog,todo,in_progress,in_review,blocked,done,cancelled")).filter((c) => isAgentSubtask(c) && state.get(`approved:${c.id}`));
+  const busy = (c) => running.has(c.id) || queue.some((j) => j.issue.id === c.id) || (!state.lastJob(c.id) && ["todo", "in_progress"].includes(c.status));
+  if (!siblings.length || siblings.some(busy)) return;
+  const newest = Math.max(...siblings.map((c) => state.lastJob(c.id)?.id ?? 0));
+  const key = `parent-summary:${full.parentId}`;
+  if (Number(state.get(key) ?? 0) >= newest) return;
+  state.set(key, String(newest));
+  const rows = siblings
+    .map((c) => ({ c, job: state.lastJob(c.id) }))
+    .sort((a, b) => a.c.identifier.localeCompare(b.c.identifier, undefined, { numeric: true }))
+    .map(({ c, job }) => ({ identifier: c.identifier, title: c.title, status: c.status, job: job?.status, committed: job?.detail === "committed" }));
+  await pc.comment(full.parentId, subtaskSummary(rows));
+  log("parent summary posted", { issue: issue.identifier, parent: full.parentId, tasks: rows.length });
 }
 
 // ------------------------------------------------------------------ commands
