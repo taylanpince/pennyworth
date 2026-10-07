@@ -124,7 +124,7 @@ Keyboard: `j`/`k` and `h`/`l` (or arrows) to move around, `Enter` to open, `e` d
 
 Bucket and rank are the board's own (`data/board/board.sqlite`); everything else is the Paperclip task. The board acts as you with the board key, which stays in the container; it's published on 127.0.0.1 only and refuses requests for other host names or from other sites.
 
-**On your phone, at home:** the board is at **http://pennyworth.local** on the home Wi-Fi, for paired devices only. Click **Phone** on the laptop's board and scan the QR code; the phone stays paired (remove devices in the same panel). Add the page to your home screen for an app-like icon.
+**On your phone, at home:** the board is at **http://pennyworth.local** on the home Wi-Fi, for paired devices only. Click **Phone** on the laptop's board, then open pennyworth.local in Safari on the phone and type the code shown (or scan the QR code and tap **Pair** in Safari: the browser you pair from is the one that stays signed in); the phone stays paired (remove devices in the same panel). Add the page to your home screen for an app-like icon.
 
 - Setup: in `.env`, `BOARD_LAN_CLIENTS=192.168.7.0/24` (your home subnet; nothing else may connect), `BOARD_LAN_BIND=0.0.0.0` and `BOARD_LAN_PORT=80`, then `docker compose up -d board`. The name comes from the NixOS module `nix/board-mdns.nix` (vendored into `~/config/nixos/modules/pennyworth-mdns.nix`, `services.pennyworth-mdns = { enable = true; ssid = "…"; }`, plus `services.avahi.publish.userServices = true`), which publishes it over mDNS only while the laptop is on that Wi-Fi.
 - It's plain HTTP: fine on your own Wi-Fi, but don't open it on networks you don't trust. NordVPN's firewall blocks LAN traffic while connected unless `nordvpn set lan-discovery on`.

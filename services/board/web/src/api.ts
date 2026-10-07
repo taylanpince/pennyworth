@@ -36,7 +36,7 @@ export interface Device {
 export const api = {
   session: () => call<Session>("GET", "/api/session"),
   pair: (code: string, device: string) => call<{ ok: true }>("POST", "/api/pair", { code, device }),
-  pairing: () => call<{ url: string; expiresAt: string }>("POST", "/api/pairing", {}),
+  pairing: () => call<{ url: string; base: string; code: string; expiresAt: string }>("POST", "/api/pairing", {}),
   devices: () => call<Device[]>("GET", "/api/devices"),
   revokeDevice: (id: string) => call("DELETE", `/api/devices/${id}`),
   board: () => call<Board>("GET", "/api/board"),

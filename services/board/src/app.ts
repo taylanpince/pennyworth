@@ -140,7 +140,7 @@ export function createApp(opts: AppOptions): Server {
         if (!opts.lan) throw new HttpError(409, "LAN access is off (set BOARD_LAN_CLIENTS)");
         const p = store.createPairing();
         log.info("pairing link created");
-        return { url: `${opts.lan.url}/#/pair/${p.code}`, expiresAt: p.expiresAt };
+        return { url: `${opts.lan.url}/#/pair/${p.code}`, base: opts.lan.url, code: p.code, expiresAt: p.expiresAt };
       },
     },
     { method: "GET", path: /^\/api\/devices$/, localOnly: true, handle: async () => store.devices() },
@@ -163,7 +163,7 @@ export function createApp(opts: AppOptions): Server {
         const now = Date.now();
         failedPairings = failedPairings.filter((t) => now - t < 10 * 60_000);
         if (failedPairings.length >= 10) throw new HttpError(429, "too many attempts; make a new pairing link in a few minutes");
-        const { code, device } = parse(z.object({ code: z.string().min(10).max(64), device: z.string().max(200).default("") }).strict(), body);
+        const { code, device } = parse(z.object({ code: z.string().min(8).max(64), device: z.string().max(200).default("") }).strict(), body);
         const token = store.pair(code, device);
         if (!token) {
           failedPairings.push(now);

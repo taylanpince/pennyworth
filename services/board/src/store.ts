@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomInt } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -114,9 +114,13 @@ export class Store {
 
   // ---------------------------------------------------------------- paired devices (LAN access)
 
-  /** A one-time pairing code, valid for a few minutes; only its hash is stored. */
+  /**
+   * A one-time pairing code, valid for a few minutes; only its hash is stored. Eight characters
+   * without look-alikes, short enough to type on a phone; failed attempts are
+   * rate-limited in app.ts.
+   */
   createPairing(ttlMs = 10 * 60_000): { code: string; expiresAt: string } {
-    const code = randomBytes(18).toString("base64url");
+    const code = Array.from({ length: 8 }, () => CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]).join("");
     const expiresAt = new Date(Date.now() + ttlMs).toISOString();
     this.db.prepare("DELETE FROM pairings WHERE expires_at < ?").run(new Date().toISOString());
     this.db.prepare("INSERT INTO pairings (code_hash, expires_at) VALUES (?, ?)").run(sha256(code), expiresAt);
@@ -125,7 +129,7 @@ export class Store {
 
   /** Spend a pairing code and open a session for the device; the session token is returned once. */
   pair(code: string, device: string): string | undefined {
-    const row = this.db.prepare("DELETE FROM pairings WHERE code_hash = ? RETURNING expires_at").get(sha256(code)) as { expires_at: string } | undefined;
+    const row = this.db.prepare("DELETE FROM pairings WHERE code_hash = ? RETURNING expires_at").get(sha256(normalizeCode(code))) as { expires_at: string } | undefined;
     if (!row || row.expires_at < new Date().toISOString()) return undefined;
     const token = randomBytes(32).toString("base64url");
     const now = new Date().toISOString();
@@ -181,3 +185,9 @@ export class Store {
 }
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
+
+// Letters and digits without the look-alikes 0/O and 1/I/L (31 characters, ~39.6 bits for 8).
+const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+
+/** "k7qm-3xwp" → "K7QM3XWP": case, spaces and dashes don't matter when typing a code. */
+export const normalizeCode = (code: string) => code.toUpperCase().replace(/[^A-Z0-9]/g, "");

@@ -34,6 +34,13 @@ describe("pairing", () => {
     expect(s.checkSession(token)).toBe(false);
   });
 
+  it("makes short codes without look-alikes, accepted however they're typed", () => {
+    const s = new Store(":memory:");
+    for (let i = 0; i < 50; i++) expect(s.createPairing().code).toMatch(/^[A-HJKMNP-Z2-9]{8}$/);
+    const { code } = s.createPairing();
+    expect(s.pair(` ${code.slice(0, 4).toLowerCase()}-${code.slice(4)} `, "iPhone")).toBeDefined();
+  });
+
   it("expires codes", () => {
     const s = new Store(":memory:");
     const { code } = s.createPairing(-1);
@@ -91,7 +98,7 @@ describe("LAN listener", () => {
     expect((await req(`${base}/api/devices`, "GET", { host: "pennyworth.local" })).status).toBe(403);
     const made = await req(`${localBase}/api/pairing`, "POST", { ...H, host: "localhost:3120", origin: "http://localhost:3120" }, {});
     expect(made.status).toBe(200);
-    expect(JSON.parse(made.body).url).toMatch(/^http:\/\/pennyworth\.local\/#\/pair\/[\w-]+$/);
+    expect(JSON.parse(made.body).url).toMatch(/^http:\/\/pennyworth\.local\/#\/pair\/[A-Z2-9]{8}$/);
   });
 
   it("pairs with a valid link (once) and then lets the session in", async () => {
