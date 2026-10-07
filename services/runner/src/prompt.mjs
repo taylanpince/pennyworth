@@ -164,7 +164,19 @@ export function subtaskSummary(rows) {
     "|---|---|",
     ...rows.map((r) => `| ${r.identifier} ${String(r.title).replace(/\|/g, "/")} | ${outcome(r)} |`),
     "",
-    committed.length ? "Each task's report has the details. Reply **pr** on a task to open its PR." : "Each task's report has the details.",
+    committed.length ? "Each task's report has the details. Reply **pr** here to open all their PRs, or **pr** on a single task for just that one." : "Each task's report has the details.",
+  ].join("\n");
+}
+
+/** The PR links posted on a parent after its "pr" (D-24). rows: { identifier, title, prUrl, note }. */
+export function prSummary(rows) {
+  const opened = rows.filter((r) => r.prUrl);
+  return [
+    `**PRs: ${opened.length} of ${rows.length} task${rows.length === 1 ? "" : "s"}.**`,
+    "",
+    "| Task | PR |",
+    "|---|---|",
+    ...rows.map((r) => `| ${r.identifier} ${String(r.title).replace(/\|/g, "/")} | ${r.prUrl || r.note || "-"} |`),
   ].join("\n");
 }
 

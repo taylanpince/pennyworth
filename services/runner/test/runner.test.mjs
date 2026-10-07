@@ -593,6 +593,19 @@ describe("parent summary (D-24)", async () => {
     assert.match(s, /\| PEN-390 Deprecation notice: cdk-validium-node \| Done, changes committed \|/);
     assert.match(s, /\| PEN-391 Deprecation notice: zkevm-bench \| Failed \|/);
     assert.match(s, /\| PEN-392 Deprecation notice: zkevm-rom \| Cancelled \|/);
-    assert.match(s, /Reply \*\*pr\*\* on a task to open its PR\./);
+    assert.match(s, /Reply \*\*pr\*\* here to open all their PRs/);
+  });
+});
+
+describe("pr on the parent (D-24)", async () => {
+  const { prSummary } = await import("../src/prompt.mjs");
+  it("lists a link or the reason for every sub-task", () => {
+    const s = prSummary([
+      { identifier: "PEN-390", title: "Deprecation notice: cdk", prUrl: "https://github.com/0xPolygon/cdk/pull/9", note: "" },
+      { identifier: "PEN-391", title: "Deprecation notice: zkevm-rom", prUrl: "", note: "Nothing to publish" },
+    ]);
+    assert.match(s, /^\*\*PRs: 1 of 2 tasks\.\*\*/);
+    assert.match(s, /\| PEN-390 Deprecation notice: cdk \| https:\/\/github\.com\/0xPolygon\/cdk\/pull\/9 \|/);
+    assert.match(s, /\| PEN-391 Deprecation notice: zkevm-rom \| Nothing to publish \|/);
   });
 });

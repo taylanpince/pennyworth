@@ -11,7 +11,7 @@ import { runAgent } from "./engines.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree, startFreshBranch, nextBranchName } from "./git.mjs";
 import { codexModels, readApproval, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
-import { commitMessage, firstPrompt, followUpPrompt, latestReport, prTitle, publishFooter, subtaskSummary, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
+import { commitMessage, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, publishFooter, subtaskSummary, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import { State } from "./state.mjs";
 
@@ -221,7 +221,10 @@ async function dispatchReplies() {
   const pending = [];
   for (const issue of await pc.myOpenIssues()) {
     if ((issue.labels ?? []).some((l) => exclude.has(l.name))) continue;
-    const fresh = (await pc.comments(issue.id)).filter((c) => Paperclip.isUserInstruction(c) && c.createdAt >= since && !state.handled(c.id));
+    let fresh = (await pc.comments(issue.id)).filter((c) => Paperclip.isUserInstruction(c) && c.createdAt >= since && !state.handled(c.id));
+    if (!fresh.length) continue;
+    // An exact "pr" on a parent opens the PRs of all its finished Engineer sub-tasks (D-24), right away.
+    if (await handleParentPr(issue, fresh)) fresh = fresh.filter((c) => !state.handled(c.id));
     if (!fresh.length) continue;
     // Wait until the newest comment on this task is older than the debounce window.
     if (Date.now() - Date.parse(fresh.at(-1).createdAt) < debounceMs) continue;
@@ -473,6 +476,42 @@ async function startJob({ issue, instructions, read, candidates }) {
     drainQueue();
     void reportToParent(issue).catch((err) => log("parent summary failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }));
   }
+}
+
+/**
+ * "pr" on a parent: open (or update) the PR of every approved Engineer sub-task that has commits,
+ * one after another in the background, then post the links on the parent. Each task's own "pr" path
+ * does the work, so its guards (merged PRs, empty repos, nothing new) all apply. True when a "pr"
+ * comment was taken here.
+ */
+async function handleParentPr(parent, fresh) {
+  const asks = fresh.filter((c) => parseCommand(c.body) === "pr");
+  if (!asks.length) return false;
+  const kids = (await pc.children(parent.id)).filter((c) => isAgentSubtask(c) && state.get(`approved:${c.id}`));
+  if (!kids.length) return false;
+  for (const c of asks) state.markHandled(c.id, parent.id);
+  kids.sort((a, b) => a.identifier.localeCompare(b.identifier, undefined, { numeric: true }));
+  await pc.comment(parent.id, `Opening PRs for the Engineer tasks with commits (${kids.length} task${kids.length === 1 ? "" : "s"} to check). I'll post the links here when done.`);
+  log("parent pr requested", { issue: parent.identifier, tasks: kids.length });
+  void (async () => {
+    const rows = [];
+    for (const kid of kids) {
+      const task = state.task(kid.id);
+      let note = "";
+      try {
+        if (running.has(kid.id) || queue.some((j) => j.issue.id === kid.id)) note = "Still running: reply **pr** on it when it's done";
+        else if (!(await taskHasCommits(task))) note = "Nothing to publish";
+        else await runCommand(kid, task, "pr");
+      } catch (err) {
+        await reportError(kid, err);
+        note = `Failed: ${String(err.message ?? err).split("\n")[0].slice(0, 160)}`;
+      }
+      rows.push({ identifier: kid.identifier, title: kid.title, prUrl: note ? "" : state.task(kid.id)?.pr_url, note });
+    }
+    await pc.comment(parent.id, prSummary(rows));
+    log("parent pr done", { issue: parent.identifier, opened: rows.filter((r) => r.prUrl).length });
+  })().catch((err) => log("parent pr failed", { issue: parent.identifier, err: String(err.message ?? err).slice(0, 300) }));
+  return true;
 }
 
 /**
