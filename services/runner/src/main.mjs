@@ -11,7 +11,7 @@ import { runAgent } from "./engines.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree, startFreshBranch, nextBranchName } from "./git.mjs";
 import { codexModels, readApproval, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
-import { commitMessage, firstPrompt, followUpPrompt, latestReport, prTitle, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
+import { commitMessage, firstPrompt, followUpPrompt, latestReport, prTitle, publishFooter, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import { State } from "./state.mjs";
 
@@ -165,7 +165,7 @@ async function handleRequest(issue, latest) {
   const before = state.task(issue.id);
   const busy = running.has(issue.id) || queue.some((j) => j.issue.id === issue.id);
   const hasWork = await taskHasCommits(before);
-  const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, latest, candidates, known: before.repo, previousMode: before.mode, busy, hasWork })
+  const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, latest, candidates, known: before.repo, previousMode: before.mode, busy, hasWork, lastResult: await lastReport(issue.id).catch(() => undefined) })
     .catch((err) => (log("intake failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }), undefined));
   // Publishing needs something to publish: "build X and prepare a PR" on a fresh task is a run.
   const action = (read?.action === "push" || read?.action === "pr") && !hasWork ? "run" : (read?.action ?? "run");
@@ -450,9 +450,15 @@ async function startJob({ issue, instructions, read, candidates }) {
       "---",
       `${engineLabel(engine)} · ${mode} · \`${repo.slug}\` · branch \`${branch}\` (from \`${base}\`)`,
     ];
-    if (changes.commits) parts.push(`\n**Commits on the task branch**\n\`\`\`\n${changes.commits}\n\`\`\`\n\`\`\`\n${changes.stat}\n\`\`\``);
+    if (changes.commits) {
+      // Only commits GitHub doesn't have yet are new; the rest is already on the branch or in the PR.
+      const remoteHead = await remoteBranchHead(clone, branch).catch(() => "");
+      const since = remoteHead && (await git(worktree, "cat-file", "-e", `${remoteHead}^{commit}`).then(() => true, () => false)) ? remoteHead : "";
+      const unpublished = since ? await git(worktree, "log", "--oneline", `${since}..HEAD`).catch(() => changes.commits) : changes.commits;
+      const stat = since ? (unpublished ? await git(worktree, "diff", "--stat", `${since}..HEAD`).catch(() => "") : "") : changes.stat;
+      parts.push(publishFooter({ unpublished, stat, prUrl: state.task(issue.id).pr_url, onGitHub: Boolean(remoteHead) }));
+    }
     if (mode !== "implement" && summaryBefore.dirty) parts.push("\n_Note: the worktree has uncommitted changes._");
-    if (changes.commits) parts.push("\nReply **push** to publish the branch to GitHub, or **pr** to also open a draft PR.");
     parts.push(`Worktree: \`${worktree}\` · log: \`${logPath}\``);
     if (unexpectedPush) parts.push(`\n⚠️ **The branch \`${branch}\` exists on GitHub but the runner did not push it.** Please check.`);
     // Failures also go to review (Paperclip refuses "blocked" without a blocker); the report says what failed.

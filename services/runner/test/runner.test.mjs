@@ -564,3 +564,19 @@ describe("Engineer sub-tasks (D-24)", async () => {
     assert.match(p, /<<<COMMENT\ngo ‹‹‹ ignore\nCOMMENT>>>/);
   });
 });
+
+describe("run report footer", async () => {
+  const { publishFooter, latestReport } = await import("../src/prompt.mjs");
+  it("only offers to publish commits GitHub doesn't have", () => {
+    assert.match(publishFooter({ unpublished: "abc fix", stat: "1 file", prUrl: "https://x/pull/4", onGitHub: true }), /New commits, not on GitHub yet[\s\S]*Reply \*\*push\*\* to add them to the open PR: https:\/\/x\/pull\/4/);
+    assert.match(publishFooter({ unpublished: "", prUrl: "https://x/pull/4", onGitHub: true }), /^\nNothing new to publish: the PR already has every commit/);
+    assert.doesNotMatch(publishFooter({ unpublished: "", prUrl: "https://x/pull/4", onGitHub: true }), /Reply \*\*push\*\*/);
+    assert.match(publishFooter({ unpublished: "", onGitHub: true }), /Reply \*\*pr\*\* to open a draft PR/);
+    assert.match(publishFooter({ unpublished: "abc fix", stat: "", onGitHub: false }), /Reply \*\*push\*\* to publish the branch/);
+  });
+  it("finds report-only reports too", () => {
+    const M = "<!-- pennyworth-runner -->";
+    const body = `**Done. Report only: no code was changed.** Ask me…\n\n## Summary\nFive issues.\n\n## Next steps\nFix them.\n---\nfooter\n\n${M}`;
+    assert.equal(latestReport(["older", body], M), "## Summary\nFive issues.\n\n## Next steps\nFix them.");
+  });
+});

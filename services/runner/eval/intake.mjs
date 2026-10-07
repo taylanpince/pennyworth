@@ -74,7 +74,7 @@ async function main() {
         const read = await readRequest({
           cfg, user: cfg.selfName, title: c.title ?? "", description: c.description ?? "", instructions,
           latest: stripHidden(c.comment ?? "").trim(), candidates,
-          known: ctx.known_repo, previousMode: ctx.previous_mode, busy: Boolean(ctx.busy), hasWork: Boolean(ctx.has_work),
+          known: ctx.known_repo, previousMode: ctx.previous_mode, busy: Boolean(ctx.busy), hasWork: Boolean(ctx.has_work), lastResult: ctx.last_result,
         });
         results.push({ c, read, bad: mismatches(read, c.expect ?? {}) });
       } catch (err) {
