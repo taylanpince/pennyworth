@@ -100,10 +100,17 @@ async function handleIssue(issue, engineerIds) {
   if (!fresh.length) {
     // Newly assigned to an Engineer without comments. A task the user wrote themselves is the
     // request (its description); otherwise ask, once.
-    if (engineerIds.has(issue.assigneeAgentId) && !userComments.length && !running.has(issue.id) && !state.get(`greeted:${issue.id}`)) {
-      state.set(`greeted:${issue.id}`, new Date().toISOString());
-      if (ownRequest(await pc.issue(issue.id))) return handleRequest(issue, ""); // the description is the request
-      await pc.comment(issue.id, "Ready. What would you like me to do, and in which repository?");
+    // The description may arrive after the assignment (assign, then paste), so it is checked on
+    // every update until it has been taken up, not only the first time.
+    if (engineerIds.has(issue.assigneeAgentId) && !userComments.length && !running.has(issue.id) && !state.get(`ownreq:${issue.id}`) && !state.get(`history:${issue.id}`)) {
+      if (ownRequest(await pc.issue(issue.id))) {
+        state.set(`ownreq:${issue.id}`, new Date().toISOString());
+        return handleRequest(issue, ""); // the description is the request
+      }
+      if (!state.get(`greeted:${issue.id}`)) {
+        state.set(`greeted:${issue.id}`, new Date().toISOString());
+        await pc.comment(issue.id, "Ready. What would you like me to do, and in which repository? (Or write it in the task description.)");
+      }
     }
     return;
   }
