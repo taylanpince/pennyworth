@@ -2,13 +2,14 @@
 # machine's Wi-Fi address, only while connected to your home Wi-Fi (docs/DECISIONS.md D-23). It
 # follows address changes (DHCP) and Wi-Fi switches.
 #
-# A system service: avahi lets only root publish addresses (unless user publishing is opened up
-# for every local user). It runs with no capabilities, a read-only system and no home access.
+# avahi only accepts names published over D-Bus with services.avahi.publish.userServices = true
+# (otherwise it refuses everyone, root included). The service runs as a throwaway user with no
+# capabilities, a read-only system and no home access.
 #
 # Flakes evaluate purely, so copy this file into your NixOS config, then:
 #   imports = [ ./modules/pennyworth-mdns.nix ];
 #   services.pennyworth-mdns = { enable = true; ssid = "MyWifi"; };
-# Needs services.avahi.enable (with nssmdns4 for .local lookups on this machine).
+# Needs services.avahi.enable and publish.userServices (nssmdns4 for .local lookups on this machine).
 { config, lib, pkgs, ... }:
 
 let
@@ -74,7 +75,10 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    assertions = [{ assertion = config.services.avahi.enable; message = "services.pennyworth-mdns needs services.avahi.enable"; }];
+    assertions = [
+      { assertion = config.services.avahi.enable; message = "services.pennyworth-mdns needs services.avahi.enable"; }
+      { assertion = config.services.avahi.publish.enable && config.services.avahi.publish.userServices; message = "services.pennyworth-mdns needs services.avahi.publish.userServices = true (avahi refuses D-Bus publishing otherwise)"; }
+    ];
     systemd.services.pennyworth-mdns = {
       description = "Publish ${cfg.name} (Pennyworth board) on the home network";
       after = [ "avahi-daemon.service" "NetworkManager.service" ];
@@ -85,6 +89,7 @@ in
         ExecStart = "${publisher}/bin/pennyworth-mdns";
         Restart = "always";
         RestartSec = 10;
+        DynamicUser = true;
         CapabilityBoundingSet = "";
         NoNewPrivileges = true;
         ProtectSystem = "strict";
