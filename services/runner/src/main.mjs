@@ -5,11 +5,11 @@ import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { RUNNER_MARKER, branchFor, ownRequest, findRepos, isClaudeModel, normalizeRepo, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
+import { RUNNER_MARKER, branchFor, isAgentSubtask, ownRequest, findRepos, isClaudeModel, normalizeRepo, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree, startFreshBranch, nextBranchName } from "./git.mjs";
-import { codexModels, readRequest, resolveModelAlias } from "./intake.mjs";
+import { codexModels, readApproval, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
 import { commitMessage, firstPrompt, followUpPrompt, latestReport, prTitle, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
@@ -103,10 +103,13 @@ async function handleIssue(issue, engineerIds) {
     // The description may arrive after the assignment (assign, then paste), so it is checked on
     // every update until it has been taken up, not only the first time.
     if (engineerIds.has(issue.assigneeAgentId) && !userComments.length && !running.has(issue.id) && !state.get(`ownreq:${issue.id}`) && !state.get(`history:${issue.id}`)) {
-      if (ownRequest(await pc.issue(issue.id))) {
+      const full = await pc.issue(issue.id);
+      if (requestFrom(full)) {
         state.set(`ownreq:${issue.id}`, new Date().toISOString());
         return handleRequest(issue, ""); // the description is the request
       }
+      // Sub-tasks the Assistant created wait quietly for the go-ahead on their parent (D-24).
+      if (isAgentSubtask(full)) return;
       if (!state.get(`greeted:${issue.id}`)) {
         state.set(`greeted:${issue.id}`, new Date().toISOString());
         await pc.comment(issue.id, "Ready. What would you like me to do, and in which repository? (Or write it in the task description.)");
@@ -134,12 +137,24 @@ async function handleIssue(issue, engineerIds) {
  * "stop that" or "how's it going?" work while a run is in progress. The intake decides what is
  * asked; push and pr still need the exact word, so they are only suggested.
  */
+/**
+ * The request in a task's description: the user's own task, or a sub-task the Assistant created
+ * that the user has given the go-ahead for (D-24). Empty for everything else.
+ */
+function requestFrom(full) {
+  const own = ownRequest(full);
+  if (own) return own;
+  return isAgentSubtask(full) && state.get(`approved:${full.id}`) ? stripHidden(full.description).trim() : "";
+}
+
 async function handleRequest(issue, latest) {
   const full = await pc.issue(issue.id);
   let instructions = latest;
-  // First run on a task the user wrote: its title and description are part of the request.
+  // Commenting on a sub-task the Assistant created is the go-ahead for that one (D-24).
+  if (latest && isAgentSubtask(full)) state.set(`approved:${issue.id}`, new Date().toISOString());
+  // First run on a task the user wrote (or approved): its title and description are part of the request.
   if (!state.get(`history:${issue.id}`)) {
-    const own = ownRequest(full);
+    const own = requestFrom(full);
     if (own) instructions = [`${full.title}\n\n${own}`, instructions].filter(Boolean).join("\n\n");
   }
   // A request still waiting on an answer (e.g. which repository) is combined with the answer.
@@ -210,6 +225,8 @@ async function dispatchReplies() {
     if (!fresh.length) continue;
     // Wait until the newest comment on this task is older than the debounce window.
     if (Date.now() - Date.parse(fresh.at(-1).createdAt) < debounceMs) continue;
+    // Sub-tasks waiting for a go-ahead on this task: the runner reads the comment first (D-24).
+    if (await handleGoAhead(issue, fresh)) continue;
     ready.push(issue.identifier);
     pending.push(...fresh.map((c) => [c.id, issue.id]));
   }
@@ -217,6 +234,43 @@ async function dispatchReplies() {
   await pc.runRoutine(r.routine ?? "Process task replies", { tasks: ready.join(", ") });
   for (const [cid, iid] of pending) state.markHandled(cid, iid);
   log("replies dispatched to Assistant", { tasks: ready });
+}
+
+/**
+ * If Engineer sub-tasks the Assistant created under this task are waiting, decide whether the
+ * user's new comments are the go-ahead. "start" starts them all, "hold" keeps them waiting; anything
+ * else (changes, questions) goes to the Assistant as usual. True when the comments were handled here.
+ */
+async function handleGoAhead(parent, fresh) {
+  const engineers = await pc.engineerAgents();
+  const waiting = (await pc.children(parent.id)).filter(
+    (c) => engineers.some((a) => a.id === c.assigneeAgentId) && isAgentSubtask(c) && c.status === "todo" && !state.get(`approved:${c.id}`) && !state.get(`history:${c.id}`),
+  );
+  if (!waiting.length) return false;
+  const comment = fresh.map((c) => stripHidden(c.body).trim()).filter(Boolean).join("\n\n");
+  const decision = await readApproval({ cfg, user: cfg.selfName, title: parent.title, waiting, comment }).catch((err) => {
+    log("go-ahead check failed", { issue: parent.identifier, err: String(err.message ?? err).slice(0, 300) });
+    return "other";
+  });
+  log("go-ahead read", { issue: parent.identifier, decision, waiting: waiting.length });
+  if (decision === "other") return false;
+  for (const c of fresh) state.markHandled(c.id, parent.id);
+  if (decision === "hold") {
+    await pc.comment(parent.id, `OK, the ${waiting.length} Engineer task${waiting.length === 1 ? "" : "s"} will wait until you say go.`);
+    return true;
+  }
+  const now = new Date().toISOString();
+  for (const c of waiting) state.set(`approved:${c.id}`, now), state.set(`ownreq:${c.id}`, now);
+  await pc.comment(
+    parent.id,
+    `Starting ${waiting.length} Engineer task${waiting.length === 1 ? "" : "s"}: ${waiting.map((c) => c.identifier).join(", ")}. They run ${cfg.max_concurrent ?? 2} at a time, and each one reports on its own task; reply **pr** there to open its PR.`,
+  );
+  log("sub-tasks approved", { issue: parent.identifier, tasks: waiting.map((c) => c.identifier) });
+  // Read each sub-task's request in the background; dispatch() queues the runs.
+  void (async () => {
+    for (const c of waiting) await handleRequest(c, "").catch((err) => reportError(c, err));
+  })();
+  return true;
 }
 
 function drainQueue() {

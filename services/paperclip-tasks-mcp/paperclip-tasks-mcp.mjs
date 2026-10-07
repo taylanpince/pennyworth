@@ -21,6 +21,10 @@ const CURRENT_TASK = process.env.PAPERCLIP_TASK_ID || "";
 // paths, so agents only get the statuses that always work.
 const STATUSES = ["todo", "in_progress", "done", "cancelled"];
 
+// Engineer sub-tasks (D-24): engines map to the Engineer agents' setup keys.
+const ENGINES = ["codex", "claude", "glm"];
+const MAX_SUBTASKS = 40;
+
 async function api(method, path, body) {
   if (!KEY) throw new Error("PAPERCLIP_API_KEY is not set (only available inside a Paperclip run)");
   const headers = { authorization: `Bearer ${KEY}`, accept: "application/json" };
@@ -184,6 +188,65 @@ const TOOLS = {
       if (owner) body.assigneeUserId = owner;
       const i = await api("POST", `/api/companies/${encodeURIComponent(COMPANY)}/issues`, body);
       return { ...brief(i), deduplicated: Boolean(i.deduplicated) };
+    },
+  },
+  task_create_engineer_task: {
+    description:
+      "Assistant only, and only when the user asked for it in their own comment: create an Engineer task as a sub-task of one of the user's tasks. One repository and one self-contained request per task: include everything the engineer needs (repo URL, exact changes, checks, what to skip), because it cannot see the parent. It waits for the user's go-ahead on the parent before it starts. Idempotent per parent and marker.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        parent: { type: "string", description: "the user's task to split, e.g. PEN-357" },
+        title: { type: "string" },
+        description: { type: "string", description: "markdown; the complete request for this one task" },
+        engine: { type: "string", enum: ENGINES, description: "codex (default), claude or glm, as the user asked" },
+        model: { type: "string", description: "optional model the user named, e.g. gpt-6-astra, opus, z-ai/glm-5.3-flash" },
+        marker: { type: "string", description: "stable key within the parent, e.g. the repo name" },
+      },
+      required: ["parent", "title", "description", "engine", "marker"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: async ({ parent, title, description, engine, model, marker }) => {
+      if (!COMPANY) throw new Error("PAPERCLIP_COMPANY_ID not set");
+      // Code work is gated by the user's go-ahead (D-24); only the Assistant may queue it.
+      const me = await api("GET", "/api/agents/me");
+      if (me?.metadata?.setupKey !== "pennyworth:assistant") throw new Error("only the Assistant can create Engineer tasks");
+      if (!ENGINES.includes(engine)) throw new Error(`engine must be one of ${ENGINES.join(", ")}`);
+      const p = await api("GET", `/api/issues/${issueRef(parent)}`);
+      const owner = await ownerUserId();
+      if (!owner || (p.assigneeUserId !== owner && p.responsibleUserId !== owner)) throw new Error("the parent must be one of the user's tasks");
+      const key = String(marker).trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(0, 80);
+      if (!key) throw new Error("invalid marker");
+      const m = `subtask:${p.identifier}:${key}`;
+      const existing = await findByMarker(m, `${OPEN_STATUSES},done,cancelled`);
+      if (existing) return { ...brief(existing), deduplicated: true };
+      const siblings = await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/issues?${new URLSearchParams({ parentId: p.id, limit: "200" })}`);
+      if (siblings.filter((i) => i.parentId === p.id).length >= MAX_SUBTASKS) throw new Error(`a task can have at most ${MAX_SUBTASKS} Engineer sub-tasks`);
+      const agents = await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/agents`);
+      const setupKey = engine === "codex" ? "pennyworth:engineer" : `pennyworth:engineer-${engine}`;
+      const agent = agents.find((a) => a.metadata?.setupKey === setupKey && a.status !== "terminated");
+      if (!agent) throw new Error(`no Engineer for ${engine}`);
+      const m2 = String(model ?? "").trim();
+      if (m2 && !/^[A-Za-z0-9._:\/\[\]-]{1,100}$/.test(m2)) throw new Error("invalid model");
+      // opencode model ids are openrouter/<provider>/<model>. "glm-5.3-flash" means z-ai's model; a
+      // bare name we can't place is dropped, so the Engineer's default model runs instead.
+      const orModel = m2.replace(/^openrouter\//, "");
+      const glmModel = orModel.includes("/") ? orModel : /^glm/i.test(orModel) ? `z-ai/${orModel.toLowerCase()}` : "";
+      const modelId = engine === "glm" ? (glmModel ? `openrouter/${glmModel}` : "") : m2;
+      const body = {
+        title: String(title).slice(0, 200),
+        description: `${String(description).replace(/<!--|-->/g, "").slice(0, 60_000)}\n\n<!-- source:${m} -->`,
+        status: "todo",
+        priority: PRIORITIES.includes(p.priority) ? p.priority : "medium",
+        parentId: p.id,
+        assigneeAgentId: agent.id,
+        ...(modelId ? { assigneeAdapterOverrides: { adapterConfig: { model: modelId } } } : {}),
+        idempotencyKey: await idempotencyKey(m),
+        allowDuplicate: true,
+      };
+      const i = await api("POST", `/api/companies/${encodeURIComponent(COMPANY)}/issues`, body);
+      return { ...brief(i), parent: p.identifier, engine, model: modelId || null, deduplicated: Boolean(i.deduplicated) };
     },
   },
   task_update: {

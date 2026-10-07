@@ -41,3 +41,34 @@
   comment: looks good, push it
   context: { known_repo: 0xPolygon/example-gateway, previous_mode: implement, has_work: true }
   expect: { action: push }
+
+# Go-ahead on a parent task with Engineer sub-tasks waiting (D-24).
+- id: "go-ahead: go"
+  kind: go-ahead
+  title: zkevm and cdk legacy repo deprecation notices
+  comment: go
+  context:
+    waiting: &a1
+      - "PEN-400: Deprecation notice: zkevm-prover"
+      - "PEN-401: Deprecation notice: zkevm-rom"
+      - "PEN-402: Deprecation notice: cdk-validium-node"
+      - "PEN-403: Deprecation notice: zkevm-bench"
+  expect:
+    decision: start
+- id: "go-ahead: skip one"
+  kind: go-ahead
+  why: A go-ahead with an exception must not start everything
+  title: zkevm and cdk legacy repo deprecation notices
+  comment: go, but skip zkevm-bench
+  context:
+    waiting: *a1
+  expect:
+    decision: other
+- id: "go-ahead: wait"
+  kind: go-ahead
+  title: zkevm and cdk legacy repo deprecation notices
+  comment: wait, I want to check with the team first
+  context:
+    waiting: *a1
+  expect:
+    decision: hold

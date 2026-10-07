@@ -16,9 +16,9 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { findRepos, stripHidden } from "../src/commands.mjs";
 import { loadConfig, REPO_ROOT } from "../src/config.mjs";
-import { readRequest } from "../src/intake.mjs";
+import { readApproval, readRequest } from "../src/intake.mjs";
 
-const FIELDS = ["action", "mode", "repo", "references", "engine", "model"];
+const FIELDS = ["action", "mode", "repo", "references", "engine", "model", "decision"];
 
 /** The request text exactly as handleRequest builds it (title + own description on a first run). */
 export function requestFor(c) {
@@ -64,6 +64,13 @@ async function main() {
       const candidates = findRepos(`${instructions}\n${c.title ?? ""}\n${c.description ?? ""}`, cfg.allowed_orgs).map((r) => r.slug);
       const ctx = c.context ?? {};
       try {
+        // Go-ahead cases (D-24): a comment on a parent task with Engineer sub-tasks waiting.
+        if (c.kind === "go-ahead") {
+          const waiting = (ctx.waiting ?? ["PEN-1: Engineer task"]).map((w, n) => ({ identifier: String(w).split(":")[0] || `PEN-${n}`, title: String(w).split(":").slice(1).join(":").trim() || String(w) }));
+          const decision = await readApproval({ cfg, user: cfg.selfName, title: c.title ?? "", waiting, comment: stripHidden(c.comment ?? "").trim() });
+          results.push({ c, read: { decision }, bad: mismatches({ decision }, c.expect ?? {}) });
+          continue;
+        }
         const read = await readRequest({
           cfg, user: cfg.selfName, title: c.title ?? "", description: c.description ?? "", instructions,
           latest: stripHidden(c.comment ?? "").trim(), candidates,
@@ -77,7 +84,7 @@ async function main() {
   };
   await Promise.all(Array.from({ length: Number(process.env.EVAL_CONCURRENCY ?? 4) }, worker));
 
-  const summary = (read) => (read ? `${read.action}/${read.mode ?? "-"}${read.repo ? ` ${read.repo}` : ""}${read.engine ? ` ${read.engine}` : ""}${read.model ? `:${read.model}` : ""}` : "no reading");
+  const summary = (read) => (read?.decision ? `go-ahead: ${read.decision}` : read ? `${read.action}/${read.mode ?? "-"}${read.repo ? ` ${read.repo}` : ""}${read.engine ? ` ${read.engine}` : ""}${read.model ? `:${read.model}` : ""}` : "no reading");
   let failed = 0;
   for (const c of cases) {
     const runs = results.filter((r) => r.c === c);

@@ -101,12 +101,11 @@ export function validateIntake(raw, { candidates, models }) {
   return { action, repo, references, mode, engine, model, question };
 }
 
-/** Run the intake call. Resolves with validated settings; rejects on failure (callers fall back). */
-export async function readRequest({ cfg, user, title, description, instructions, latest, candidates, known, previousMode, busy, hasWork }) {
-  const models = codexModels();
+/** One no-tools Codex call with a JSON schema for its answer; resolves with the parsed JSON. */
+async function askCodex(cfg, prompt, schema) {
   const dir = mkdtempSync(join(tmpdir(), "pennyworth-intake-"));
   try {
-    writeFileSync(join(dir, "schema.json"), JSON.stringify(INTAKE_SCHEMA));
+    writeFileSync(join(dir, "schema.json"), JSON.stringify(schema));
     const out = join(dir, "out.json");
     const model = cfg.intake?.model;
     const argv = inDevshells(cfg.devshells.flake, [cfg.devshells.engine_shell], [
@@ -128,10 +127,48 @@ export async function readRequest({ cfg, user, title, description, instructions,
         clearTimeout(timer);
         code === 0 && existsSync(out) ? resolve() : reject(new Error(`intake exited with ${code}: ${err.trim().split("\n").pop() ?? ""}`));
       });
-      child.stdin.end(intakePrompt({ user, title, description, instructions, latest, candidates, models, known, previousMode, busy, hasWork }));
+      child.stdin.end(prompt);
     });
-    return validateIntake(JSON.parse(readFileSync(out, "utf8")), { candidates, models });
+    return JSON.parse(readFileSync(out, "utf8"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** Run the intake call. Resolves with validated settings; rejects on failure (callers fall back). */
+export async function readRequest({ cfg, user, title, description, instructions, latest, candidates, known, previousMode, busy, hasWork }) {
+  const models = codexModels();
+  const raw = await askCodex(cfg, intakePrompt({ user, title, description, instructions, latest, candidates, models, known, previousMode, busy, hasWork }), INTAKE_SCHEMA);
+  return validateIntake(raw, { candidates, models });
+}
+
+// ------------------------------------------------------------------ go-ahead for sub-tasks
+
+export const APPROVAL_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["decision"],
+  properties: { decision: { type: "string", enum: ["start", "hold", "other"] } },
+};
+
+export function approvalPrompt({ user, title, waiting, comment }) {
+  return `${user} asked the Assistant to split the task "${title}" into Engineer tasks. These are created and waiting for ${user}'s go-ahead before any of them starts:
+
+${waiting.map((w) => `- ${w.identifier}: ${String(w.title).replace(/[\r\n]+/g, " ").slice(0, 160)}`).join("\n")}
+
+Read ${user}'s newest comment on that task and answer with JSON:
+- "start": a clear go-ahead to start ALL of the waiting tasks as they are ("go", "go ahead", "start them", "looks good, run them", "👍").
+- "hold": explicitly not yet ("wait", "don't start yet", "hold off").
+- "other": anything else, including a go-ahead with changes or exceptions ("go, but skip X", "use opus instead", "add repo Y first"), questions and edits. Those go to the Assistant.
+When in doubt, "other". Do not run any tools.
+
+<<<COMMENT
+${String(comment).replace(/<<<|>>>/g, "‹‹‹").slice(0, 4000)}
+COMMENT>>>`;
+}
+
+/** Is the newest comment on a parent task the go-ahead for its waiting sub-tasks? Rejects on failure. */
+export async function readApproval({ cfg, user, title, waiting, comment }) {
+  const raw = await askCodex(cfg, approvalPrompt({ user, title, waiting, comment }), APPROVAL_SCHEMA);
+  return ["start", "hold", "other"].includes(raw?.decision) ? raw.decision : "other";
 }

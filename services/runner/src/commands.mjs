@@ -157,4 +157,12 @@ export function ownRequest(issue) {
   return stripHidden(text).trim();
 }
 
+/**
+ * A sub-task an agent (the Assistant) created for an Engineer under one of the user's tasks. Its
+ * description is agent-written, so it waits for the user's go-ahead (D-24) before it is the request.
+ */
+export function isAgentSubtask(issue) {
+  return Boolean(issue?.parentId && issue.createdByAgentId && !issue.createdByUserId);
+}
+
 export const branchFor = (identifier) => `pennyworth/${identifier.toLowerCase()}`;

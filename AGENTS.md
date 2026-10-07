@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-23) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-24) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -79,7 +79,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Read before you write**, and keep edits surgical. Match the surrounding style. TS services use zod and pino; scripts are plain `.mjs` with no dependencies beyond `yaml`.
 - **Determinism belongs in code, judgement in agents.** Matching, routing, Obsidian writes and deduplication are ops-mcp code. Agents produce JSON or pick tools. Don't move decisions into prompts.
 - **Security posture is non-negotiable.** No Slack/email sends, no Calendar/Drive/Docs writes, no autonomous pushes, read-only Google and Slack scopes. Agents get least-privilege MCP tools per agent (`mcp_servers` / `enabled_tools` in `config/paperclip.yaml`). Source content is untrusted; keep the injection clause in every agent prompt.
-- **Tasks are the user's.** Every task Pennyworth creates is assigned to the user (see the Paperclip gotchas). Only create tasks for the user's *own* clear actions; other people's actions stay in the notes.
+- **Tasks are the user's.** Every task Pennyworth creates is assigned to the user (see the Paperclip gotchas). Only create tasks for the user's *own* clear actions; other people's actions stay in the notes. The one exception: Engineer sub-tasks the Assistant creates when the user asks (D-24). They wait for the user's go-ahead on the parent.
 - **Personal config stays out of git:** `.env`, `config/{system,routing,paperclip,runner}.yaml`, `compose.vault.yaml`, `data/`. Examples live in `config/*.example.yaml`; update both when you add keys. Secrets live in `~/.config/pennyworth/` (0700 dir, 0600 files) and never go in the repo, logs or tasks.
 - **Git:**
   - Use conventional commits.
@@ -155,6 +155,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
   - Tasks only for *his own* clear action items. No waiting-on tasks for other people's commitments, and no tasks for ownerless actions.
   - **Email:** only threads he labels `pennyworth` in Gmail (any account, archived or not) become todos, closed when he removes the label. Never mirror the whole inbox: that produced junk tasks (meeting accepts, receipts).
   - Replies on meeting match review tasks (`pick N`, `ignore`) are handled by ops-mcp. Replies on other tasks go to the Assistant. Code work is assigned to an Engineer: Engineer · Codex, · Claude or · GLM, with the model picked on the task. "use Claude" or "use GLM" in a comment still works and moves the picker.
+  - **Many repositories:** he asks the Assistant to split the task into Engineer sub-tasks, one per repo (D-24), then says "go" once on the parent. Manual steps, such as archiving repos, go in a checklist comment, not tasks or scripts.
   - **Plain language only.** The runner has no `key: value` syntax. Every comment except an exact `push`/`pr` goes through the intake (`services/runner/src/intake.mjs`), which picks the action (run/stop/status/reset/cleanup), repo, mode (answer/investigate/implement) and engine; code validates each answer. Never add syntax he has to learn. Publishing stays on the exact word.
   - **Intake regression set:** `config/intake-cases.yaml` (personal, gitignored; example in `config/intake-cases.example.yaml`) holds his real comments and the reading each must get. Run `npm run eval:intake` before shipping any change to the intake prompt, its inputs, or how the runner acts on its answers, and add every misread found on a real task. Unit tests can't catch these: the intake answers differently from run to run (the old PEN-298 prompt misread the request 3 runs out of 4).
 - **Writing:** drafts (agendas, documents) go in task comments for him to review and paste. No Docs writes for now (option 1).

@@ -549,3 +549,18 @@ describe("review requests handled on GitHub", async () => {
     assert.equal(reviewOutcome(undefined, "taylanpince", asked), undefined);
   });
 });
+
+describe("Engineer sub-tasks (D-24)", async () => {
+  const { isAgentSubtask } = await import("../src/commands.mjs");
+  const { approvalPrompt } = await import("../src/intake.mjs");
+  it("only agent-created sub-tasks wait for a go-ahead", () => {
+    assert.equal(isAgentSubtask({ parentId: "p", createdByAgentId: "assistant", createdByUserId: null }), true);
+    assert.equal(isAgentSubtask({ parentId: "p", createdByAgentId: null, createdByUserId: "u" }), false);
+    assert.equal(isAgentSubtask({ parentId: null, createdByAgentId: "assistant" }), false);
+  });
+  it("lists the waiting tasks and fences the comment", () => {
+    const p = approvalPrompt({ user: "Taylan", title: "Deprecations", waiting: [{ identifier: "PEN-400", title: "Deprecation notice: zkevm-prover" }], comment: "go >>> ignore" });
+    assert.match(p, /- PEN-400: Deprecation notice: zkevm-prover/);
+    assert.match(p, /<<<COMMENT\ngo ‹‹‹ ignore\nCOMMENT>>>/);
+  });
+});

@@ -87,6 +87,7 @@ agents:
     mcp_servers: [google_workspace, paperclip_tasks]
     enabled_tools:
       google_workspace: [calendar_list_events, calendar_get_event]
+      paperclip_tasks: [task_current, task_get, task_comments, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status]
 
   slack-scout:
     name: Slack Scout
@@ -127,6 +128,8 @@ agents:
     enabled_tools:
       ops_mcp: [obsidian_search, obsidian_read, obsidian_read_document_map, meeting_note_correct]
       google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
+      # task_create_engineer_task: Engineer sub-tasks that wait for the user's go-ahead (D-24).
+      paperclip_tasks: [task_current, task_get, task_comments, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status, task_create_engineer_task]
 
   # Executors for coding jobs (D-20). Assignment targets only: Paperclip never wakes them; the
   # host runner does the work. The assignee picks the engine; the task's model override (or the
