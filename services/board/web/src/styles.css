@@ -314,7 +314,14 @@ kbd {
 .md blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 3px solid var(--border-strong); color: var(--muted); }
 .md table { border-collapse: collapse; margin-bottom: 8px; display: block; overflow-x: auto; }
 .md th, .md td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
-.md a[href^="#/t/"] { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; text-decoration: none; background: var(--accent-soft); padding: 1px 5px; border-radius: 5px; }
+.md a[href^="#/t/"] { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; text-decoration: none; background: var(--accent-soft); padding: 1px 5px; border-radius: 5px; white-space: nowrap; }
+.md a[href^="#/t/"][data-status]::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 4px; border-radius: 50%; border: 1.5px solid currentColor; vertical-align: 0; box-sizing: border-box; }
+.md a[href^="#/t/"][data-status="in_progress"]::before, .md a[href^="#/t/"][data-status="in_review"]::before { background: linear-gradient(90deg, currentColor 50%, transparent 50%); }
+.md a[href^="#/t/"][data-status="done"] { background: color-mix(in srgb, var(--working) 14%, transparent); color: var(--working); text-decoration: line-through; text-decoration-thickness: 1px; }
+.md a[href^="#/t/"][data-status="done"]::before { content: "✓"; width: auto; height: auto; border: 0; border-radius: 0; font-weight: 700; }
+.md a[href^="#/t/"][data-status="cancelled"] { background: var(--surface-2); color: var(--faint); text-decoration: line-through; }
+.md a[href^="#/t/"][data-status="cancelled"]::before { content: "✕"; width: auto; height: auto; border: 0; border-radius: 0; }
+.md a[href^="#/t/"][data-status="blocked"] { color: var(--danger); }
 .brief-md { font-size: 14.5px; }
 .brief-md h1 { font-size: 22px; letter-spacing: -0.01em; }
 

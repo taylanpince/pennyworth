@@ -107,7 +107,7 @@ export function createApp(opts: AppOptions): Server {
     };
   }
 
-  const routes: { method: string; path: RegExp; handle: (m: RegExpMatchArray, body: unknown) => Promise<unknown> }[] = [
+  const routes: { method: string; path: RegExp; handle: (m: RegExpMatchArray, body: unknown, url: URL) => Promise<unknown> }[] = [
     {
       method: "GET",
       path: /^\/api\/board$/,
@@ -197,6 +197,24 @@ export function createApp(opts: AppOptions): Server {
       },
     },
     {
+      // Status and title of tasks referenced in text ("PEN-12"), so links show whether they're done.
+      method: "GET",
+      path: /^\/api\/refs$/,
+      handle: async (_m, _body, url) => {
+        const ids = [...new Set((url.searchParams.get("ids") ?? "").split(",").map((s) => s.trim().toUpperCase()))].filter((s) => /^[A-Z][A-Z0-9]{1,9}-\d{1,7}$/.test(s)).slice(0, 100);
+        const out: Record<string, { status: string; title: string }> = {};
+        for (let i = 0; i < ids.length; i += 6) {
+          await Promise.all(
+            ids.slice(i, i + 6).map(async (id) => {
+              const ref = await refCache(id);
+              if (ref) out[id] = ref;
+            }),
+          );
+        }
+        return out;
+      },
+    },
+    {
       method: "GET",
       path: /^\/api\/models\/([0-9a-f-]{36})$/,
       handle: async (m) => {
@@ -211,11 +229,25 @@ export function createApp(opts: AppOptions): Server {
     },
   ];
 
-  async function handleApi(req: IncomingMessage, res: ServerResponse, path: string) {
+  // Referenced tasks change rarely; a short cache keeps the brief cheap to render.
+  const refs = new Map<string, { at: number; value: { status: string; title: string } | null }>();
+  async function refCache(id: string) {
+    const hit = refs.get(id);
+    if (hit && Date.now() - hit.at < 30_000) return hit.value;
+    const value = await pc.issue(id).then(
+      (i) => ({ status: i.status, title: i.title }),
+      (err) => (err instanceof PaperclipError && err.status === 404 ? null : Promise.reject(err)),
+    );
+    refs.set(id, { at: Date.now(), value });
+    return value;
+  }
+
+  async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
+    const path = url.pathname;
     const route = routes.find((r) => r.method === req.method && r.path.test(path));
     if (!route) throw new HttpError(404, "not found");
     const body = req.method === "GET" ? undefined : await readJson(req);
-    const result = await route.handle(path.match(route.path)!, body);
+    const result = await route.handle(path.match(route.path)!, body, url);
     send(res, 200, JSON.stringify(result), "application/json");
   }
 
@@ -240,7 +272,7 @@ export function createApp(opts: AppOptions): Server {
       return send(res, 403, JSON.stringify({ error: rejected }), "application/json");
     }
     try {
-      if (url.pathname.startsWith("/api/")) await handleApi(req, res, url.pathname);
+      if (url.pathname.startsWith("/api/")) await handleApi(req, res, url);
       else if (req.method === "GET" || req.method === "HEAD") await serveStatic(res, url.pathname);
       else throw new HttpError(405, "method not allowed");
     } catch (err) {
