@@ -18,6 +18,11 @@ export interface Config {
   allowedHosts: string[];
   staticDir: string;
   logLevel: string;
+  /**
+   * The second listener for phones on the home network (off unless BOARD_LAN_CLIENTS is set):
+   * paired devices only, from these client networks, under these host names.
+   */
+  lan?: { port: number; hosts: string[]; clients: string[]; url: string };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -34,5 +39,39 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     allowedHosts: hosts,
     staticDir: env.BOARD_STATIC_DIR ?? new URL("../web", import.meta.url).pathname,
     logLevel: env.LOG_LEVEL ?? "info",
+    lan: lanConfig(env),
   };
+}
+
+function lanConfig(env: NodeJS.ProcessEnv): Config["lan"] {
+  const clients = (env.BOARD_LAN_CLIENTS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (!clients.length) return undefined;
+  for (const c of clients) if (!parseCidr(c)) throw new Error(`BOARD_LAN_CLIENTS: not an IPv4 CIDR: ${c}`);
+  const hosts = (env.BOARD_LAN_HOSTS ?? "pennyworth.local").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+  return { port: Number(env.BOARD_LAN_PORT ?? 3121), hosts, clients, url: env.BOARD_LAN_URL ?? `http://${hosts[0]}` };
+}
+
+/** "192.168.7.0/24" → network and mask as 32-bit numbers. */
+export function parseCidr(cidr: string): { net: number; mask: number } | undefined {
+  const m = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(cidr.trim());
+  const ip = m ? ipv4(m[1]!) : undefined;
+  const bits = m ? Number(m[2]) : NaN;
+  if (ip === undefined || !(bits >= 0 && bits <= 32)) return undefined;
+  const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+  return { net: (ip & mask) >>> 0, mask };
+}
+
+export function ipv4(addr: string): number | undefined {
+  const parts = addr.replace(/^::ffff:/, "").split(".");
+  if (parts.length !== 4 || parts.some((p) => !/^\d{1,3}$/.test(p) || Number(p) > 255)) return undefined;
+  return parts.reduce((n, p) => ((n << 8) | Number(p)) >>> 0, 0);
+}
+
+export function inNetworks(addr: string | undefined, cidrs: string[]): boolean {
+  const ip = addr ? ipv4(addr) : undefined;
+  if (ip === undefined) return false;
+  return cidrs.some((c) => {
+    const n = parseCidr(c);
+    return !!n && ((ip & n.mask) >>> 0) === n.net;
+  });
 }

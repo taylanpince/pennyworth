@@ -42,9 +42,21 @@ for c in $containers; do
       fi
       ;;
     *board*)
-      ports="$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')"
-      echo "$ports" | grep -q '"HostIp":"127.0.0.1"' && ! echo "$ports" | grep -q '"HostIp":""' && ! echo "$ports" | grep -q '"HostIp":"0.0.0.0"' \
-        && pass "board: published on 127.0.0.1 only" || fail "board port binding is not loopback-only: $ports"
+      # 3120 is the trusted local board; 3121 (LAN, D-23) may be published, but only serves paired devices.
+      local_port="$(docker inspect "$c" --format '{{json (index .HostConfig.PortBindings "3120/tcp")}}')"
+      echo "$local_port" | grep -q '"HostIp":"127.0.0.1"' && ! echo "$local_port" | grep -qE '"HostIp":"(0\.0\.0\.0)?"' \
+        && pass "board: local port published on 127.0.0.1 only" || fail "board local port is not loopback-only: $local_port"
+      lan_port="$(docker inspect "$c" --format '{{range (index .HostConfig.PortBindings "3121/tcp")}}{{.HostIp}}:{{.HostPort}}{{end}}')"
+      lan_dev="$(ip -4 route show default | awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
+      lan_ip="$(ip -4 -o addr show dev "${lan_dev:-none}" scope global 2>/dev/null | awk '{ split($4, a, "/"); print a[1]; exit }')"
+      if [ "${lan_port%%:*}" = "127.0.0.1" ] || [ -z "$lan_port" ] || [ -z "$lan_ip" ]; then
+        pass "board: LAN access off (${lan_port:-not published})"
+      else
+        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H 'Host: pennyworth.local' "http://$lan_ip:${lan_port##*:}/api/board")"
+        [ "$code" = "401" ] || [ "$code" = "403" ] && pass "board: LAN port refuses unpaired devices ($code)" || fail "board LAN port answered an unpaired request ($code)"
+        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST -H 'Host: pennyworth.local' -H 'content-type: application/json' -H 'x-pennyworth-board: 1' "http://$lan_ip:${lan_port##*:}/api/pairing" -d '{}')"
+        [ "$code" = "403" ] && pass "board: pairing links only from the laptop" || fail "board LAN port made a pairing link ($code)"
+      fi
       code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -H 'Origin: http://evil.example' -H 'x-pennyworth-board: 1' http://127.0.0.1:3120/api/issues -d '{}')"
       [ "$code" = "403" ] && pass "board: refuses cross-origin writes" || fail "board accepted a cross-origin write ($code)"
       code="$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example:3120' http://127.0.0.1:3120/api/board)"

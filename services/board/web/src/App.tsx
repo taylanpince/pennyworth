@@ -17,15 +17,16 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "./api";
+import { PairRequired, api, type Session } from "./api";
 import { CardView, PlusIcon, SortableCard } from "./components";
 import { Drawer } from "./Drawer";
 import { Markdown } from "./markdown";
+import { PairScreen, PhonePanel } from "./Pairing";
 import { BUCKETS, BUCKET_NAMES, type Board, type Bucket, type Card } from "./types";
 import { matches } from "./util";
 
 type Items = Record<Bucket, Card[]>;
-type Route = { kind: "board" } | { kind: "task"; ref: string } | { kind: "brief" } | { kind: "help" };
+type Route = { kind: "board" } | { kind: "task"; ref: string } | { kind: "brief" } | { kind: "help" } | { kind: "phone" } | { kind: "pair"; code: string };
 
 const HINTS: Record<Bucket, string> = {
   triage: "New tasks land here",
@@ -52,6 +53,8 @@ function parseRoute(): Route {
   if (h.startsWith("t/")) return { kind: "task", ref: h.slice(2) };
   if (h === "brief") return { kind: "brief" };
   if (h === "help") return { kind: "help" };
+  if (h === "phone") return { kind: "phone" };
+  if (h.startsWith("pair/")) return { kind: "pair", code: h.slice(5) };
   return { kind: "board" };
 }
 const go = (hash: string) => {
@@ -77,6 +80,8 @@ interface Toast {
 
 export function App() {
   const [board, setBoard] = useState<Board | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [needsPairing, setNeedsPairing] = useState(false);
   const [items, setItems] = useState<Items | null>(null);
   const [error, setError] = useState("");
   const [route, setRoute] = useState<Route>(parseRoute);
@@ -100,18 +105,25 @@ export function App() {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), action ? 7000 : 3500);
   }, []);
 
+  const seq = useRef(0); // only the latest board request counts (an old 401 must not undo pairing)
   const refresh = useCallback(async (force = false) => {
+    const n = ++seq.current;
     try {
       const b = await api.board();
+      if (n !== seq.current) return;
       setBoard(b);
       setError("");
+      setNeedsPairing(false);
       if (force || Date.now() > holdUntil.current) setItems(b.buckets);
     } catch (e) {
-      setError((e as Error).message);
+      if (n !== seq.current) return;
+      if (e instanceof PairRequired) setNeedsPairing(true);
+      else setError((e as Error).message);
     }
   }, []);
 
   useEffect(() => {
+    api.session().then(setSession, () => {});
     void refresh(true);
     const t = setInterval(() => document.visibilityState === "visible" && !dragFrom.current && void refresh(), 10_000);
     const vis = () => document.visibilityState === "visible" && void refresh();
@@ -341,6 +353,15 @@ export function App() {
 
   // ---------------------------------------------------------------- render
 
+  const paired = useCallback(() => {
+    setRoute({ kind: "board" }); // the pairing link was replaced in history without a hashchange
+    setNeedsPairing(false);
+    void api.session().then(setSession);
+    void refresh(true);
+  }, [refresh]);
+  if (route.kind === "pair" && session?.mode !== "local") return <PairScreen code={route.code} onPaired={paired} />;
+  if (needsPairing) return <PairScreen onPaired={paired} />;
+
   if (!board || !items || !filtered)
     return <div className="splash">{error ? <>Can't reach the board: {error}</> : <span className="spinner" />}</div>;
 
@@ -370,6 +391,11 @@ export function App() {
         <button className={`btn${showDone ? " on" : ""}`} onClick={() => setShowDone(!showDone)} title="Recently done (d)">
           Done
         </button>
+        {session?.mode === "local" && session.lan && !mobile && (
+          <a className="btn" href="#/phone" title="Open the board on your phone">
+            Phone
+          </a>
+        )}
         {!mobile && (
           <a className="icon-btn" href="#/help" title="Keyboard shortcuts (?)">
             ?
@@ -459,6 +485,7 @@ export function App() {
         </div>
       )}
       {route.kind === "help" && <Help />}
+      {route.kind === "phone" && <PhonePanel onClose={() => go("#/")} />}
 
       <div className="toasts" aria-live="polite">
         {toasts.map((t) => (

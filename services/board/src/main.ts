@@ -20,12 +20,17 @@ function rollover() {
 rollover();
 setInterval(rollover, 60_000).unref();
 
-const server = createApp({ paperclip, store, log, allowedHosts: cfg.allowedHosts, staticDir: cfg.staticDir, timezone: cfg.timezone });
+const common = { paperclip, store, log, staticDir: cfg.staticDir, timezone: cfg.timezone, lan: cfg.lan };
+const server = createApp({ ...common, allowedHosts: cfg.allowedHosts, mode: "local" });
 server.listen(cfg.port, "0.0.0.0", () => log.info({ port: cfg.port, hosts: cfg.allowedHosts }, "board listening"));
+// Phones on the home network (D-23): a separate port, paired devices only.
+const lan = cfg.lan && createApp({ ...common, allowedHosts: cfg.lan.hosts, mode: "lan" });
+if (lan && cfg.lan) lan.listen(cfg.lan.port, "0.0.0.0", () => log.info({ port: cfg.lan!.port, hosts: cfg.lan!.hosts, clients: cfg.lan!.clients }, "LAN board listening"));
 
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.on(sig, () => {
     server.close();
+    lan?.close();
     store.close();
     process.exit(0);
   });

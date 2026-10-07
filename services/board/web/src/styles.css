@@ -359,3 +359,19 @@ kbd {
 .app.mobile .props { grid-template-columns: 80px 1fr; }
 .app.mobile .prop-value select, .app.mobile .prop-value input { min-width: 0; width: 100%; }
 .app.mobile input, .app.mobile select, .app.mobile textarea { font-size: 16px; } /* no zoom on focus (iOS) */
+
+/* ------------------------------------------------------------ pairing */
+.pair-screen { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 24px; text-align: center; gap: 6px; }
+.pair-screen img { width: 64px; height: 64px; border-radius: 16px; }
+.pair-screen h1 { margin: 8px 0 4px; font-size: 22px; letter-spacing: -0.01em; }
+.pair-screen ol { text-align: left; color: var(--muted); line-height: 1.7; padding-left: 20px; max-width: 320px; }
+.pair-error { color: var(--danger); max-width: 340px; }
+.phone-panel { width: min(420px, calc(100% - 32px)); }
+.phone-panel h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 18px 0 8px; }
+.row-between { display: flex; align-items: center; justify-content: space-between; }
+.row-between h2 { margin: 0; }
+.qr { display: grid; place-items: center; min-height: 248px; margin: 12px 0 6px; }
+.qr img { border-radius: 10px; background: #fff; padding: 4px; image-rendering: pixelated; }
+.pair-link { display: flex; align-items: center; gap: 6px; justify-content: center; color: var(--muted); }
+.pair-link .link-btn { margin-left: 6px; }
+.device { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); }

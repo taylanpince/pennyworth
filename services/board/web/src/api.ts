@@ -8,11 +8,37 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   });
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
+  if (res.status === 401 && data.error === "pair") throw new PairRequired();
   if (!res.ok) throw new Error(data.error ?? `${res.status}`);
   return data as T;
 }
 
+/** This device isn't paired with the board yet (LAN access, D-23). */
+export class PairRequired extends Error {
+  constructor() {
+    super("pair");
+  }
+}
+
+export interface Session {
+  mode: "local" | "lan";
+  paired: boolean;
+  lan?: { url: string } | null;
+}
+
+export interface Device {
+  id: string;
+  device: string;
+  createdAt: string;
+  lastSeen: string;
+}
+
 export const api = {
+  session: () => call<Session>("GET", "/api/session"),
+  pair: (code: string, device: string) => call<{ ok: true }>("POST", "/api/pair", { code, device }),
+  pairing: () => call<{ url: string; expiresAt: string }>("POST", "/api/pairing", {}),
+  devices: () => call<Device[]>("GET", "/api/devices"),
+  revokeDevice: (id: string) => call("DELETE", `/api/devices/${id}`),
   board: () => call<Board>("GET", "/api/board"),
   issue: (ref: string) => call<IssueView>("GET", `/api/issues/${encodeURIComponent(ref)}`),
   update: (ref: string, u: Update) => call<IssueView>("PATCH", `/api/issues/${encodeURIComponent(ref)}`, u),

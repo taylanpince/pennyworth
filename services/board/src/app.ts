@@ -4,6 +4,7 @@ import { extname, join, normalize } from "node:path";
 import type { Logger } from "pino";
 import { z } from "zod";
 import { BadRequest, CreateSchema, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
+import { inNetworks } from "./config.js";
 import { Paperclip, PaperclipError, type Issue } from "./paperclip.js";
 import { BUCKETS, isBucket, type Store } from "./store.js";
 
@@ -14,7 +15,20 @@ export interface AppOptions {
   allowedHosts: string[];
   staticDir: string;
   timezone: string;
+  /**
+   * "local": the loopback listener, trusted as the user. "lan": the home-network listener (D-23):
+   * only clients from `lan.clients`, and the API only for paired devices (session cookie).
+   */
+  mode?: "local" | "lan";
+  lan?: { clients: string[]; url: string };
 }
+
+const SESSION_COOKIE = "pw_session";
+const sessionToken = (req: IncomingMessage) =>
+  String(req.headers.cookie ?? "")
+    .split(";")
+    .map((c) => c.trim().split("="))
+    .find(([k]) => k === SESSION_COOKIE)?.[1];
 
 const REF = /^(?:[0-9a-f-]{36}|[A-Z][A-Z0-9]{1,9}-\d{1,7})$/;
 const RECENT_MS = 48 * 3_600_000;
@@ -106,6 +120,61 @@ export function createApp(opts: AppOptions): Server {
       comments: comments.map((c) => commentView(c, ctx.me, ctx.agents)),
     };
   }
+
+  const mode = opts.mode ?? "local";
+  let failedPairings: number[] = [];
+
+  // Pairing a phone (D-23): the laptop makes a one-time link, the phone spends it for a session cookie.
+  const pairing: { method: string; path: RegExp; localOnly?: boolean; open?: boolean; handle: (m: RegExpMatchArray, body: unknown, req: IncomingMessage, res: ServerResponse) => Promise<unknown> }[] = [
+    {
+      method: "GET",
+      path: /^\/api\/session$/,
+      open: true,
+      handle: async (_m, _b, req) => ({ mode, paired: mode === "local" || store.checkSession(sessionToken(req)), lan: mode === "local" ? (opts.lan ? { url: opts.lan.url } : null) : undefined }),
+    },
+    {
+      method: "POST",
+      path: /^\/api\/pairing$/,
+      localOnly: true,
+      handle: async () => {
+        if (!opts.lan) throw new HttpError(409, "LAN access is off (set BOARD_LAN_CLIENTS)");
+        const p = store.createPairing();
+        log.info("pairing link created");
+        return { url: `${opts.lan.url}/#/pair/${p.code}`, expiresAt: p.expiresAt };
+      },
+    },
+    { method: "GET", path: /^\/api\/devices$/, localOnly: true, handle: async () => store.devices() },
+    {
+      method: "DELETE",
+      path: /^\/api\/devices\/([0-9a-f]{16})$/,
+      localOnly: true,
+      handle: async (m) => {
+        if (!store.revokeDevice(m[1]!)) throw new HttpError(404, "no such device");
+        log.info({ device: m[1] }, "device revoked");
+        return { ok: true };
+      },
+    },
+    {
+      method: "POST",
+      path: /^\/api\/pair$/,
+      open: true,
+      handle: async (_m, body, _req, res) => {
+        if (mode !== "lan") throw new HttpError(400, "pair from the phone, at the LAN address");
+        const now = Date.now();
+        failedPairings = failedPairings.filter((t) => now - t < 10 * 60_000);
+        if (failedPairings.length >= 10) throw new HttpError(429, "too many attempts; make a new pairing link in a few minutes");
+        const { code, device } = parse(z.object({ code: z.string().min(10).max(64), device: z.string().max(200).default("") }).strict(), body);
+        const token = store.pair(code, device);
+        if (!token) {
+          failedPairings.push(now);
+          throw new HttpError(403, "this pairing link is invalid, used or expired; make a new one on the laptop");
+        }
+        log.info({ device: device.slice(0, 80) }, "device paired");
+        res.setHeader("set-cookie", `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`);
+        return { ok: true };
+      },
+    },
+  ];
 
   const routes: { method: string; path: RegExp; handle: (m: RegExpMatchArray, body: unknown, url: URL) => Promise<unknown> }[] = [
     {
@@ -244,6 +313,13 @@ export function createApp(opts: AppOptions): Server {
 
   async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     const path = url.pathname;
+    const p = pairing.find((r) => r.method === req.method && r.path.test(path));
+    if (p) {
+      if (p.localOnly && mode !== "local") throw new HttpError(403, "only from the laptop");
+      const body = req.method === "GET" || req.method === "DELETE" ? undefined : await readJson(req);
+      return send(res, 200, JSON.stringify(await p.handle(path.match(p.path)!, body, req, res)), "application/json");
+    }
+    if (mode === "lan" && !store.checkSession(sessionToken(req))) throw new HttpError(401, "pair");
     const route = routes.find((r) => r.method === req.method && r.path.test(path));
     if (!route) throw new HttpError(404, "not found");
     const body = req.method === "GET" ? undefined : await readJson(req);
@@ -266,6 +342,11 @@ export function createApp(opts: AppOptions): Server {
   return createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://board");
     if (url.pathname === "/healthz") return send(res, 200, "ok", "text/plain");
+    // The LAN listener serves nothing, not even the page, outside the home network.
+    if (mode === "lan" && !inNetworks(req.socket.remoteAddress, opts.lan?.clients ?? [])) {
+      log.warn({ client: req.socket.remoteAddress, path: url.pathname }, "LAN request from outside the allowed networks");
+      return send(res, 403, "forbidden", "text/plain");
+    }
     const rejected = checkRequest(req, opts.allowedHosts);
     if (rejected) {
       log.warn({ method: req.method, path: url.pathname, reason: rejected }, "request rejected");

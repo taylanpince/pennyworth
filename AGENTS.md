@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-22) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-23) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -16,7 +16,8 @@ host (NixOS, user taylan)
     ├── ops-mcp              TypeScript: transcripts, matcher, vault writer, routing, review replies, tasks
     ├── google-workspace-mcp read-only Calendar/Drive/Docs/Gmail, multi-account
     ├── slack-mcp            read-only proxy to mcp.slack.com (allowlisted read tools)
-    └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22)
+    └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
+                             :3121 on the LAN (pennyworth.local, paired devices from the home subnet only, D-23)
 services/paperclip-tasks-mcp  stdio MCP bridge (mounted into paperclip) for task updates by agents
 ```
 

@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -34,6 +35,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS placements (issue_id TEXT PRIMARY KEY, bucket TEXT NOT NULL, rank REAL NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS seen (issue_id TEXT PRIMARY KEY, seen_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, device TEXT NOT NULL, created_at TEXT NOT NULL, last_seen TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS pairings (code_hash TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
     `);
     if (!this.meta("installed_at")) this.setMeta("installed_at", new Date().toISOString());
   }
@@ -109,6 +112,50 @@ export class Store {
     this.db.prepare("INSERT INTO seen (issue_id, seen_at) VALUES (?, ?) ON CONFLICT(issue_id) DO UPDATE SET seen_at = MAX(seen_at, excluded.seen_at)").run(issueId, at);
   }
 
+  // ---------------------------------------------------------------- paired devices (LAN access)
+
+  /** A one-time pairing code, valid for a few minutes; only its hash is stored. */
+  createPairing(ttlMs = 10 * 60_000): { code: string; expiresAt: string } {
+    const code = randomBytes(18).toString("base64url");
+    const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+    this.db.prepare("DELETE FROM pairings WHERE expires_at < ?").run(new Date().toISOString());
+    this.db.prepare("INSERT INTO pairings (code_hash, expires_at) VALUES (?, ?)").run(sha256(code), expiresAt);
+    return { code, expiresAt };
+  }
+
+  /** Spend a pairing code and open a session for the device; the session token is returned once. */
+  pair(code: string, device: string): string | undefined {
+    const row = this.db.prepare("DELETE FROM pairings WHERE code_hash = ? RETURNING expires_at").get(sha256(code)) as { expires_at: string } | undefined;
+    if (!row || row.expires_at < new Date().toISOString()) return undefined;
+    const token = randomBytes(32).toString("base64url");
+    const now = new Date().toISOString();
+    this.db.prepare("INSERT INTO sessions (id, token_hash, device, created_at, last_seen) VALUES (?, ?, ?, ?, ?)").run(randomBytes(8).toString("hex"), sha256(token), device.slice(0, 80) || "Device", now, now);
+    return token;
+  }
+
+  /** Whether a session token is valid (and note when it was last used, at most once a minute). */
+  checkSession(token: string | undefined): boolean {
+    if (!token) return false;
+    const hash = sha256(token);
+    const row = this.db.prepare("SELECT last_seen FROM sessions WHERE token_hash = ?").get(hash) as { last_seen: string } | undefined;
+    if (!row) return false;
+    if (Date.now() - Date.parse(row.last_seen) > 60_000) this.db.prepare("UPDATE sessions SET last_seen = ? WHERE token_hash = ?").run(new Date().toISOString(), hash);
+    return true;
+  }
+
+  devices(): { id: string; device: string; createdAt: string; lastSeen: string }[] {
+    return (this.db.prepare("SELECT id, device, created_at, last_seen FROM sessions ORDER BY created_at").all() as { id: string; device: string; created_at: string; last_seen: string }[]).map((r) => ({
+      id: r.id,
+      device: r.device,
+      createdAt: r.created_at,
+      lastSeen: r.last_seen,
+    }));
+  }
+
+  revokeDevice(id: string): boolean {
+    return Number(this.db.prepare("DELETE FROM sessions WHERE id = ?").run(id).changes) > 0;
+  }
+
   close(): void {
     this.db.close();
   }
@@ -132,3 +179,5 @@ export class Store {
     }
   }
 }
+
+const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
