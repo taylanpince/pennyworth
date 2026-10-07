@@ -198,6 +198,10 @@ function agentBody(key, a) {
     if (!allowed.includes(n)) fail(`agent ${key}: enabled_tools for ${n}, which is not in its mcp_servers`);
     scoping.push("-c", `mcp_servers.${n}.enabled_tools=${JSON.stringify(tools)}`);
   }
+  // Web search is off in codex_args; an agent may opt into "cached" only (OpenAI's index,
+  // no live fetches), so injected content can't make it request an attacker's URL (D-19).
+  if (a.web_search !== undefined && a.web_search !== "cached") fail(`agent ${key}: web_search may only be "cached"`);
+  if (a.web_search) scoping.push("-c", `web_search="${a.web_search}"`);
   const extraArgs = [...base, ...scoping];
   const adapterConfig = {
     engine: "cli",

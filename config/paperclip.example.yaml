@@ -121,6 +121,8 @@ agents:
     model: ""
     reasoning_effort: medium
     timeout_sec: 1800
+    # Public web pages and search via OpenAI's cached index only (D-19).
+    web_search: cached
     mcp_servers: [slack, google_workspace, paperclip_tasks, ops_mcp]
     enabled_tools:
       ops_mcp: [obsidian_search, obsidian_read, obsidian_read_document_map, meeting_note_correct]

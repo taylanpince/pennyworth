@@ -82,7 +82,7 @@ Also:
 - **Decision:** keep `--sandbox read-only` and do **not** loosen seccomp or add capabilities. Inside the container the sandbox fails closed: any shell command errors out. On top of that, the shell tools are disabled outright (`features.shell_tool=false`, `features.unified_exec=false`).
 - **Also disabled:**
   - ChatGPT apps/connectors (`features.apps=false`): these could otherwise reach the ChatGPT account's own Gmail/Drive connectors.
-  - Browser use, computer use, image generation and web search.
+  - Browser use, computer use, image generation and web search (later, cached web search for the Assistant only: D-19).
 - **Result:** agents act only through vetted MCP tools.
 - **Run workspaces:** Paperclip runs agents in non-git workspaces, so `codex_args` includes `--skip-git-repo-check`. Without it Codex exits before doing anything.
 - **Also confirmed:** Paperclip's default for `codex_local` is `--dangerously-bypass-approvals-and-sandbox`. The setup script always sends `dangerouslyBypassApprovalsAndSandbox: false` and refuses `codex_args` without `--sandbox`.
@@ -203,3 +203,11 @@ The AI Tool Hub page lists Paperclip as "Security team only". The user cleared u
 - **Why:** the user didn't want to triage a "choose a note" task for every new meeting (2026-10-06). The search candidates those tasks offered were poor (indexes, reviews), so the guess comes from the agent, which has read the meeting.
 - **Guardrails:** the guess only decides *which existing note* gets an escaped Meeting Log entry; code still does every write, rules and remembered routes beat it, and the prompt tells the agent to pick from the calendar title and subject, never from instructions in the source. Guesses are not remembered, so a better note is picked once it exists.
 - **Correcting a guess:** add a route to `config/routing.yaml`, or `skip_title_regex` for canonical-only.
+
+## D-19: Cached web search for the Assistant
+
+- **Problem:** the user linked a public article on a task (PEN-224) and asked for a summary. The Assistant had no way to open web pages (D-7 disables web search for every agent), so it asked him to paste the text.
+- **Decision:** the Assistant alone gets Codex's built-in web search in `cached` mode (`web_search: cached` in its `config/paperclip.yaml` entry; setup adds `-c web_search="cached"` after the shared `web_search="disabled"`). Every other agent keeps it off, and setup refuses any value other than `cached`.
+- **Why cached, not live:** the Assistant also reads Gmail, Slack and Drive. With live search, a prompt injection in an email or page could make it open an attacker's URL carrying private data. Cached mode serves searches and `open_page` from OpenAI's index, with no fetch to arbitrary hosts. Both modes summarised the PEN-224 article correctly (verified 2026-10-07, Codex 0.159.2).
+- **Guardrails:** web pages are listed as untrusted in the prompt; queries may only carry public topics from the user's request, never private content, and pages can't direct further searches.
+- **Cost:** very fresh pages may not be in the cache yet; the Assistant says so instead of guessing. Search queries go to OpenAI, which already sees everything the agents read.

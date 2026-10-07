@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-18) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-19) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -118,7 +118,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
   - Give every write tool `readOnlyHint: false, openWorldHint: false`, and every read tool `readOnlyHint: true`.
   - Per-agent scoping uses `-c mcp_servers.<n>.enabled=false` and `-c mcp_servers.<n>.enabled_tools=[…]` in each agent's `extraArgs`.
   - Codex needs `--skip-git-repo-check`, because run workspaces aren't git repos.
-  - Its bubblewrap sandbox can't create namespaces in the container, so shell commands fail closed. The shell, browser, apps and computer-use features are disabled on purpose.
+  - Its bubblewrap sandbox can't create namespaces in the container, so shell commands fail closed. The shell, browser, apps and computer-use features are disabled on purpose. Web search is off too, except `cached` mode for the Assistant (D-19); never give an agent live web search alongside private-data tools.
   - Paperclip's codex default is `--dangerously-bypass-approvals-and-sandbox`; setup always sends `dangerouslyBypassApprovalsAndSandbox: false`.
 - **Agents and routines:**
   - `wakeOnDemand: false` makes an agent assignable but never woken (that's the Engineer).
