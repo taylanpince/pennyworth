@@ -609,3 +609,22 @@ describe("pr on the parent (D-24)", async () => {
     assert.match(s, /\| PEN-391 Deprecation notice: zkevm-rom \| Nothing to publish \|/);
   });
 });
+
+describe("public PR text", async () => {
+  const { leaksInternal, cleanMessages, fallbackDescription, describePrompt } = await import("../src/describe.mjs");
+  it("spots our tooling, task numbers and local paths", () => {
+    for (const t of ["Draft opened by Pennyworth for Paperclip task PEN-406.", "see PEN-12", "[README](/home/taylan/pennyworth/tasks/PEN-406/README.md)", "generated with opencode"]) assert.equal(leaksInternal(t), true, t);
+    assert.equal(leaksInternal("chore: add deprecation notice\n\nAdds a deprecation notice ahead of archiving this repository."), false);
+  });
+  it("drops old trailers and falls back to the commit messages", () => {
+    const msgs = cleanMessages("chore: add deprecation notice\n\nPaperclip task: PEN-406\n\x1efix: typo\n\nCorrects the link.\n\x1e");
+    assert.deepEqual(msgs, ["chore: add deprecation notice", "fix: typo\n\nCorrects the link."]);
+    assert.match(fallbackDescription(msgs), /^## Changes\n\n- chore: add deprecation notice\n- fix: typo\n\n  Corrects the link\./);
+    assert.equal(fallbackDescription(["fix: typo\n\nCorrects the link."]), "Corrects the link.");
+  });
+  it("tells the writer to keep the reviewers' view", () => {
+    const p = describePrompt({ repo: "0xPolygon/x", base: "main", request: "Body: `Adds a notice.`", messages: ["chore: add notice"], stat: "", diff: "", report: "" });
+    assert.match(p, /use them exactly/);
+    assert.match(p, /Never mention them, or any task tracker, ticket number, agent, AI tool, local file path or machine/);
+  });
+});

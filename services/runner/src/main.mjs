@@ -11,6 +11,7 @@ import { runAgent } from "./engines.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree, startFreshBranch, nextBranchName } from "./git.mjs";
 import { codexModels, readApproval, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
+import { cleanMessages, leaksInternal, writePrDescription } from "./describe.mjs";
 import { commitMessage, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, publishFooter, subtaskSummary, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import { State } from "./state.mjs";
@@ -432,7 +433,7 @@ async function startJob({ issue, instructions, read, candidates }) {
     const outcome = runOutcome({ ...result, timeoutMinutes: cfg.timeout_minutes ?? 60, mode, dirty: Boolean(summaryBefore.dirty) });
     if (mode === "implement" && summaryBefore.dirty && outcome.finished) {
       await git(worktree, "add", "-A");
-      await git(worktree, "-c", "core.hooksPath=/dev/null", "commit", "--quiet", "-m", commitMessage(result.lastMessage, `chore: ${full.title}`), "-m", `Paperclip task: ${issue.identifier}`);
+      await git(worktree, "-c", "core.hooksPath=/dev/null", "commit", "--quiet", "-m", publicSubject(commitMessage(result.lastMessage, `chore: ${full.title}`)));
       committed = "yes";
     }
     const changes = await changesSummary(worktree, base);
@@ -621,9 +622,23 @@ async function runCommand(issue, task, command) {
   if (command === "pr") {
     if (task.pr_url) return void (await pc.comment(issue.id, upToDate ? `The PR is already open and up to date: ${task.pr_url}` : `Pushed the new commits to the open PR: ${task.pr_url}`));
     const full = await pc.issue(issue.id);
-    const body = `Draft opened by Pennyworth for Paperclip task ${issue.identifier}.\n\n${(await lastReport(issue.id)) ?? ""}`.trim().slice(0, 60_000);
+    // Written for the repository's reviewers: nothing about Pennyworth, tasks or this machine.
+    const range = (await git(task.worktree, "rev-parse", "--verify", "--quiet", `origin/${task.base}`).then(() => true, () => false)) ? [`origin/${task.base}..HEAD`] : ["HEAD"];
+    const messages = cleanMessages(await git(task.worktree, "log", "--reverse", "--format=%B%x1e", ...range).catch(() => ""));
+    const diffRange = range[0] === "HEAD" ? ["4b825dc642cb6eb9a060e54bf8d69288fbee4904", "HEAD"] : [`origin/${task.base}...HEAD`];
+    const stat = await git(task.worktree, "diff", "--stat", ...diffRange).catch(() => "");
+    const diff = await git(task.worktree, "diff", ...diffRange).catch(() => "");
+    const subject = messages.at(-1)?.split("\n")[0] ?? full.title;
+    const fallbackTitle = prTitle(commits, leaksInternal(full.title) ? subject : full.title);
+    const pr = await writePrDescription({
+      cfg, repo: repo.slug, base: task.base,
+      request: await prRequest(full),
+      messages, stat, diff, report: await lastReport(issue.id).catch(() => undefined), fallbackTitle,
+    });
+    const body = leaksInternal(pr.body) ? "" : pr.body;
+    log("pr description", { issue: issue.identifier, generated: pr.generated, rejected: Boolean(pr.rejected) });
     const realGh = await findRealGh();
-    const { stdout } = await execFileP(realGh, ["pr", "create", "--draft", "--repo", repo.slug, "--head", task.branch, "--base", task.base, "--title", prTitle(commits, full.title), "--body", body], { cwd: task.worktree }).catch((err) => {
+    const { stdout } = await execFileP(realGh, ["pr", "create", "--draft", "--repo", repo.slug, "--head", task.branch, "--base", task.base, "--title", pr.title, "--body", body], { cwd: task.worktree }).catch((err) => {
       // gh's error message repeats the whole command line (PR body included): show stderr only.
       throw new UserError(`I couldn't open the PR. GitHub said:\n\`\`\`\n${String(err.stderr || "gh pr create failed").trim().slice(-800)}\n\`\`\``);
     });
@@ -633,6 +648,21 @@ async function runCommand(issue, task, command) {
     await pc.comment(issue.id, `${prNote ? `${prNote}\n\n` : ""}Opened draft PR: ${url}`);
   }
 }
+
+/**
+ * What the PR writer gets as the request: the task, and for an Engineer sub-task also the parent the
+ * user wrote, which is where PR wording rules live (PEN-357's "Title: … Body: …").
+ */
+async function prRequest(full) {
+  const own = [full.title, requestFrom(full) || stripHidden(full.description ?? "").trim()].filter(Boolean).join("\n\n");
+  if (!isAgentSubtask(full)) return own;
+  const parent = await pc.issue(full.parentId).catch(() => undefined);
+  const parentText = parent ? ownRequest(parent) : "";
+  return parentText ? `${own}\n\nThis change is one repository of a larger request (its rules for PR titles and bodies apply):\n\n${parent.title}\n\n${parentText}` : own;
+}
+
+/** Commit subjects are public: never let a task number or our tooling into one. */
+const publicSubject = (subject) => (leaksInternal(subject) ? "chore: update" : subject);
 
 /** Last few lines of a job log, without terminal colour codes (for failure reports). */
 function logTail(path, lines = 6) {

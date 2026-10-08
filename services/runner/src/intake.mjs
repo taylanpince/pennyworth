@@ -107,7 +107,7 @@ export function validateIntake(raw, { candidates, models }) {
 }
 
 /** One no-tools Codex call with a JSON schema for its answer; resolves with the parsed JSON. */
-async function askCodex(cfg, prompt, schema) {
+export async function askCodex(cfg, prompt, schema) {
   const dir = mkdtempSync(join(tmpdir(), "pennyworth-intake-"));
   try {
     writeFileSync(join(dir, "schema.json"), JSON.stringify(schema));
