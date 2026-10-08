@@ -50,11 +50,13 @@ gen_secret paperclip_agent_jwt_secret
 gen_secret ops_mcp_token
 gen_secret google_mcp_token
 gen_secret slack_mcp_token
+gen_secret telegram_mcp_token
 gen_secret board_internal_token   # the board's internal API (D-25)
 placeholder paperclip_ops_key ""
 placeholder google_oauth.json "{}"
 chmod 0600 "$PENNYWORTH_SECRETS_DIR"/*
 mkdir -p "$PENNYWORTH_SECRETS_DIR/slack" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/slack"
+mkdir -p "$PENNYWORTH_SECRETS_DIR/telegram" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/telegram"
 
 echo "Config"
 mkdir -p "$config_dir"

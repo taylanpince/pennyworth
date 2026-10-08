@@ -31,6 +31,9 @@ mcp_servers:
   slack:
     url: http://slack-mcp:8082/mcp
     bearer_token_env_var: PENNYWORTH_SLACK_MCP_TOKEN
+  telegram:
+    url: http://telegram-mcp:8083/mcp
+    bearer_token_env_var: PENNYWORTH_TELEGRAM_MCP_TOKEN
   paperclip_tasks:
     command: node
     args: [/opt/pennyworth/paperclip-tasks-mcp.mjs]
@@ -100,6 +103,18 @@ agents:
     reasoning_effort: medium
     timeout_sec: 1200
     mcp_servers: [slack, paperclip_tasks]
+    enabled_tools:
+      paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status]
+
+  telegram-scout:
+    name: Telegram Scout
+    title: Telegram attention
+    instructions: config/agents/telegram-scout.md
+    adapter: codex_local
+    model: ""
+    reasoning_effort: medium
+    timeout_sec: 1800
+    mcp_servers: [telegram, paperclip_tasks]
     enabled_tools:
       paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status]
 
@@ -200,6 +215,17 @@ routines:
     concurrency: skip_if_active
     schedules:
       - { cron: "*/30 8-20 * * 1-5", timezone: Europe/Madrid, label: "work hours" }
+
+  telegram-scan:
+    title: Telegram scan
+    agent: telegram-scout
+    description: |
+      Today is {{date}}. The user is Dana Whitfield (@danaw) on Telegram. Follow your instructions: close
+      answered Telegram tasks, find messages that need the user, create tasks (deduplicated),
+      acknowledge every candidate you decided on, then close this task with a count summary.
+    concurrency: skip_if_active
+    schedules:
+      - { cron: "15,45 8-20 * * 1-5", timezone: Europe/Madrid, label: "work hours" }
 
   task-replies:
     title: Process task replies

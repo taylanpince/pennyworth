@@ -10,13 +10,14 @@ It is built on [Paperclip](https://github.com/paperclipai/paperclip) (agents, ta
 
 - **Meetings:** transcripts (local files, or Google Meet transcripts and Gemini notes in Drive) are matched to Calendar events. Pennyworth writes a canonical meeting note, appends a dated entry to the right project note, and creates tasks for your own action items.
 - **Slack:** messages waiting on your reply, and things you promised, become tasks. They close themselves once you answer, or once you review the PR you were asked about.
+- **Telegram:** mentions and replies to you in your client chats, and things you promised there, become tasks, through your organization's Telegram MCP (optional).
 - **Email:** threads you label `pennyworth` in Gmail become tasks, and close when you remove the label.
 - **Daily brief:** every weekday morning, a ranked view of your day: priorities, meetings, what's stale.
 - **Assistant:** research and drafts (agendas, summaries) from Slack, Drive, Docs, Calendar and your notes, posted as task comments for you to review. It also acts on your replies to any task.
 - **Coding jobs:** assign a task to an Engineer and say what you want. Codex, Claude Code or an OpenRouter model works in its own git worktree, as you, and nothing is pushed until you say `push` or `pr`.
 - **Board:** a keyboard-driven task board on localhost, also usable from a paired phone at home.
 
-All writes are idempotent, and nothing ambiguous is written. [`docs/SPECS.md`](docs/SPECS.md) is the original spec, and [`docs/DECISIONS.md`](docs/DECISIONS.md) (D-1 to D-24) explains every deviation from it.
+All writes are idempotent, and nothing ambiguous is written. [`docs/SPECS.md`](docs/SPECS.md) is the original spec, and [`docs/DECISIONS.md`](docs/DECISIONS.md) (D-1 to D-27) explains every deviation from it.
 
 ```text
 host (Linux, systemd user services)
@@ -29,6 +30,7 @@ host (Linux, systemd user services)
     ├── ops-mcp                no Internet route; SQLite state; the only Obsidian writer
     ├── google-workspace-mcp   Calendar, Drive, Docs, Gmail: read-only scopes, GET requests only
     ├── slack-mcp              read-only proxy to Slack's official MCP server
+    ├── telegram-mcp           read-only proxy to a Telegram MCP; scans your chats for mentions in the background
     └── board                  127.0.0.1:3120 task board (optional LAN listener for paired phones)
 services/paperclip-tasks-mcp   stdio bridge, mounted into paperclip, for agents' task updates
 ```
@@ -110,7 +112,7 @@ Then drop a transcript into your transcripts folder, or have a Meet call that pr
 | Run the meeting scan now | `scripts/trigger-meeting-scan.sh` |
 | Todo list in the terminal | `scripts/todo.mjs` (see [Todo list](#todo-list)) |
 | Logs | `docker compose logs -f ops-mcp` (structured; no transcript text, no secrets), `journalctl --user -u pennyworth-runner -f` |
-| Tests | `npm test --prefix services/<ops-mcp\|google-workspace-mcp\|slack-mcp\|board\|runner>` |
+| Tests | `npm test --prefix services/<ops-mcp\|google-workspace-mcp\|slack-mcp\|telegram-mcp\|board\|runner>` |
 | Intake evaluation | `npm run eval:intake --prefix services/runner` (real comments against the request reader; see `config/intake-cases.example.yaml`) |
 
 [`AGENTS.md`](AGENTS.md) has the deploy commands per service, debugging recipes and the pitfalls found so far.
@@ -122,6 +124,7 @@ Then drop a transcript into your transcripts folder, or have a Meet call that pr
 | Meeting Librarian | file watcher + every 15 min in work hours | ops-mcp; Calendar/Drive read; its own tasks |
 | Chief of Staff | weekdays 08:30 → "Daily Brief — date" | Calendar read; Paperclip task list/create/update |
 | Slack Scout | every 30 min in work hours | Slack read/search; Paperclip task search/create/update/close |
+| Telegram Scout | every 30 min in work hours | Telegram read (allowed chats) and prepared mention candidates; Paperclip task search/create/update/close |
 | Inbox Agent | every 30 min in work hours: one task per Gmail thread labelled `pennyworth` (archived or not), closed when the label is removed | Gmail read/search; Paperclip task search/create/update/close |
 | Assistant | when assigned, and on your task replies | Slack/Docs/Drive/Calendar read; notes read + meeting-note corrections; cached web search; Paperclip tasks |
 | Engineer · Codex / · Claude / · GLM | never woken: assignment targets for the runner | none (the runner does the work) |
@@ -241,6 +244,19 @@ The Slack Scout creates two kinds of tasks, each with a permalink and a `source:
 - `needs-response`: someone is waiting for your reply. It closes once you answer in the thread. A request to review a GitHub PR closes once you've reviewed it, or it's merged or closed (the runner checks with read-only `gh`).
 - `todo`: something you promised.
 
+## Telegram
+
+Optional. Pennyworth reads Telegram through your organization's Telegram MCP server, one that holds your own Telegram session and an allowlist of chats you pick, and supports OAuth with dynamic client registration ([D-27](docs/DECISIONS.md)). Set its endpoint as `TELEGRAM_MCP_URL` and who you are (`TELEGRAM_ME_NAMES`, `TELEGRAM_ME_HANDLES`, `TELEGRAM_ME_ALIASES`) in `.env`, then:
+
+```sh
+scripts/telegram-auth.sh           # once: open the printed URL, sign in, link Telegram, pick your chats
+node scripts/paperclip-setup.mjs   # activates the Telegram scan routine
+```
+
+The callback is `http://localhost:3119/callback`, so open the URL on the machine running Pennyworth. Pennyworth sees only the chats you picked; add new ones in the server's chat picker.
+
+The `telegram-mcp` sidecar exposes only read tools: drafting and changing the chat allowlist are never listed. It scans your chats every 15 minutes (the server takes seconds per call), keeping only cursors and message IDs on disk. It finds mentions of you by handle or name, replies to your messages, DMs and your own messages. The Telegram Scout decides which need a task, using the Slack Scout's rules, and closes a `needs-response` task once you've replied in the chat.
+
 ## Google
 
 Pennyworth uses its own read-only sidecar (`services/google-workspace-mcp`) rather than Paperclip's Google connector ([D-9](docs/DECISIONS.md)).
@@ -257,7 +273,7 @@ If Workspace policy blocks consent, nothing else breaks: matching reports "calen
 
 | File | Purpose | In git |
 |---|---|---|
-| `.env` | host paths, user IDs, vault folders, board LAN settings, Slack client ID | no (`.env.example`) |
+| `.env` | host paths, user IDs, vault folders, board LAN settings, Slack client ID, Telegram endpoint and your names there | no (`.env.example`) |
 | `config/system.yaml` | ops-mcp: timezone, your names and emails, transcript roots, cutoff, vault roots, thresholds | no (`system.example.yaml`) |
 | `config/routing.yaml` | meeting → note rules | no (`routing.example.yaml`) |
 | `config/paperclip.yaml` | company, labels, agents, routines and schedules, MCP servers, Codex hardening | no (`paperclip.example.yaml`) |

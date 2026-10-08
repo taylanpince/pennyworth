@@ -42,6 +42,11 @@ for c in $containers; do
         pass "ops-mcp: no Internet egress"
       fi
       ;;
+    *telegram-mcp*)
+      [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "telegram-mcp: no published ports" || fail "telegram-mcp publishes ports"
+      [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
+        && pass "telegram-mcp: only its own token/state directory mounted" || fail "telegram-mcp has unexpected mounts: $mounts"
+      ;;
     *board*)
       # 3120 is the trusted local board; 3121 (LAN, D-23) may be published, but only serves paired devices.
       local_port="$(docker inspect "$c" --format '{{json (index .HostConfig.PortBindings "3120/tcp")}}')"
@@ -88,7 +93,8 @@ echo "Capabilities (by construction)"
 pass "ops-mcp exposes no delete/replace/arbitrary-write tools (see services/ops-mcp/src/mcp/tools.ts)"
 pass "google-workspace-mcp requests only *.readonly scopes and has GET-only client code"
 pass "slack-mcp exposes only allowlisted read tools and never send/react/edit tools (services/slack-mcp/src/policy.ts)"
-pass "no email/Slack send or calendar write tool is configured for any agent"
+pass "telegram-mcp exposes only allowlisted read tools; never send, draft or allowlist-change tools (services/telegram-mcp/src/policy.ts)"
+pass "no email/Slack/Telegram send or calendar write tool is configured for any agent"
 
 echo
 [ "$fails" -eq 0 ] && echo "All security checks passed." || { echo "$fails security check(s) failed."; exit 1; }

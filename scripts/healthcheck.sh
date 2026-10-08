@@ -52,6 +52,14 @@ else
   printf '  skip  slack (not connected: %s)\n' "$(echo "$s_health" | cut -c1-80)"
 fi
 
+t_health="$(dc exec -T paperclip node -e "fetch('http://telegram-mcp:8083/healthz').then(r=>r.text()).then(console.log).catch(e=>{console.log(e.message);process.exit(1)})" 2>/dev/null)"
+if echo "$t_health" | grep -q '"ok":true'; then
+  ttoken="$(cat "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/telegram_mcp_token" 2>/dev/null)"
+  check "telegram read (allowed chats)" sh -c "docker compose --env-file '$env_file' exec -T paperclip node /tmp/mcp-call.mjs http://telegram-mcp:8083/mcp list_allowed_chats '{}' '$ttoken' >/dev/null"
+else
+  printf '  skip  telegram (not connected: %s)\n' "$(echo "$t_health" | cut -c1-80)"
+fi
+
 check "board (127.0.0.1:3120)" sh -c 'curl -fsS --max-time 5 http://127.0.0.1:3120/healthz | grep -q ok && curl -fsS --max-time 10 http://127.0.0.1:3120/api/board | grep -q "\"buckets\""'
 
 check "watcher webhook configured" test -s "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/meeting_webhook_url"

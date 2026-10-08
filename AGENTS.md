@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-26) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-27) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -17,6 +17,7 @@ host (NixOS, user taylan)
     ├── ops-mcp              TypeScript: transcripts, matcher, vault writer, routing, review replies, tasks
     ├── google-workspace-mcp read-only Calendar/Drive/Docs/Gmail, multi-account
     ├── slack-mcp            read-only proxy to mcp.slack.com (allowlisted read tools)
+    ├── telegram-mcp         read-only proxy to the org's Telegram MCP; background mention scan (D-27)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
                              :3121 on the LAN (pennyworth.local, paired devices from the home subnet only, D-23)
                              :3122 internal API (bearer token): scheduled moves and recurring tasks for the bridge and the runner (D-25)
@@ -30,6 +31,7 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`:
 | Meeting Librarian | meeting memory |
 | Chief of Staff | daily brief |
 | Slack Scout | Slack items for the user |
+| Telegram Scout | Telegram mentions, replies and DMs for the user, from the proxy's prepared candidates |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
 | Assistant | research and drafts, acting on the user's replies (including scheduling a task or making it recurring), and running recurring tasks |
 | Engineer · Codex / · Claude / · GLM | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20) |
@@ -41,13 +43,14 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`:
 npm test --prefix services/ops-mcp                 # vitest
 npm test --prefix services/google-workspace-mcp
 npm test --prefix services/slack-mcp
+npm test --prefix services/telegram-mcp
 npm test --prefix services/runner                  # node --test
 npm test --prefix services/board                   # vitest (server); npm run typecheck --prefix services/board covers the web app
 npm run eval:intake --prefix services/runner       # real comments through the real intake, 3 runs each (~2 min)
 npx tsc --noEmit -p services/<svc>/tsconfig.json   # typecheck TS services
 
 # deploy
-docker compose up -d --build <ops-mcp|google-workspace-mcp|slack-mcp|board>   # after code changes
+docker compose up -d --build <ops-mcp|google-workspace-mcp|slack-mcp|telegram-mcp|board>   # after code changes
 docker compose up -d paperclip                     # after compose env/entrypoint changes
 node scripts/paperclip-setup.mjs                   # after config/paperclip.yaml or config/agents/*.md changes (idempotent)
 systemctl --user restart pennyworth-runner         # after services/runner changes
@@ -66,7 +69,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
   docker compose exec -T paperclip node /tmp/mcp-call.mjs http://ops-mcp:8080/mcp <tool> '<json>' "$(cat ~/.config/pennyworth/ops_mcp_token)"
   ```
 
-  Use `--list` in place of the tool name to list tools. The tokens for the other servers are `google_mcp_token` and `slack_mcp_token`.
+  Use `--list` in place of the tool name to list tools. The tokens for the other servers are `google_mcp_token`, `slack_mcp_token` and `telegram_mcp_token` (`http://telegram-mcp:8083/mcp`).
 - **Paperclip API as the user:** `Authorization: Bearer $(cat ~/.config/pennyworth/paperclip_board_key)`. The company ID is in `config/system.yaml`.
 - **Agent run logs:** `data/paperclip/instances/default/data/run-logs/<company>/<agent>/<run>.ndjson`. The `chunk` fields contain Codex JSON events.
 - **Runner:** `journalctl --user -u pennyworth-runner`, plus job logs in `~/.local/state/pennyworth-runner/logs/`.
@@ -147,6 +150,14 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Sessions are engine-specific.** A Codex thread ID can't be resumed by opencode (`ses_…` IDs) or Claude Code; switching engines starts fresh with the task's earlier requests as context.
 - **Claude Code must not inherit the user's Claude setup.** By default `claude -p` loads every MCP server, plugin, hook and claude.ai connector (Slack send, Calendar writes, GitHub MCP pushes…). The runner uses its own `CLAUDE_CONFIG_DIR`, a `setup-token` OAuth token, `--setting-sources ""`, `--strict-mcp-config` with no servers, `ENABLE_CLAUDEAI_MCP_SERVERS=false` and a `--tools` allowlist. Don't point it at `~/.claude`: writable hooks or settings there would run unsandboxed in the user's own sessions.
 - **`claude --mcp-config` is variadic** and swallows a trailing prompt argument; the runner sends the prompt on stdin.
+
+### Telegram
+
+- **The upstream server is slow:** 5 to 30 seconds per call, and concurrent calls queue. Never put a Telegram scan on an agent's tool path; the proxy scans in the background and `telegram_mentions` only returns what's prepared (D-27). Probing it by hand while the proxy scans makes both slower.
+- **`chat_ref`s change** whenever the user edits the allowlist ("old refs stop working", and they then answer "access denied"). Cursors are dropped for refs that vanish, and follow-ups find a chat by title.
+- **Message IDs have gaps:** small groups and DMs share the account's ID counter. Read "the messages before" with `read_chat_history`, never by ID range. `read_chat_history` returns newest first, up to 50; `get_new_messages` returns oldest first, up to 100.
+- **Who is who:** messages carry only `display_name` (e.g. "Name | Company"), no sender IDs. Your own messages match `TELEGRAM_ME_NAMES` as a prefix.
+- **Content arrives wrapped** in `<untrusted-telegram-content>` tags, and people paste API keys into these chats. The scout prompt forbids copying credentials into tasks.
 
 ### Slack
 
