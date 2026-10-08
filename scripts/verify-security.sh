@@ -33,7 +33,8 @@ for c in $containers; do
         && pass "paperclip: published on 127.0.0.1 only" || fail "paperclip port binding is not loopback-only: $ports"
       ;;
     *ops-mcp*)
-      echo "$mounts" | tr ';' '\n' | grep '/sources/transcripts' | grep -q '|false$' && pass "ops-mcp: transcripts mounted read-only" || fail "ops-mcp: transcripts not read-only"
+      # Writable on purpose (D-26): ops-mcp renames published transcripts and deletes their audio.
+      echo "$mounts" | tr ';' '\n' | grep -q '|/sources/transcripts|' && pass "ops-mcp: transcripts mounted (writable for organizing, D-26)" || fail "ops-mcp: transcripts not mounted"
       [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "ops-mcp: no published ports" || fail "ops-mcp publishes ports"
       if docker exec "$c" node -e "fetch('https://api.openai.com',{signal:AbortSignal.timeout(4000)}).then(()=>process.exit(0)).catch(()=>process.exit(1))" 2>/dev/null; then
         fail "ops-mcp has Internet egress"

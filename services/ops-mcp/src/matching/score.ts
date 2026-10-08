@@ -128,6 +128,17 @@ function linkScore(ev: SourceEvidence, event: CalendarEvent, notes: string[]): {
   return { score: 0, explicit: false };
 }
 
+const MIN_RECORDING_MS = 2 * MINUTE;
+
+/** Share of the recording [startMs, recordingEndMs] inside the event, or undefined when the span is unknown. */
+function recordingOverlap(ev: SourceEvidence, startMs: number, endMs: number): number | undefined {
+  if (ev.startMs === undefined || ev.recordingEndMs === undefined) return undefined;
+  const length = ev.recordingEndMs - ev.startMs;
+  if (length < MIN_RECORDING_MS) return undefined;
+  const inside = Math.min(ev.recordingEndMs, endMs) - Math.max(ev.startMs, startMs);
+  return Math.max(0, inside) / length;
+}
+
 /**
  * Declined events stay eligible for shared meeting documents: the user still gets Gemini
  * notes for meetings he declined. A local transcript is his own recording, so a declined
@@ -164,6 +175,8 @@ export function scoreCandidates(ev: SourceEvidence, events: CalendarEvent[], cfg
     const attendees = attendeeScore(ev, event, ctx, notes);
     const filename = filenameScore(ev, event, eventTokens, ctx, notes);
     const link = linkScore(ev, event, notes);
+    const overlap = recordingOverlap(ev, startMs, endMs);
+    if (overlap !== undefined) notes.push(`covers ${Math.round(overlap * 100)}% of the recording`);
     const components = {
       temporal: round1(temporal),
       title: round1(title),
@@ -179,6 +192,7 @@ export function scoreCandidates(ev: SourceEvidence, events: CalendarEvent[], cfg
       score: round1(Math.min(100, temporal + title + attendees + filename + link.score)),
       components,
       explicit_link: link.explicit,
+      ...(overlap !== undefined ? { recording_overlap: Math.round(overlap * 1000) / 1000 } : {}),
       notes,
     });
   }
@@ -204,6 +218,21 @@ export function decide(candidates: ScoredCandidate[], cfg: Config): MatchDecisio
       chosen: explicit[0],
       candidates,
       explanation: `Explicit link: the source document is attached to ${describe(explicit[0]!, cfg.timezone)}.`,
+    };
+  }
+
+  // A local recording runs from when the user pressed record until the audio stopped. The
+  // event it sits inside is the meeting, unless another event claims a real share of it
+  // (double-booked, or recording ran on into the next meeting).
+  const byOverlap = candidates.filter((c) => c.recording_overlap !== undefined).sort((a, b) => b.recording_overlap! - a.recording_overlap!);
+  const [owner, rival] = byOverlap;
+  if (owner && owner.recording_overlap! >= m.recording_overlap_min && (rival?.recording_overlap ?? 0) < m.recording_overlap_rival) {
+    return {
+      status: "matched",
+      score: owner.score,
+      chosen: owner,
+      candidates,
+      explanation: `Recording falls within ${describe(owner, cfg.timezone)}: covers ${Math.round(owner.recording_overlap! * 100)}% of it${rival ? `, next best ${Math.round(rival.recording_overlap! * 100)}%` : ""}.`,
     };
   }
 

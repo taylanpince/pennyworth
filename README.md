@@ -144,12 +144,13 @@ Every task Pennyworth creates is assigned to you, and only for *your own* clear 
    | Filename | 0–10 |
    | Meet link / location | 0–5 |
 
-   **≥ 75 and unambiguous:** matched. **55–74, or ambiguous:** a review task. **< 55:** unmatched, retried later. A Drive document attached to exactly one event matches it directly. Events you declined still count: Gemini notes are shared for those too.
+   **≥ 75 and unambiguous:** matched. **55–74, or ambiguous:** a review task. **< 55:** unmatched, retried later. A Drive document attached to exactly one event matches it directly. A local recording whose audio is still next to it matches the event it sits inside (at least 60% of the recording, and no other event with 30% or more), even with no other evidence. Events you declined still count: Gemini notes are shared for those too.
 4. **Publish.** The agent reads the source and calls `meeting_publish` with a structured extraction (summary, explicit or probable decisions, actions with owner and deadline only when stated, open questions). ops-mcp then:
-   - writes `Meetings/YYYY/MM/YYYY-MM-DD HHMM - Title.md`;
+   - writes `Meetings/YYYY/MM/YYYY-MM-DD HHMM - Title.md`, tagged `type/meeting` (search `tag:#type/meeting` in Obsidian);
    - routes the meeting: explicit rules in `config/routing.yaml`, then remembered choices, then topic keywords, else the agent's best guess of an existing project note (or none). It never asks you;
    - appends a Meeting Log entry with a `<!-- paperclip-meeting:<event id> -->` marker (never twice);
-   - creates tasks for your own action items.
+   - creates tasks for your own action items;
+   - renames a recorder-named transcript (`2026-10-08_11-01-59.txt`) after the meeting (`Dana-2026-10-08.txt`, 1:1s into `1-1s/`) and deletes its audio. Files you named yourself keep their names.
 
 **Review tasks:** comment `pick 2` (number from the list) or `ignore`, then wait for the next scan or click **Run now**.
 

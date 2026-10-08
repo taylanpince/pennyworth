@@ -21,6 +21,22 @@ const TranscriptsSchema = z.object({
   max_match_attempts: z.number().int().positive().default(3),
   // Max characters of transcript text scanned for attendee/link evidence.
   evidence_scan_chars: z.number().int().positive().default(200_000),
+  // Audio recorded next to a transcript (same name, one of these extensions). Its length
+  // marks when the recording ended, and it is deleted once the meeting is published.
+  audio_extensions: z.array(z.string()).default([".wav"]),
+  organize: z
+    .object({
+      // Rename recorder-named transcripts ("2026-10-08_11-01-59.txt") after the meeting they
+      // matched, the way rename-transcript.sh did: "<Title>-<YYYY-MM-DD>.txt".
+      rename: z.boolean().default(true),
+      // Only file stems matching this regex are renamed; names the user chose are kept.
+      unnamed_pattern: z.string().default("^\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}$"),
+      // 1:1s (exactly one other attendee) move into this folder under the transcript root.
+      one_on_one_dir: z.string().default("1-1s"),
+      // Delete the recording's audio once its meeting note is written.
+      delete_audio: z.boolean().default(true),
+    })
+    .prefault({}),
 });
 
 const VaultSchema = z.object({
@@ -31,6 +47,8 @@ const VaultSchema = z.object({
   write_roots: z.array(z.string()).min(1),
   meetings_root: z.string().default("Meetings"),
   target_heading: z.string().default("Meeting Log"),
+  // Frontmatter tags on every canonical meeting note (in Obsidian: tag:#type/meeting).
+  meeting_tags: z.array(z.string()).default(["type/meeting"]),
   max_search_results: z.number().int().positive().default(20),
 });
 
@@ -45,6 +63,10 @@ const MatchingSchema = z.object({
   // A candidate with at least this temporal score is never silently "unmatched":
   // it goes to review even if the total is below review_threshold (spec §42).
   review_min_temporal: z.number().min(0).max(50).default(40),
+  // Local recordings with a known start and end: auto-match the event that covers at least
+  // this share of the recording, when no other event covers recording_overlap_rival or more.
+  recording_overlap_min: z.number().min(0).max(1).default(0.6),
+  recording_overlap_rival: z.number().min(0).max(1).default(0.3),
   // Generic words ignored for title similarity.
   title_stopwords: z
     .array(z.string())

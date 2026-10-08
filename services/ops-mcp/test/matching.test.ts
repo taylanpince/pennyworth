@@ -148,3 +148,35 @@ describe("meeting matching", () => {
     expect(d.chosen?.event_id).toBe("withdoc");
   });
 });
+
+describe("local recordings (start from the filename, end from the audio)", () => {
+  const oneOnOne = (id: string, who: string, start: string, end: string) =>
+    event({ id, title: `Taylan / ${who}`, start, end, attendees: [{ email: "taylan@example.com", self: true }, { email: `${who.toLowerCase()}@example.com` }] });
+  const dana = oneOnOne("dana", "Dana", "2026-10-07T15:00:00+02:00", "2026-10-07T15:30:00+02:00");
+  const eli = oneOnOne("eli", "Eli", "2026-10-07T15:30:00+02:00", "2026-10-07T16:00:00+02:00");
+
+  it("auto-matches the 1:1 the recording sits in, though nothing in the text names it", () => {
+    // Started 14 minutes in: by start time alone the next 1:1 is nearly as close (needed review before).
+    const d = run(ev({ startMs: at("2026-10-07T15:13:58+02:00"), recordingEndMs: at("2026-10-07T15:22:40+02:00"), dateHint: "2026-10-07" }), [dana, eli]);
+    expect(d.status).toBe("matched");
+    expect(d.chosen?.event_id).toBe("dana");
+    expect(d.explanation).toMatch(/covers 100% of it, next best 0%/);
+  });
+
+  it("a recording that runs a few minutes into the next meeting still matches the first", () => {
+    const sync = event({ id: "sync", title: "Team Eng Sync", start: "2026-10-07T16:00:00+02:00", end: "2026-10-07T17:00:00+02:00", attendees: people("Carol", "Dan", "Taylan") });
+    const d = run(ev({ startMs: at("2026-10-07T15:32:40+02:00"), recordingEndMs: at("2026-10-07T16:02:54+02:00") }), [eli, sync]);
+    expect(d.status).toBe("matched");
+    expect(d.chosen?.event_id).toBe("eli");
+  });
+
+  it("double-booked or spanning two meetings goes to review", () => {
+    const clash = event({ ...dana, id: "clash", title: "Vendor call", attendees: people("Vic", "Taylan") });
+    expect(run(ev({ startMs: at("2026-10-07T15:02:00+02:00"), recordingEndMs: at("2026-10-07T15:28:00+02:00") }), [dana, clash]).status).toBe("needs_review");
+    expect(run(ev({ startMs: at("2026-10-07T15:15:00+02:00"), recordingEndMs: at("2026-10-07T15:45:00+02:00") }), [dana, eli]).status).toBe("needs_review");
+  });
+
+  it("without the audio's end the old evidence rules apply", () => {
+    expect(run(ev({ startMs: at("2026-10-07T15:13:58+02:00"), endMs: at("2026-10-07T15:28:18+02:00") }), [dana, eli]).status).toBe("needs_review");
+  });
+});

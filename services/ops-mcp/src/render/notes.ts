@@ -10,6 +10,7 @@ export interface MeetingInfo {
   timezone: string; // display timezone
   attendees: string[];
   html_link?: string;
+  tags?: string[];
 }
 
 export interface SourceRef {
@@ -60,6 +61,7 @@ export function renderCanonicalNote(m: MeetingInfo, x: Extraction, sources: Sour
   const end = localParts(Date.parse(m.end_at), m.timezone);
   const frontmatter = {
     type: "meeting",
+    ...(m.tags?.length ? { tags: m.tags } : {}),
     calendar_event_id: m.calendar_event_id,
     date: p.date,
     start: p.time,

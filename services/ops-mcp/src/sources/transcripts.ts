@@ -5,6 +5,7 @@ import { PathRejectedError } from "../util/errors.js";
 import { sha256 } from "../util/ids.js";
 import { realRoots, resolveAbsoluteWithin } from "../util/paths.js";
 import { toIso } from "../util/time.js";
+import { siblingAudio, wavDurationMs } from "./audio.js";
 import { parseFilename, transcriptToText } from "./parse.js";
 import type { SourceRow, SourceStore } from "./store.js";
 
@@ -64,12 +65,19 @@ export class TranscriptScanner {
           report.settling.push(real);
           continue;
         }
+        const contentHash = sha256(content);
+        // A known transcript the user (or ops-mcp) renamed or moved: follow it, don't re-register it.
+        if (this.store.relocateMoved("local_transcript", contentHash, real, (p) => existsSync(p))) {
+          report.unchanged++;
+          continue;
+        }
         const hints = parseFilename(real, this.cfg.transcripts.filename_patterns, this.cfg.timezone);
+        const recordingEnd = this.recordingEnd(real, hints.startMs);
         const { source, created } = this.store.upsert({
           source_type: "local_transcript",
           external_id: real,
           path: real,
-          content_hash: sha256(content),
+          content_hash: contentHash,
           size: st.size,
           created_at: toIso(st.birthtimeMs || st.mtimeMs),
           modified_at: toIso(st.mtimeMs),
@@ -80,6 +88,7 @@ export class TranscriptScanner {
             start_hint: hints.startMs !== undefined ? toIso(hints.startMs) : undefined,
             end_hint: toIso(st.mtimeMs),
             time_basis: hints.startMs !== undefined ? "filename" : "mtime",
+            recording_end_hint: recordingEnd !== undefined ? toIso(recordingEnd) : undefined,
             ext: extname(real).toLowerCase(),
           },
         });
@@ -94,6 +103,23 @@ export class TranscriptScanner {
       }
     }
     return report;
+  }
+
+  /**
+   * When the recording next to a transcript ended: the recorder's filename gives the start
+   * and the WAV header the length. Without a readable header, the audio's mtime (when the
+   * recorder last wrote to it). Undefined when there is no audio.
+   */
+  private recordingEnd(transcript: string, startMs: number | undefined): number | undefined {
+    const audio = siblingAudio(transcript, this.cfg.transcripts.audio_extensions);
+    if (!audio) return undefined;
+    try {
+      const duration = extname(audio).toLowerCase() === ".wav" ? wavDurationMs(audio) : undefined;
+      if (startMs !== undefined && duration !== undefined) return startMs + duration;
+      return statSync(audio).mtimeMs;
+    } catch {
+      return undefined;
+    }
   }
 
   /** Read a registered local transcript by source ID, re-validating its path. */

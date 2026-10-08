@@ -55,6 +55,8 @@ export interface ScoredCandidate {
   score: number;
   components: ScoreComponents;
   explicit_link: boolean;
+  /** Share of a local recording (0–1) that falls inside this event, when the recording's span is known. */
+  recording_overlap?: number;
   notes: string[];
 }
 
@@ -72,6 +74,7 @@ export interface MatchDecision {
 export interface SourceEvidence {
   startMs?: number; // start time hint (filename / provider)
   endMs?: number; // end time hint (file mtime / doc modified)
+  recordingEndMs?: number; // local recordings: when the audio ended (startMs is when it began)
   dateHint?: string; // local YYYY-MM-DD
   titleHints: string[];
   filenameTitle?: string;

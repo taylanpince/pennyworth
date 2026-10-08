@@ -9,6 +9,7 @@ import { ExtractionSchema, inline } from "../render/extraction.js";
 import { canonicalNotePath, meetingMarker, type MeetingInfo, renderCanonicalNote, renderMeetingLogEntry, type SourceRef, wikiTarget } from "../render/notes.js";
 import type { Router } from "../routing/routing.js";
 import type { SourceMetadata, SourceRow, SourceStore } from "../sources/store.js";
+import { deleteAudio, renameTranscript } from "../sources/organize.js";
 import { parseMeetDocTitle } from "../sources/parse.js";
 import { ACTIONABLE_STATUSES } from "../sources/store.js";
 import { parseMatchCommand } from "./review-commands.js";
@@ -63,6 +64,7 @@ export interface PublishResult {
   review_tasks: TaskOutcome[];
   action_tasks: TaskOutcome[];
   status: string;
+  transcript?: { file?: string; audio_deleted?: boolean };
 }
 
 const UNTRUSTED_BANNER =
@@ -84,6 +86,8 @@ export class MeetingService {
 
   async scan(): Promise<Record<string, unknown>> {
     const report = this.scanner.scan();
+    const organized = this.organizeProcessed();
+    this.tagMeetingNotes();
     const retried = await this.tasks.retryPending();
     const reviews = await this.syncReviews();
     const toClose = await this.tasks.pendingCloses();
@@ -97,6 +101,7 @@ export class MeetingService {
     return {
       new_sources: report.registered.length,
       unchanged: report.unchanged,
+      transcripts_organized: organized || undefined,
       ignored_before_cutoff: report.ignored,
       settling: report.settling.length,
       rejected: report.rejected.map((r) => ({ file: r.path.split("/").pop(), reason: r.reason })),
@@ -293,6 +298,7 @@ export class MeetingService {
     return {
       startMs: md.start_hint ? Date.parse(md.start_hint) : undefined,
       endMs: md.end_hint ? Date.parse(md.end_hint) : undefined,
+      recordingEndMs: md.recording_end_hint ? Date.parse(md.recording_end_hint) : undefined,
       dateHint: md.date_hint,
       titleHints: hints.title_guesses,
       filenameTitle: md.title_hint,
@@ -408,6 +414,114 @@ export class MeetingService {
     return applied;
   }
 
+  // ---------------------------------------------------------------- transcript files
+
+  /**
+   * Rename a matched, recorder-named local transcript after its meeting (D-26). Failures are
+   * logged and retried after publishing; they never block the meeting note.
+   */
+  private renameSource(s: SourceRow, meeting: MeetingRow): void {
+    const o = this.cfg.transcripts.organize;
+    const md = this.sources.metadata(s);
+    if (s.source_type !== "local_transcript" || !s.path || md.organized?.from || !o.rename) return;
+    const from = s.path;
+    try {
+      const out = renameTranscript(
+        this.cfg,
+        this.scanner.roots(),
+        from,
+        { title: meeting.title, start_at: meeting.start_at, attendees: JSON.parse(meeting.attendees_json) },
+        (to) => this.sources.relocate("local_transcript", s.external_id, to),
+        () => this.sources.relocate("local_transcript", this.requireSource(s.id).external_id, from),
+      );
+      const fresh = this.sources.metadata(this.requireSource(s.id));
+      this.sources.setMetadata(s.id, { ...fresh, organized: { ...fresh.organized, from, ...out } });
+      if (out.to) this.log.info({ source_id: s.id, from: from.split("/").pop(), to: out.to.split("/").pop() }, "transcript renamed");
+    } catch (err) {
+      this.log.warn({ source_id: s.id, err: String(err) }, "transcript rename failed; retried on the next scan");
+    }
+  }
+
+  /** After the meeting note is written: delete the recording's audio and mark the source organized. */
+  private finishOrganizing(sourceId: string): { file?: string; audio_deleted?: boolean } | undefined {
+    const s = this.requireSource(sourceId);
+    if (s.source_type !== "local_transcript" || !s.path) return undefined;
+    const md = this.sources.metadata(s);
+    if (!md.organized?.from && this.cfg.transcripts.organize.rename) return undefined; // rename failed: retry later
+    let audio: string | undefined;
+    try {
+      if (this.cfg.transcripts.organize.delete_audio) audio = deleteAudio(this.cfg, this.scanner.roots(), md.organized?.from ?? s.path);
+    } catch (err) {
+      this.log.warn({ source_id: s.id, err: String(err) }, "deleting the recording's audio failed; retried on the next scan");
+      return { file: s.path.split("/").pop() };
+    }
+    if (audio) this.log.info({ source_id: s.id, audio: audio.split("/").pop() }, "recording audio deleted");
+    this.sources.setMetadata(s.id, { ...md, organized: { ...md.organized, at: nowIso(), ...(audio ? { audio_deleted: audio.split("/").pop() } : {}) } });
+    return { file: s.path.split("/").pop(), audio_deleted: audio !== undefined };
+  }
+
+  /**
+   * Transcripts published before their files could be organized (or whose rename failed):
+   * rename, delete the audio, and refresh the meeting note so it lists the new file name.
+   */
+  private organizeProcessed(): number {
+    const rows = this.db
+      .prepare(
+        `SELECT s.* FROM sources s WHERE s.source_type = 'local_transcript' AND s.status = 'processed'
+           AND COALESCE(json_extract(s.metadata_json, '$.organized.at'), '') = ''
+           AND s.revision = (SELECT MAX(revision) FROM sources o WHERE o.source_type = s.source_type AND o.external_id = s.external_id)
+         ORDER BY s.first_seen_at LIMIT 25`,
+      )
+      .all() as unknown as SourceRow[];
+    let done = 0;
+    for (const s of rows) {
+      const decision = this.decision(s.id);
+      const meeting = decision?.chosen_event_id ? this.meetingByEvent(decision.chosen_event_id) : undefined;
+      if (!meeting) continue;
+      const before = s.path;
+      this.renameSource(s, meeting);
+      const out = this.finishOrganizing(s.id);
+      if (!out) continue;
+      done++;
+      if (this.requireSource(s.id).path !== before && meeting.extraction_json && this.vault.available()) {
+        try {
+          this.writeCanonical(meeting, JSON.parse(meeting.extraction_json) as Extraction, this.requireSource(s.id));
+        } catch (err) {
+          this.log.warn({ meeting_id: meeting.id, err: String(err) }, "could not refresh the meeting note after renaming its transcript");
+        }
+      }
+    }
+    return done;
+  }
+
+  /**
+   * Add the configured tags to canonical meeting notes written before tagging existed. Runs
+   * once per tag set. Notes that already have a tags key are left as the user keeps them.
+   */
+  private tagMeetingNotes(): void {
+    const tags = this.cfg.vault.meeting_tags;
+    const marker = "maintenance:meeting_tags";
+    const want = JSON.stringify(tags);
+    if (!tags.length || this.getCursor(marker).cursor === want || !this.vault.available()) return;
+    const rows = this.db.prepare("SELECT * FROM meetings WHERE canonical_note_path IS NOT NULL").all() as unknown as MeetingRow[];
+    for (const m of rows) {
+      const path = m.canonical_note_path!;
+      try {
+        if (!this.vault.exists(path)) continue;
+        const ours = this.vault.read(path).version === m.canonical_note_hash;
+        const written = this.vault.editNote(path, (c) => addFrontmatterTags(c, tags));
+        // A note only Pennyworth has written stays Pennyworth's to update.
+        if (written && ours) this.setCanonical(m.id, path, written.version);
+      } catch (err) {
+        this.log.warn({ path, err: String(err) }, "could not tag meeting note; retried on the next scan");
+        return;
+      }
+    }
+    this.db
+      .prepare("INSERT INTO sync_cursors (name, cursor, updated_at) VALUES (?, ?, ?) ON CONFLICT (name) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at")
+      .run(marker, want, nowIso());
+  }
+
   private noteExists(path: string): boolean {
     try {
       return this.vault.exists(path);
@@ -461,6 +575,9 @@ export class MeetingService {
       action_tasks: [],
       status: "processed",
     };
+
+    // Recorder-named transcripts get the meeting's name before the note lists them as its source.
+    this.renameSource(s, meeting);
 
     // 1. Canonical meeting note (always first).
     const vaultUp = this.vault.available();
@@ -516,6 +633,7 @@ export class MeetingService {
     }
 
     this.sources.setStatus(s.id, result.status === "processed" ? "processed" : "obsidian_write_pending", result.status === "processed" ? undefined : "vault unavailable");
+    if (result.status === "processed") result.transcript = this.finishOrganizing(s.id);
     this.finishRun(runId, "ok", { note: result.canonical_note, targets: result.targets, tasks: result.action_tasks.length });
     this.log.info(
       {
@@ -844,6 +962,7 @@ export class MeetingService {
       end_at: m.end_at,
       timezone: this.cfg.timezone,
       attendees,
+      tags: this.cfg.vault.meeting_tags,
       html_link: m.html_link ?? undefined,
     };
   }
@@ -888,4 +1007,16 @@ export class MeetingService {
   private finishRun(id: string, status: "ok" | "error", detail: Record<string, unknown>): void {
     this.db.prepare("UPDATE processing_runs SET finished_at = ?, status = ?, detail_json = ? WHERE id = ?").run(nowIso(), status, JSON.stringify(detail), id);
   }
+}
+
+/** Insert `tags` into a note's frontmatter, after its type line. Notes with a tags key are unchanged. */
+export function addFrontmatterTags(content: string, tags: string[]): string {
+  if (!content.startsWith("---\n")) return content;
+  const end = content.indexOf("\n---", 3);
+  if (end < 0) return content;
+  const lines = content.slice(4, end).split("\n");
+  if (lines.some((l) => /^tags\s*:/.test(l))) return content;
+  const at = lines.findIndex((l) => /^type\s*:/.test(l)) + 1;
+  lines.splice(at, 0, "tags:", ...tags.map((t) => `  - ${JSON.stringify(t)}`));
+  return `---\n${lines.join("\n")}${content.slice(end)}`;
 }

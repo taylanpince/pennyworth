@@ -49,7 +49,7 @@ describe("functional scenario (§41)", () => {
     expect(note.indexOf("paperclip-meeting")).toBeLessThan(note.indexOf("## Links"));
 
     const canonical = readFileSync(join(env.vault, r.canonical_note.path), "utf8");
-    expect(canonical).toMatch(/^---\ntype: "meeting"\ncalendar_event_id: "evt_oms_nimbus_20261004"\ndate: "2026-10-04"\nstart: "14:00"\nend: "14:30"\n/);
+    expect(canonical).toMatch(/^---\ntype: "meeting"\ntags:\n  - "type\/meeting"\ncalendar_event_id: "evt_oms_nimbus_20261004"\ndate: "2026-10-04"\nstart: "14:00"\nend: "14:30"\n/);
     expect(canonical).toContain("- [ ] Taylan — Review the delegated signing proposal");
     expect(canonical).toContain("- [ ] Alice — Send revised architecture diagram (due: Friday)");
 

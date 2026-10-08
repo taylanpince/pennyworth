@@ -53,9 +53,12 @@ export interface SourceMetadata {
   date_hint?: string;
   start_hint?: string; // UTC ISO from filename
   end_hint?: string; // UTC ISO, e.g. file mtime (transcript finished writing)
+  recording_end_hint?: string; // UTC ISO, local recordings: when the audio next to the transcript ended
   time_basis?: "filename" | "mtime" | "provider";
   ext?: string;
   drive?: { file_id: string; mime_type?: string; web_link?: string; version?: string };
+  // Local transcripts after publishing: what organizing the files did.
+  organized?: { at?: string; from?: string; to?: string; audio_deleted?: string; skipped?: string };
 }
 
 export interface UpsertSourceInput {
@@ -128,6 +131,42 @@ export class SourceStore {
       }
       return { source: this.get(id)!, created: true };
     });
+  }
+
+  /**
+   * Point every revision of a file at its new path (renamed or moved). Shared by ops-mcp's
+   * own renames and by the scanner, which spots a known transcript at a new path.
+   */
+  relocate(sourceType: SourceType, oldExternalId: string, newPath: string): void {
+    tx(this.db, () => {
+      const rows = this.db.prepare("SELECT id, metadata_json FROM sources WHERE source_type = ? AND external_id = ?").all(sourceType, oldExternalId) as {
+        id: string;
+        metadata_json: string;
+      }[];
+      for (const r of rows) {
+        const md = { ...(JSON.parse(r.metadata_json) as SourceMetadata), filename: newPath.split("/").pop() };
+        this.db.prepare("UPDATE sources SET external_id = ?, path = ?, metadata_json = ? WHERE id = ?").run(newPath, newPath, JSON.stringify(md), r.id);
+      }
+    });
+  }
+
+  /**
+   * If this content belongs to a registered file whose path no longer exists, the file was
+   * moved to `newPath`: relocate it and return true.
+   */
+  relocateMoved(sourceType: SourceType, contentHash: string, newPath: string, exists: (path: string) => boolean): boolean {
+    const rows = this.db
+      .prepare("SELECT external_id FROM sources WHERE source_type = ? AND content_hash = ? ORDER BY revision DESC")
+      .all(sourceType, contentHash) as { external_id: string }[];
+    if (rows.some((r) => r.external_id === newPath)) return false;
+    const moved = rows.find((r) => !exists(r.external_id));
+    if (!moved) return false;
+    this.relocate(sourceType, moved.external_id, newPath);
+    return true;
+  }
+
+  setMetadata(id: string, md: SourceMetadata): void {
+    this.db.prepare("UPDATE sources SET metadata_json = ? WHERE id = ?").run(JSON.stringify(md), id);
   }
 
   setStatus(id: string, status: SourceStatus, detail?: string): void {

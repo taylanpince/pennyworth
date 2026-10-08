@@ -91,7 +91,8 @@ services:
     volumes:
       - ${PENNYWORTH_CONFIG_DIR:-./config}:/config:ro
       - ${PENNYWORTH_DATA_DIR:-./data}/ops-mcp:/data/ops-mcp
-      - ${TRANSCRIPTS_DIR:?set TRANSCRIPTS_DIR in .env}:/sources/transcripts:ro
+      # Writable: ops-mcp renames recorder-named transcripts and deletes their audio once published (D-26).
+      - ${TRANSCRIPTS_DIR:?set TRANSCRIPTS_DIR in .env}:/sources/transcripts
       # Vault folders are added by compose.vault.yaml (only the configured folders).
     secrets:
       - ops_mcp_token

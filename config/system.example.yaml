@@ -22,6 +22,15 @@ transcripts:
   # Regexes over the filename stem. Named groups: title, date (YYYY-MM-DD), time.
   # Defaults handle "Title-2026-10-04_14-01-00.txt", "Title-2026-10-04.txt", "2026-10-04_1401.md".
   # filename_patterns: [...]
+  # Audio next to a transcript (same name). Its length tells the matcher when the recording
+  # ended; it is deleted once the meeting is published (organize.delete_audio).
+  audio_extensions: [.wav]
+  # After publishing, recorder-named files ("2026-10-08_11-01-59.txt") are renamed after the
+  # meeting ("Dana-2026-10-08.txt"); 1:1s move into one_on_one_dir. Names you chose are kept.
+  organize:
+    rename: true
+    one_on_one_dir: 1-1s
+    delete_audio: true
 
 vault:
   root: /vault
@@ -31,6 +40,8 @@ vault:
   write_roots: [Meetings]
   meetings_root: Meetings
   target_heading: Meeting Log
+  # Frontmatter tags on every meeting note. In Obsidian, search tag:#type/meeting.
+  meeting_tags: [type/meeting]
 
 meeting_matching:
   candidate_window_before_minutes: 90
@@ -38,6 +49,9 @@ meeting_matching:
   auto_match_threshold: 75
   review_threshold: 55
   ambiguity_margin: 10
+  # A recording (start from its filename, end from its audio) inside one event matches it.
+  recording_overlap_min: 0.6
+  recording_overlap_rival: 0.3
   review_min_temporal: 40
 
 routing:
