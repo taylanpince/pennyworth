@@ -15,6 +15,7 @@ labels:
   - { name: needs-response, color: "#e11d48" }
   - { name: engineer, color: "#4f46e5" }
   - { name: email, color: "#ea580c" }
+  - { name: recurring, color: "#0d9488" }
 
 # MCP servers given to Codex agents directly through the shared Codex config
 # (/paperclip/.codex/config.toml). Not registered as Paperclip Tool Connections: the
@@ -33,7 +34,8 @@ mcp_servers:
   paperclip_tasks:
     command: node
     args: [/opt/pennyworth/paperclip-tasks-mcp.mjs]
-    env_vars: [PAPERCLIP_API_KEY, PAPERCLIP_API_URL, PAPERCLIP_RUN_ID, PAPERCLIP_COMPANY_ID, PAPERCLIP_TASK_ID]
+    # PENNYWORTH_BOARD_TOKEN: the board's internal API (scheduled moves, recurring tasks; D-25).
+    env_vars: [PAPERCLIP_API_KEY, PAPERCLIP_API_URL, PAPERCLIP_RUN_ID, PAPERCLIP_COMPANY_ID, PAPERCLIP_TASK_ID, PENNYWORTH_BOARD_TOKEN]
 
 # Extra Codex CLI arguments for every agent. Codex's read-only sandbox stays on (inside
 # the container it fails closed, so shell commands cannot run at all), and built-in
@@ -121,7 +123,8 @@ agents:
     adapter: codex_local
     model: ""
     reasoning_effort: medium
-    timeout_sec: 1800
+    # Recurring runs read many channels, docs and notes (D-25).
+    timeout_sec: 3600
     # Public web pages and search via OpenAI's cached index only (D-19).
     web_search: cached
     mcp_servers: [slack, google_workspace, paperclip_tasks, ops_mcp]
@@ -129,7 +132,8 @@ agents:
       ops_mcp: [obsidian_search, obsidian_read, obsidian_read_document_map, meeting_note_correct]
       google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
       # task_create_engineer_task: Engineer sub-tasks that wait for the user's go-ahead (D-24).
-      paperclip_tasks: [task_current, task_get, task_comments, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status, task_create_engineer_task]
+      # task_schedule, task_recurring: board moves on a date and recurring tasks (D-25).
+      paperclip_tasks: [task_current, task_get, task_comments, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status, task_create_engineer_task, task_schedule, task_recurring]
 
   # Executors for coding jobs (D-20). Assignment targets only: Paperclip never wakes them; the
   # host runner does the work. The assignee picks the engine; the task's model override (or the
@@ -202,8 +206,19 @@ routines:
     agent: assistant
     # Started by pennyworth-runner when you comment on your tasks (no schedule).
     description: |
-      Process replies on: {{tasks}}
+      Today is {{date}}. Process replies on: {{tasks}}
       Follow "B. Processing the user's replies" in your instructions.
+    concurrency: always_enqueue
+
+  recurring-run:
+    title: Run recurring task
+    agent: assistant
+    # Started by pennyworth-runner when a recurring task is due (D-25); the schedule lives on the board.
+    description: |
+      Recurring task {{definition}} is due. Its instructions are that task's description.
+      Write this period's result into {{task}}, the user's task for it (already on top of their Today).
+      Period: {{since}} to {{until}} ({{timezone}}). Previous period's task: {{previous}}.
+      Follow "D. Running a recurring task" in your instructions.
     concurrency: always_enqueue
 
   inbox-scan:

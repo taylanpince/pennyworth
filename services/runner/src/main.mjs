@@ -13,6 +13,7 @@ import { codexModels, readApproval, readRequest, resolveModelAlias } from "./int
 import { Paperclip } from "./paperclip.mjs";
 import { cleanMessages, leaksInternal, writePrDescription } from "./describe.mjs";
 import { commitMessage, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, publishFooter, subtaskSummary, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
+import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import { State } from "./state.mjs";
 
@@ -54,8 +55,73 @@ async function poll() {
     lastReviewCheck = Date.now();
     await closeReviewedTasks().catch((err) => log("review check failed", { err: String(err.stderr || err.message || err).slice(0, 300) }));
   }
+  // Recurring tasks that are due (D-25), at most once a minute.
+  if (board && Date.now() - lastRecurringCheck >= 60_000) {
+    lastRecurringCheck = Date.now();
+    await startRecurringRuns().catch((err) => log("recurring check failed", { err: String(err.message ?? err).slice(0, 300) }));
+  }
   state.set("last_poll", now);
   drainQueue();
+}
+
+// ------------------------------------------------------------------ recurring tasks (D-25)
+
+let lastRecurringCheck = 0;
+const board = cfg.recurring?.enabled === false ? undefined : (() => {
+  try {
+    return new Board(cfg.boardInternalUrl, cfg.boardTokenFile);
+  } catch (err) {
+    log("recurring tasks off: no board token", { err: String(err.message ?? err).slice(0, 200) });
+    return undefined;
+  }
+})();
+
+/**
+ * The board creates the user's task for each due run (top of Today) and hands it here: add the
+ * period's GitHub activity for the definition's repositories, then start the Assistant on it.
+ */
+async function startRecurringRuns() {
+  for (const run of await board.claim()) {
+    try {
+      const digestKey = `recurring_digest:${run.outputId}`;
+      if (run.repos.length && !state.get(digestKey)) {
+        await pc.comment(run.outputId, await githubActivity(run));
+        state.set(digestKey, new Date().toISOString());
+      }
+      await pc.runRoutine(cfg.recurring?.routine ?? "Run recurring task", {
+        definition: run.definition,
+        task: run.output,
+        since: run.sinceLocal,
+        until: run.untilLocal,
+        timezone: run.timezone,
+        previous: run.previous ?? "none (first run)",
+      });
+      await board.runState(run, "started");
+      log("recurring run started", { definition: run.definition, output: run.output, occurrence: run.occurrence, repos: run.repos.length, attempt: run.attempt });
+    } catch (err) {
+      log("recurring run failed to start", { output: run.output, attempt: run.attempt, err: String(err.message ?? err).slice(0, 300) });
+      // Left claimed: the board hands it out again in a few minutes, and says so on the task if it never starts.
+    }
+  }
+}
+
+/** The period's activity in each repository: fixed read-only GraphQL with your gh login. */
+async function githubActivity(run) {
+  const gh = await findRealGh();
+  const sections = [];
+  for (const repo of run.repos) {
+    const [owner, name] = repo.split("/");
+    const q = activitySearches(repo, run.since, run.until);
+    try {
+      const args = ["api", "graphql", "-f", `query=${ACTIVITY_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-f", `since=${run.since}`, "-f", `until=${run.until}`];
+      for (const [k, v] of Object.entries(q)) args.push("-f", `${k}=${v}`);
+      const { stdout } = await execFileP(gh, args, { maxBuffer: 16 * 1024 * 1024 });
+      sections.push(formatRepo(repo, JSON.parse(stdout).data, run.since, run.until));
+    } catch (err) {
+      sections.push(formatRepo(repo, undefined, run.since, run.until, String(err.stderr || err.message || err).split("\n")[0]));
+    }
+  }
+  return activityComment(run, sections);
 }
 
 // ------------------------------------------------------------------ review requests → GitHub
@@ -67,7 +133,7 @@ let githubLogin;
 async function closeReviewedTasks() {
   const gh = await findRealGh();
   for (let issue of await pc.myOpenIssues()) {
-    if ((issue.labels ?? []).some((l) => l.name === cfg.label)) continue; // coding tasks are the runner's own
+    if ((issue.labels ?? []).some((l) => l.name === cfg.label || l.name === "recurring")) continue; // coding tasks are the runner's own; recurring ones are instructions
     if (issue.descriptionTruncated) issue = await pc.issue(issue.id);
     const target = reviewTarget(issue);
     if (!target) continue;

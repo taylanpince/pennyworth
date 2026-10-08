@@ -29,12 +29,33 @@ export interface Card {
   unread: boolean;
   createdAt: string;
   activityAt: string;
+  scheduled?: { date: string; bucket: Bucket };
+  recurring?: { summary: string; nextRun: string | null; paused: boolean };
+}
+
+export const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
+export type Weekday = (typeof WEEKDAYS)[number];
+export type Cadence =
+  | { kind: "weekly"; weekday: Weekday; interval: number }
+  | { kind: "monthly_day"; day: number | "last"; interval: number }
+  | { kind: "monthly_weekday"; nth: number | "last"; weekday: Weekday; interval: number };
+
+export interface RecurringView {
+  summary: string;
+  cadence: Cadence;
+  time: string;
+  repos: string[];
+  paused: boolean;
+  nextRun: string | null;
+  upcoming: string[];
+  runNowPending: boolean;
 }
 
 export interface Board {
   buckets: Record<Bucket, Card[]>;
   brief: { id: string; identifier: string; title: string; description: string } | null;
   done: Card[];
+  recurring: Card[];
   assignees: Assignee[];
   labels: Label[];
   prefix: string;
@@ -48,12 +69,14 @@ export interface CommentView {
   createdAt: string;
 }
 
-export interface IssueView extends Card {
+export interface IssueView extends Omit<Card, "scheduled" | "recurring"> {
   description: string;
   bucket: Bucket | null;
   editable: boolean;
   labelIds: string[];
   replyTarget: string;
+  scheduled: { date: string; bucket: Bucket; position: "top" | "bottom" } | null;
+  recurring: RecurringView | null;
   comments: CommentView[];
 }
 

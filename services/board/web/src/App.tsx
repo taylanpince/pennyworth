@@ -87,6 +87,7 @@ export function App() {
   const [route, setRoute] = useState<Route>(parseRoute);
   const [query, setQuery] = useState("");
   const [showDone, setShowDone] = useState(false);
+  const [showRecurring, setShowRecurring] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [tab, setTab] = useState<Bucket>("today");
@@ -306,6 +307,7 @@ export function App() {
       if (k === "b") return go("#/brief");
       if (k === "?") return go("#/help");
       if (k === "d") return setShowDone((s) => !s);
+      if (k === "r") return setShowRecurring((s) => !s);
       if (k === "j" || k === "ArrowDown") {
         e.preventDefault();
         if (e.shiftKey && p) return void reorder(lists[p.b][p.i]!.id, 1);
@@ -388,6 +390,11 @@ export function App() {
             Brief
           </a>
         )}
+        {board.recurring.length > 0 && (
+          <button className={`btn${showRecurring ? " on" : ""}`} onClick={() => setShowRecurring(!showRecurring)} title="Recurring tasks (r)">
+            Recurring
+          </button>
+        )}
         <button className={`btn${showDone ? " on" : ""}`} onClick={() => setShowDone(!showDone)} title="Recently done (d)">
           Done
         </button>
@@ -437,6 +444,21 @@ export function App() {
           ))}
           <DragOverlay dropAnimation={null}>{active && <CardView card={active} assignees={board.assignees} overlay onOpen={() => {}} />}</DragOverlay>
         </DndContext>
+        {showRecurring && (
+          <section className="column column-done">
+            <header className="col-head">
+              <h2>Recurring</h2>
+              <span className="count">{board.recurring.length}</span>
+              <span className="hint">Runs land on top of Today</span>
+            </header>
+            <div className="col-body">
+              {board.recurring.filter((c) => matches(c, query)).map((c) => (
+                <CardView key={c.id} card={c} assignees={board.assignees} onOpen={openCard} />
+              ))}
+              {!board.recurring.length && <p className="empty">Nothing repeats yet. Open a task and use Repeats.</p>}
+            </div>
+          </section>
+        )}
         {showDone && (
           <section className="column column-done">
             <header className="col-head">
@@ -594,6 +616,7 @@ function Help() {
     ["/", "Search"],
     ["b", "Today's brief"],
     ["d", "Show recently done"],
+    ["r", "Show recurring tasks"],
     ["⌘↵", "Send reply / save description"],
     ["Esc", "Close"],
   ];
@@ -611,7 +634,7 @@ function Help() {
             </div>
           ))}
         </dl>
-        <p className="muted small">Drag cards to rank them; Tomorrow moves into Today at midnight.</p>
+        <p className="muted small">Drag cards to rank them; Tomorrow moves into Today at midnight. Open a task to bring it back on a date or make it repeat.</p>
       </div>
     </div>
   );

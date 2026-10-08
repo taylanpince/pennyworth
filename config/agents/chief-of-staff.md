@@ -39,6 +39,7 @@ You can only create or edit the brief task itself, close your run task, and clos
    - `needs-review`: Pennyworth needs a decision from the user.
    - `needs-response`: someone is waiting for the user's reply in Slack or email. List these under Needs response, oldest first, with the person's name.
    - `daily-brief`: older briefs. Close every one that isn't today's (step 5).
+   - `recurring`: instructions for a recurring task, not something to do. Leave them out of the brief, and never suggest closing or re-prioritising them. Each run creates its own task (labelled `todo`), which counts like any other todo.
    - Anything else: use judgement, and mention it under FYI only if it matters.
 
 4. **Write the brief** in markdown, with exactly these sections. Leave out any section that would be empty, except Top priorities. Refer to tasks by identifier, e.g. `PEN-12`; Paperclip links those automatically.

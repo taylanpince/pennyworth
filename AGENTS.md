@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-24) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-25) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -10,6 +10,7 @@ host (NixOS, user taylan)
 │     polls Paperclip: engineer tasks → Codex/Claude Code/OpenRouter jobs in ~/pennyworth worktrees
 │                      review-request tasks → closed once gh shows the PR reviewed/merged (D-21)
 │                      user replies on own tasks → "Process task replies" routine (Assistant)
+│                      recurring runs claimed from the board → GitHub activity comment → "Run recurring task" (D-25)
 ├── transcript watcher (systemd --user .path) → signed webhook → "Meeting scan"
 └── docker compose (project "pennyworth")
     ├── paperclip            pinned ghcr image, 127.0.0.1:3100, Codex agents inside
@@ -18,6 +19,7 @@ host (NixOS, user taylan)
     ├── slack-mcp            read-only proxy to mcp.slack.com (allowlisted read tools)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
                              :3121 on the LAN (pennyworth.local, paired devices from the home subnet only, D-23)
+                             :3122 internal API (bearer token): scheduled moves and recurring tasks for the bridge and the runner (D-25)
 services/paperclip-tasks-mcp  stdio MCP bridge (mounted into paperclip) for task updates by agents
 ```
 
@@ -29,7 +31,7 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`:
 | Chief of Staff | daily brief |
 | Slack Scout | Slack items for the user |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
-| Assistant | research and drafts, plus acting on the user's replies |
+| Assistant | research and drafts, acting on the user's replies (including scheduling a task or making it recurring), and running recurring tasks |
 | Engineer · Codex / · Claude / · GLM | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20) |
 
 ## Everyday commands
@@ -157,6 +159,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
   - Tasks only for *his own* clear action items. No waiting-on tasks for other people's commitments, and no tasks for ownerless actions.
   - **Email:** only threads he labels `pennyworth` in Gmail (any account, archived or not) become todos, closed when he removes the label. Never mirror the whole inbox: that produced junk tasks (meeting accepts, receipts).
   - Replies on meeting match review tasks (`pick N`, `ignore`) are handled by ops-mcp. Replies on other tasks go to the Assistant. Code work is assigned to an Engineer: Engineer · Codex, · Claude or · GLM, with the model picked on the task. "use Claude" or "use GLM" in a comment still works and moves the picker.
+  - **Scheduling and recurring tasks (D-25):** "bring this back on Tuesday" or "make this repeat every Monday" in a comment goes to the Assistant, which calls `task_schedule` / `task_recurring`. Dates and rules are validated and run by board code. A recurring task's description is its instructions, and each run lands on top of Today as a draft for him to finish (no per-run approval: his choice). Runs default to 07:00.
   - **Many repositories:** he asks the Assistant to split the task into Engineer sub-tasks, one per repo (D-24), then says "go" once on the parent. Manual steps, such as archiving repos, go in a checklist comment, not tasks or scripts.
   - **Plain language only.** The runner has no `key: value` syntax. Every comment except an exact `push`/`pr` goes through the intake (`services/runner/src/intake.mjs`), which picks the action (run/stop/status/reset/cleanup), repo, mode (answer/investigate/implement) and engine; code validates each answer. Never add syntax he has to learn. Publishing stays on the exact word.
   - **Intake regression set:** `config/intake-cases.yaml` (personal, gitignored; example in `config/intake-cases.example.yaml`) holds his real comments and the reading each must get. Run `npm run eval:intake` before shipping any change to the intake prompt, its inputs, or how the runner acts on its answers, and add every misread found on a real task. Unit tests can't catch these: the intake answers differently from run to run (the old PEN-298 prompt misread the request 3 runs out of 4).

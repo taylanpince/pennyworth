@@ -46,3 +46,14 @@ export function matches(card: Card, q: string): boolean {
   const hay = `${card.title} ${card.identifier} ${card.labels.map((l) => l.name).join(" ")}`.toLowerCase();
   return q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
 }
+
+/** "Oct 15" for a YYYY-MM-DD date (as written) or an instant (local). */
+export function shortDate(d: string): string {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(`${d}T12:00:00`) : new Date(d);
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** "Thu, Oct 15, 07:00" for an instant, in the board's timezone. */
+export function runTime(iso: string, timeZone: string): string {
+  return new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone });
+}

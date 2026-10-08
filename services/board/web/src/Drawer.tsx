@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { Avatar, Chips, CloseIcon, MoveMenu } from "./components";
 import { Markdown } from "./markdown";
-import { BUCKET_NAMES, type Assignee, type Board, type Bucket, type IssueView, type Label, type Models, type Update } from "./types";
-import { PRIORITIES, PRIORITY_NAMES, ago, shortName, when } from "./util";
+import { BUCKETS, BUCKET_NAMES, WEEKDAYS, type Assignee, type Board, type Bucket, type Cadence, type IssueView, type Label, type Models, type Update, type Weekday } from "./types";
+import { PRIORITIES, PRIORITY_NAMES, ago, runTime, shortName, when } from "./util";
 
 interface Props {
   refId: string;
@@ -70,7 +70,7 @@ export function Drawer({ refId, board, onClose, onChanged, onMove, toast }: Prop
         {!issue ? (
           <div className="drawer-loading">{error ? `Couldn't load ${refId}: ${error}` : "Loading…"}</div>
         ) : (
-          <IssueBody issue={issue} board={board} busy={busy} update={update} setStatus={setStatus} onClose={onClose} onMove={onMove} reload={load} toast={toast} />
+          <IssueBody issue={issue} board={board} busy={busy} update={update} setStatus={setStatus} onClose={onClose} onMove={onMove} reload={load} onChanged={onChanged} toast={toast} />
         )}
       </aside>
     </div>
@@ -86,10 +86,11 @@ interface BodyProps {
   onClose: () => void;
   onMove: (id: string, bucket: Bucket) => Promise<void>;
   reload: () => Promise<void>;
+  onChanged: () => void;
   toast: Props["toast"];
 }
 
-function IssueBody({ issue, board, busy, update, setStatus, onClose, onMove, reload, toast }: BodyProps) {
+function IssueBody({ issue, board, busy, update, setStatus, onClose, onMove, reload, onChanged, toast }: BodyProps) {
   const closed = issue.status === "done" || issue.status === "cancelled";
   const editable = issue.editable;
   const assignee = board.assignees.find((a) => a.key === issue.assignee);
@@ -107,7 +108,7 @@ function IssueBody({ issue, board, busy, update, setStatus, onClose, onMove, rel
           <Chips card={issue} />
         </span>
         <span className="spacer" />
-        {editable && !closed && (
+        {editable && !closed && !issue.recurring && (
           <>
             <MoveMenu
               current={bucket ?? undefined}
@@ -168,6 +169,16 @@ function IssueBody({ issue, board, busy, update, setStatus, onClose, onMove, rel
           <Prop name="Labels">
             <Labels all={board.labels} selected={issue.labelIds} disabled={!editable || busy} save={(labelIds) => update({ labelIds })} />
           </Prop>
+          {editable && !closed && !issue.recurring && (
+            <Prop name="Bring back">
+              <BringBack issue={issue} board={board} done={() => (void reload(), onChanged())} toast={toast} />
+            </Prop>
+          )}
+          {editable && !closed && (issue.recurring || issue.assignee === "me") && (
+            <Prop name="Repeats">
+              <Repeats issue={issue} board={board} done={() => (void reload(), onChanged())} toast={toast} />
+            </Prop>
+          )}
           <Prop name="Created">
             <span className="muted">{when(issue.createdAt)}</span>
           </Prop>
@@ -416,3 +427,197 @@ function Composer({ issue, reload, toast }: { issue: IssueView; reload: () => Pr
 }
 
 export { Avatar };
+
+// ---------------------------------------------------------------- scheduled moves and recurring tasks (D-25)
+
+const todayIn = (tz: string) => new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+const longDate = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+const cap = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
+
+interface AutoProps {
+  issue: IssueView;
+  board: Board;
+  done: () => void;
+  toast: Props["toast"];
+}
+
+/** Move the task to a column on a date (default: the top of Today). */
+function BringBack({ issue, board, done, toast }: AutoProps) {
+  const [date, setDate] = useState("");
+  const [bucket, setBucket] = useState<Bucket>("today");
+  const [busy, setBusy] = useState(false);
+  const today = todayIn(board.timezone);
+  async function save(body: { date: string; bucket: Bucket } | { clear: true }) {
+    setBusy(true);
+    try {
+      const r = await api.schedule(issue.id, body);
+      toast(r.movedNow ? `Moved to ${BUCKET_NAMES[bucket]}` : r.scheduled ? `Back on top of ${BUCKET_NAMES[r.scheduled.bucket]} on ${longDate(r.scheduled.date)}` : "No longer scheduled");
+      setDate("");
+      done();
+    } catch (e) {
+      toast(`Couldn't schedule: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (issue.scheduled)
+    return (
+      <span className="auto-row">
+        <span>
+          Top of {BUCKET_NAMES[issue.scheduled.bucket]} on {longDate(issue.scheduled.date)}
+        </span>
+        <button className="btn" disabled={busy} onClick={() => void save({ clear: true })}>
+          Clear
+        </button>
+      </span>
+    );
+  return (
+    <span className="auto-row">
+      <input type="date" min={today} value={date} onChange={(e) => setDate(e.target.value)} aria-label="Date" />
+      <select value={bucket} onChange={(e) => setBucket(e.target.value as Bucket)} aria-label="Column">
+        {BUCKETS.filter((b) => b !== "triage").map((b) => (
+          <option key={b} value={b}>
+            {BUCKET_NAMES[b]}
+          </option>
+        ))}
+      </select>
+      <button className="btn" disabled={busy || !date} onClick={() => void save({ date, bucket })}>
+        Schedule
+      </button>
+    </span>
+  );
+}
+
+const NTH: [number | "last", string][] = [
+  [1, "first"],
+  [2, "second"],
+  [3, "third"],
+  [4, "fourth"],
+  ["last", "last"],
+];
+
+/** Run the task's instructions on a schedule; each run lands on top of Today as its own task. */
+function Repeats({ issue, board, done, toast }: AutoProps) {
+  const r = issue.recurring;
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [cadence, setCadence] = useState<Cadence>(r?.cadence ?? { kind: "weekly", weekday: "monday", interval: 1 });
+  const [time, setTime] = useState(r?.time ?? "07:00");
+  const [repos, setRepos] = useState((r?.repos ?? []).join(", "));
+  useEffect(() => {
+    if (editing || !r) return;
+    setCadence(r.cadence);
+    setTime(r.time);
+    setRepos(r.repos.join(", "));
+  }, [r, editing]);
+
+  async function act(body: Parameters<typeof api.recurring>[1], note: (v: IssueView["recurring"]) => string) {
+    setBusy(true);
+    try {
+      const res = await api.recurring(issue.id, body);
+      toast(note(res.recurring));
+      setEditing(false);
+      done();
+    } catch (e) {
+      toast(`Couldn't save: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const save = () =>
+    act({ action: "set", cadence, time, repos: repos.split(/[\s,]+/).filter(Boolean) }, (v) => `${v?.summary}. Next: ${v?.upcoming[0] ? runTime(v.upcoming[0], board.timezone) : "—"}`);
+
+  if (!r && !editing)
+    return (
+      <button className="btn" onClick={() => setEditing(true)}>
+        Make recurring…
+      </button>
+    );
+
+  if (r && !editing)
+    return (
+      <div className="auto-block">
+        <div>
+          {r.summary}
+          {r.paused && <span className="muted"> · paused</span>}
+          {r.runNowPending && <span className="muted"> · run starting</span>}
+        </div>
+        {!r.paused && r.upcoming.length > 0 && <div className="muted small">Next: {r.upcoming.map((t) => runTime(t, board.timezone)).join(" · ")}</div>}
+        {r.repos.length > 0 && <div className="muted small">GitHub: {r.repos.join(", ")}</div>}
+        <div className="auto-row">
+          <button className="btn" disabled={busy} onClick={() => setEditing(true)}>
+            Edit
+          </button>
+          <button className="btn" disabled={busy || r.paused || r.runNowPending} onClick={() => void act({ action: "run_now" }, () => "Running now: the result lands on top of Today")}>
+            Run now
+          </button>
+          <button className="btn" disabled={busy} onClick={() => void act({ action: r.paused ? "resume" : "pause" }, () => (r.paused ? "Resumed" : "Paused"))}>
+            {r.paused ? "Resume" : "Pause"}
+          </button>
+          <button className="btn" disabled={busy} onClick={() => void act({ action: "stop" }, () => `${issue.identifier} no longer repeats`)}>
+            Stop
+          </button>
+        </div>
+      </div>
+    );
+
+  const weekday = "weekday" in cadence ? cadence.weekday : "monday";
+  const setKind = (kind: Cadence["kind"]) =>
+    setCadence(kind === "weekly" ? { kind, weekday, interval: 1 } : kind === "monthly_day" ? { kind, day: 1, interval: 1 } : { kind, nth: 1, weekday, interval: 1 });
+  return (
+    <div className="auto-block">
+      <div className="auto-row">
+        <select value={cadence.kind} onChange={(e) => setKind(e.target.value as Cadence["kind"])} aria-label="Repeats">
+          <option value="weekly">Weekly</option>
+          <option value="monthly_day">Monthly on a date</option>
+          <option value="monthly_weekday">Monthly on a weekday</option>
+        </select>
+        <label className="muted small">
+          every{" "}
+          <input className="narrow" type="number" min={1} max={12} value={cadence.interval} onChange={(e) => setCadence({ ...cadence, interval: Math.max(1, Math.min(12, Number(e.target.value) || 1)) })} />{" "}
+          {cadence.kind === "weekly" ? "week(s)" : "month(s)"}
+        </label>
+      </div>
+      <div className="auto-row">
+        {cadence.kind === "monthly_weekday" && (
+          <select value={String(cadence.nth)} onChange={(e) => setCadence({ ...cadence, nth: e.target.value === "last" ? "last" : Number(e.target.value) })} aria-label="Which">
+            {NTH.map(([v, l]) => (
+              <option key={l} value={String(v)}>
+                {l}
+              </option>
+            ))}
+          </select>
+        )}
+        {cadence.kind === "monthly_day" ? (
+          <select value={String(cadence.day)} onChange={(e) => setCadence({ ...cadence, day: e.target.value === "last" ? "last" : Number(e.target.value) })} aria-label="Day">
+            {Array.from({ length: 31 }, (_, i) => (
+              <option key={i + 1} value={String(i + 1)}>
+                day {i + 1}
+              </option>
+            ))}
+            <option value="last">last day</option>
+          </select>
+        ) : (
+          <select value={weekday} onChange={(e) => setCadence({ ...cadence, weekday: e.target.value as Weekday } as Cadence)} aria-label="Weekday">
+            {WEEKDAYS.map((w) => (
+              <option key={w} value={w}>
+                {cap(w)}
+              </option>
+            ))}
+          </select>
+        )}
+        <input type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-label="Time" />
+      </div>
+      <input placeholder="GitHub repos (owner/name, comma-separated)" value={repos} onChange={(e) => setRepos(e.target.value)} aria-label="GitHub repositories" />
+      <div className="muted small">Each run follows this task's description and lands on top of Today as a new task.</div>
+      <div className="auto-row">
+        <button className="btn primary" disabled={busy || !time} onClick={() => void save()}>
+          Save
+        </button>
+        <button className="btn" disabled={busy} onClick={() => setEditing(false)}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}

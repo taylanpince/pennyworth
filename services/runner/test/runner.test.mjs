@@ -628,3 +628,59 @@ describe("public PR text", async () => {
     assert.match(p, /Never mention them, or any task tracker, ticket number, agent, AI tool, local file path or machine/);
   });
 });
+
+describe("recurring tasks: GitHub activity", async () => {
+  const { activityComment, activitySearches, formatRepo } = await import("../src/recurring.mjs");
+  const since = "2026-10-05T05:00:00.000Z";
+  const until = "2026-10-12T05:00:00.000Z";
+
+  it("searches only the period, as date-time ranges", () => {
+    const q = activitySearches("acme/api", since, until);
+    assert.equal(q.merged, "repo:acme/api is:pr is:merged merged:2026-10-05T05:00:00Z..2026-10-12T05:00:00Z");
+    assert.match(q.issuesClosed, /is:closed closed:2026-10-05T05:00:00Z\.\.2026-10-12T05:00:00Z$/);
+  });
+
+  it("lists merged and open PRs, releases in the period, and issues; titles can't inject markup", () => {
+    const data = {
+      merged: { issueCount: 41, nodes: [{ number: 12, title: "Fix [link](http://evil) <!-- x --> `code`", url: "https://github.com/acme/api/pull/12", author: { login: "maya" } }] },
+      opened: { issueCount: 1, nodes: [{ number: 13, title: "WIP", url: "https://github.com/acme/api/pull/13", isDraft: true, author: { login: "carlos" } }] },
+      issuesOpened: { issueCount: 0, nodes: [] },
+      issuesClosed: { issueCount: 0, nodes: [] },
+      repository: { releases: { nodes: [
+        { name: "v1.2", tagName: "v1.2", url: "https://github.com/acme/api/releases/v1.2", publishedAt: "2026-10-07T10:00:00Z", isDraft: false },
+        { name: "v1.1", tagName: "v1.1", url: "https://github.com/acme/api/releases/v1.1", publishedAt: "2026-09-01T10:00:00Z", isDraft: false },
+      ] } },
+    };
+    const text = formatRepo("acme/api", data, since, until);
+    assert.match(text, /\*\*Merged PRs \(41\):\*\*\n  - \[#12\]\(https:\/\/github.com\/acme\/api\/pull\/12\) Fix link\(http:\/\/evil\) x code by maya/);
+    assert.match(text, /…and 40 more/);
+    assert.match(text, /#13\]\([^)]+\) WIP by carlos \(draft\)/);
+    assert.match(text, /Releases \(1\)[\s\S]*v1\.2/);
+    assert.doesNotMatch(text, /v1\.1|<!--|Issues/);
+  });
+
+  it("says when a repository was quiet or couldn't be read", () => {
+    assert.match(formatRepo("acme/web", { merged: { nodes: [] }, opened: { nodes: [] } }, since, until), /Nothing in this period/);
+    assert.match(formatRepo("acme/secret", undefined, since, until, "Could not resolve to a Repository"), /Couldn't read this repository: Could not resolve/);
+    assert.match(activityComment({ sinceLocal: "2026-10-05 07:00", untilLocal: "2026-10-12 07:00", timezone: "Europe/Madrid" }, ["### a"]), /^\*\*GitHub activity, 2026-10-05 07:00 to 2026-10-12 07:00\*\* \(Europe\/Madrid\)/);
+  });
+});
+
+describe("recurring tasks: direct pushes", async () => {
+  const { formatRepo } = await import("../src/recurring.mjs");
+  it("lists default-branch commits that didn't come from a merged PR", () => {
+    const history = {
+      totalCount: 3,
+      nodes: [
+        { messageHeadline: "fix: direct push", url: "https://github.com/a/b/commit/1", author: { name: "Maya", user: { login: "maya" } }, associatedPullRequests: { nodes: [] } },
+        { messageHeadline: "Merge pull request #12", url: "https://github.com/a/b/commit/2", author: { name: "x" }, associatedPullRequests: { nodes: [{ number: 12, merged: true }] } },
+        { messageHeadline: "chore: bump", url: "https://github.com/a/b/commit/3", author: { name: "Bot" }, associatedPullRequests: { nodes: [{ number: 13, merged: false }] } },
+      ],
+    };
+    const text = formatRepo("a/b", { repository: { defaultBranchRef: { name: "main", target: { history } } } }, "s", "u");
+    assert.match(text, /Pushed to main without a PR \(2\)/);
+    assert.match(text, /\[fix: direct push\]\(https:\/\/github.com\/a\/b\/commit\/1\) by maya/);
+    assert.match(text, /chore: bump.* by Bot/);
+    assert.doesNotMatch(text, /Merge pull request|and more/);
+  });
+});

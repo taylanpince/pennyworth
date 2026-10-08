@@ -164,7 +164,12 @@ Every task Pennyworth creates is assigned to you, and only for *your own* clear 
 
 Drag cards to rank or move them (on a phone, use a card's arrow). Open a card to edit it, change priority, status and labels, reassign it (to an Engineer with model and effort), read the thread and reply, or close it with undo. Task references such as `PEN-12` in text open the task and show its status. **Brief** opens today's Daily Brief; **Done** shows the last 48 hours.
 
-Keyboard: `j`/`k` and `h`/`l` (or arrows) to move, `Enter` to open, `e` done, `1`–`5` to move to Triage…Backlog, `J`/`K` to rank, `c` new task, `/` search, `b` brief, `?` for the rest.
+Keyboard: `j`/`k` and `h`/`l` (or arrows) to move, `Enter` to open, `e` done, `1`–`5` to move to Triage…Backlog, `J`/`K` to rank, `c` new task, `/` search, `b` brief, `r` recurring, `?` for the rest.
+
+**On a date, or on repeat:**
+- **Bring back** in a task's sheet puts it on top of Today (or another column) on a date.
+- **Repeats** makes it a recurring task: weekly, every N weeks, monthly on a date or on a weekday such as the first Monday, at a time (07:00 by default). Each run, the Assistant follows the task's description. It reads the Slack channels, documents, meeting notes and GitHub repositories the description names, for the period since the last run, and puts the result on top of your Today as a new task, ready to paste. Recurring tasks live under **Recurring**, with Run now, Pause and Stop.
+- Both also work in plain words in a comment: "bring this back next Tuesday", "make this repeat every Monday at 8".
 
 Bucket and rank live in the board's own SQLite (`data/board/`); everything else is the Paperclip task. The board acts as you with a board key that stays in the container, listens on 127.0.0.1 only, and refuses other host names and cross-site requests.
 

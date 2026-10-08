@@ -85,6 +85,33 @@ async function idempotencyKey(marker) {
   return `pw-${createHash("sha256").update(marker).digest("hex").slice(0, 32)}`;
 }
 
+// The board (D-25): scheduled moves and recurring tasks live there, behind its internal token.
+const BOARD = (process.env.PENNYWORTH_BOARD_URL || "http://board:3122").replace(/\/$/, "");
+const BOARD_TOKEN = process.env.PENNYWORTH_BOARD_TOKEN || "";
+
+async function boardApi(path, body) {
+  if (!BOARD_TOKEN) throw new Error("PENNYWORTH_BOARD_TOKEN is not set (see compose.yaml)");
+  const res = await fetch(`${BOARD}${path}`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${BOARD_TOKEN}`, "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20_000),
+  });
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {}
+  if (!res.ok) throw new Error(`board: ${data.error ?? text.slice(0, 300)}`);
+  return data;
+}
+
+/** Board changes are the Assistant's, on the user's word only (enabled_tools plus this check). */
+async function requireAssistant() {
+  const me = await api("GET", "/api/agents/me");
+  if (me?.metadata?.setupKey !== "pennyworth:assistant") throw new Error("only the Assistant can change the board");
+}
+
 const issueRef = (v) => {
   const s = String(v ?? "").trim();
   if (!/^[A-Za-z0-9-]{1,64}$/.test(s)) throw new Error("invalid issue id or identifier");
@@ -247,6 +274,50 @@ const TOOLS = {
       };
       const i = await api("POST", `/api/companies/${encodeURIComponent(COMPANY)}/issues`, body);
       return { ...brief(i), parent: p.identifier, engine, model: modelId || null, deduplicated: Boolean(i.deduplicated) };
+    },
+  },
+  task_schedule: {
+    description:
+      "Assistant only, when the user asks in their own comment: on a date, move one of their tasks to a board column (default: the top of Today), e.g. \"bring this back on the 15th\". Resolve the user's words to a calendar date in their timezone first. A date of today moves it now; a later move by hand replaces the schedule. clear: true removes it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        issue: { type: "string", description: "the task, e.g. PEN-12" },
+        date: { type: "string", description: "YYYY-MM-DD, today or later, at most a year ahead" },
+        column: { type: "string", enum: ["today", "tomorrow", "later", "backlog", "triage"], description: "default today" },
+        position: { type: "string", enum: ["top", "bottom"], description: "default top" },
+        clear: { type: "boolean", description: "remove the scheduled move instead" },
+      },
+      required: ["issue"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: async ({ issue, date, column, position, clear }) => {
+      await requireAssistant();
+      const body = clear ? { clear: true } : { date: String(date ?? ""), ...(column ? { bucket: column } : {}), ...(position ? { position } : {}) };
+      return boardApi(`/internal/issues/${issueRef(issue)}/schedule`, body);
+    },
+  },
+  task_recurring: {
+    description:
+      "Assistant only, when the user asks in their own comment: make one of their tasks recurring, or pause, resume, stop it, or run it now. Each run, the Assistant follows the task's description as instructions and the result lands on top of the user's Today as a new task. Runs at 07:00 unless the user names a time. cadence is one of {kind: \"weekly\", weekday, interval?} (interval 2 = every other week), {kind: \"monthly_day\", day: 1-31 or \"last\", interval?} (interval 3 = quarterly), {kind: \"monthly_weekday\", nth: 1-4 or \"last\", weekday, interval?}. Weekdays are lowercase English names. repos: GitHub repositories (owner/name) the task's instructions name; their activity is collected for each run. Returns the rule in words and the next runs: tell the user.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        issue: { type: "string", description: "the task holding the instructions, e.g. PEN-12" },
+        action: { type: "string", enum: ["set", "pause", "resume", "stop", "run_now"] },
+        cadence: { type: "object", description: "for set; see the tool description" },
+        time: { type: "string", description: "for set: HH:MM, 24-hour, the user's timezone; default 07:00" },
+        repos: { type: "array", items: { type: "string" }, description: "for set: owner/name" },
+      },
+      required: ["issue", "action"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: async ({ issue, action, cadence, time, repos }) => {
+      await requireAssistant();
+      const body = action === "set" ? { action, cadence, ...(time ? { time } : {}), ...(repos ? { repos } : {}) } : { action };
+      return boardApi(`/internal/issues/${issueRef(issue)}/recurring`, body);
     },
   },
   task_update: {

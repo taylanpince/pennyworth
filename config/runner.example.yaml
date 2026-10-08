@@ -76,3 +76,10 @@ replies:
   debounce_seconds: 90            # wait for follow-up comments / closing the task
   exclude_labels: [needs-review, engineer]   # handled by ops-mcp / this runner
   first_run_lookback_hours: 24
+
+# Recurring tasks (D-25): the board keeps the schedules; the runner claims due runs every minute,
+# adds the period's GitHub activity (read-only GraphQL with your gh login) and starts the Assistant.
+recurring:
+  enabled: true
+  routine: Run recurring task
+  board_url: http://127.0.0.1:3122      # the board's internal API (token: board_internal_token)

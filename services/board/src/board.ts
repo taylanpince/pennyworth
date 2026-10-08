@@ -67,6 +67,10 @@ export interface Card {
   unread: boolean;
   createdAt: string;
   activityAt: string;
+  /** A move scheduled for a later date (D-25). */
+  scheduled?: { date: string; bucket: Bucket };
+  /** Set on recurring tasks (D-25): the rule in words and the next run. */
+  recurring?: { summary: string; nextRun: string | null; paused: boolean };
 }
 
 export function toCard(issue: Issue, list: Assignee[], seenAt: string): Card {
@@ -93,6 +97,8 @@ export interface BoardInput {
   closed: Issue[];
   placements: Map<string, Placement>;
   seen: Map<string, string>;
+  schedules?: Map<string, { date: string; bucket: Bucket }>;
+  recurring?: Map<string, NonNullable<Card["recurring"]>>;
   installedAt: string;
   assignees: Assignee[];
 }
@@ -101,21 +107,33 @@ export interface Board {
   buckets: Record<Bucket, Card[]>;
   brief: { id: string; identifier: string; title: string; description: string } | null;
   done: Card[];
+  /** Recurring tasks: outside the columns, by next run. */
+  recurring: Card[];
 }
 
-/** Open tasks by bucket and rank, today's brief, and recently closed tasks (newest first). */
+/** Open tasks by bucket and rank, today's brief, recurring tasks, and recently closed tasks (newest first). */
 export function buildBoard(input: BoardInput): Board {
   const seen = (id: string) => input.seen.get(id) ?? input.installedAt;
   const buckets = Object.fromEntries(BUCKETS.map((b) => [b, [] as Card[]])) as Record<Bucket, Card[]>;
   const ranked = new Map<string, number>();
   const unique = new Map(input.open.map((i) => [i.id, i]));
   const briefs = [...unique.values()].filter(isBrief).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const recurring: Card[] = [];
   for (const issue of unique.values()) {
     if (isBrief(issue)) continue;
+    const card = toCard(issue, input.assignees, seen(issue.id));
+    const rule = input.recurring?.get(issue.id);
+    if (rule) {
+      recurring.push({ ...card, recurring: rule });
+      continue;
+    }
+    const scheduled = input.schedules?.get(issue.id);
+    if (scheduled) card.scheduled = { date: scheduled.date, bucket: scheduled.bucket };
     const p = input.placements.get(issue.id) ?? { bucket: "triage" as Bucket, rank: -Infinity };
-    buckets[p.bucket].push(toCard(issue, input.assignees, seen(issue.id)));
+    buckets[p.bucket].push(card);
     ranked.set(issue.id, p.rank);
   }
+  recurring.sort((a, b) => (a.recurring!.nextRun ?? "~").localeCompare(b.recurring!.nextRun ?? "~"));
   for (const b of BUCKETS) buckets[b].sort((x, y) => ranked.get(x.id)! - ranked.get(y.id)! || y.createdAt.localeCompare(x.createdAt));
   const brief = briefs[0];
   const done = [...new Map(input.closed.filter((i) => !isBrief(i)).map((i) => [i.id, i])).values()]
@@ -125,6 +143,7 @@ export function buildBoard(input: BoardInput): Board {
     buckets,
     brief: brief ? { id: brief.id, identifier: brief.identifier, title: brief.title, description: displayText(brief.description) } : null,
     done,
+    recurring,
   };
 }
 

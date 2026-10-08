@@ -2,7 +2,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { BUCKETS, BUCKET_NAMES, type Assignee, type Bucket, type Card } from "./types";
-import { SOURCE_NAMES, STATUS_BADGE, ago, shortName } from "./util";
+import { SOURCE_NAMES, STATUS_BADGE, ago, shortDate, shortName } from "./util";
 
 export function Avatar({ assignee }: { assignee: Assignee | undefined }) {
   if (!assignee) return null;
@@ -15,7 +15,7 @@ export function Avatar({ assignee }: { assignee: Assignee | undefined }) {
   );
 }
 
-export function Chips({ card }: { card: Card }) {
+export function Chips({ card }: { card: Pick<Card, "status" | "labels"> }) {
   const badge = STATUS_BADGE[card.status];
   return (
     <>
@@ -57,6 +57,16 @@ export function CardView({ card, assignees, selected, overlay, closed, onOpen, o
       <div className="card-meta">
         <span className="ident">{card.identifier}</span>
         <Chips card={card} />
+        {card.scheduled && (
+          <span className="tag when" title={`Moves to the top of ${BUCKET_NAMES[card.scheduled.bucket]} on ${card.scheduled.date}`}>
+            ↑ {BUCKET_NAMES[card.scheduled.bucket]} {shortDate(card.scheduled.date)}
+          </span>
+        )}
+        {card.recurring && (
+          <span className="tag when" title={card.recurring.summary}>
+            ↻ {card.recurring.paused ? "Paused" : card.recurring.nextRun ? `Next ${shortDate(card.recurring.nextRun)}` : card.recurring.summary}
+          </span>
+        )}
         <span className="spacer" />
         {executor && <span className="exec" title="Model override">{executor}</span>}
         <span className="time" title={new Date(card.activityAt).toLocaleString()}>

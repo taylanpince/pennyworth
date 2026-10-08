@@ -1,4 +1,4 @@
-import type { Board, Bucket, IssueView, Models, Update } from "./types";
+import type { Board, Bucket, Cadence, IssueView, Models, RecurringView, Update } from "./types";
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -46,5 +46,9 @@ export const api = {
   move: (ref: string, bucket: Bucket, position: "top" | "bottom" = "top") => call("POST", `/api/issues/${encodeURIComponent(ref)}/move`, { bucket, position }),
   order: (bucket: Bucket, ids: string[]) => call("PUT", `/api/buckets/${bucket}`, { ids }),
   create: (title: string, bucket: Bucket, description = "") => call<{ id: string; identifier: string }>("POST", "/api/issues", { title, bucket, description }),
+  schedule: (ref: string, body: { date: string; bucket?: Bucket } | { clear: true }) =>
+    call<{ scheduled: IssueView["scheduled"]; movedNow: boolean }>("POST", `/api/issues/${encodeURIComponent(ref)}/schedule`, body),
+  recurring: (ref: string, body: { action: "set"; cadence: Cadence; time: string; repos: string[] } | { action: "pause" | "resume" | "stop" | "run_now" }) =>
+    call<{ recurring: RecurringView | null }>("POST", `/api/issues/${encodeURIComponent(ref)}/recurring`, body),
   models: (assignee: string) => call<Models>("GET", `/api/models/${assignee}`),
 };

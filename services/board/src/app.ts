@@ -1,8 +1,10 @@
+import { timingSafeEqual } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
 import type { Logger } from "pino";
 import { z } from "zod";
+import { RecurringSchema, RunStateSchema, ScheduleSchema, changeRecurring, claimDue, recurringView, scheduleMove } from "./automation.js";
 import { BadRequest, CreateSchema, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
 import { inNetworks } from "./config.js";
 import { Paperclip, PaperclipError, type Issue } from "./paperclip.js";
@@ -18,9 +20,11 @@ export interface AppOptions {
   /**
    * "local": the loopback listener, trusted as the user. "lan": the home-network listener (D-23):
    * only clients from `lan.clients`, and the API only for paired devices (session cookie).
+   * "internal": the tasks bridge and the runner (D-25), with a bearer token, /internal/ routes only.
    */
-  mode?: "local" | "lan";
+  mode?: "local" | "lan" | "internal";
   lan?: { clients: string[]; url: string };
+  internalToken?: string;
 }
 
 const SESSION_COOKIE = "pw_session";
@@ -109,6 +113,7 @@ export function createApp(opts: AppOptions): Server {
     const comments = await pc.comments(issue.id);
     store.markSeen(issue.id);
     const placement = store.placements().get(issue.id);
+    const rec = store.recurring(issue.id);
     return {
       ...toCard(issue, ctx.assignees, new Date().toISOString()),
       description: displayText(issue.description),
@@ -117,9 +122,50 @@ export function createApp(opts: AppOptions): Server {
       labelIds: issue.labelIds ?? (issue.labels ?? []).map((l) => l.id),
       executor: executorOf(issue, ctx.assignees),
       replyTarget: replyTarget(issue, ctx.assignees),
+      scheduled: store.schedules().get(issue.id) ?? null,
+      recurring: rec ? recurringView(rec, opts.timezone) : null,
       comments: comments.map((c) => commentView(c, ctx.me, ctx.agents)),
     };
   }
+
+  async function schedule(ref: string, body: unknown) {
+    const { issue, assigned } = await ownIssue(ref);
+    if (!assigned) throw new HttpError(403, "this task isn't yours or an assistant's");
+    const result = scheduleMove(store, issue, parse(ScheduleSchema, body), opts.timezone);
+    log.info({ issue: issue.identifier, scheduled: result.scheduled, movedNow: result.movedNow }, "move scheduled");
+    return { identifier: issue.identifier, ...result };
+  }
+
+  async function recurringChange(ref: string, body: unknown) {
+    const { ctx, issue, assigned } = await ownIssue(ref);
+    if (!assigned) throw new HttpError(403, "this task isn't yours or an assistant's");
+    const recurring = await changeRecurring(pc, store, ctx, issue, parse(RecurringSchema, body), opts.timezone, log);
+    return { identifier: issue.identifier, recurring };
+  }
+
+  // The tasks bridge (Assistant tools) and the runner (recurring runs), with the internal token (D-25).
+  const internal: typeof routes = [
+    { method: "POST", path: /^\/internal\/issues\/([^/]+)\/schedule$/, handle: async (m, body) => schedule(decodeURIComponent(m[1]!), body) },
+    { method: "POST", path: /^\/internal\/issues\/([^/]+)\/recurring$/, handle: async (m, body) => recurringChange(decodeURIComponent(m[1]!), body) },
+    {
+      method: "POST",
+      path: /^\/internal\/recurring\/claim$/,
+      handle: async () => {
+        const ctx = await context();
+        return { runs: await claimDue(pc, store, ctx, opts.timezone, log) };
+      },
+    },
+    {
+      method: "POST",
+      path: /^\/internal\/recurring\/runs\/([0-9a-f-]{36})\/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})$/,
+      handle: async (m, body) => {
+        const { state } = parse(RunStateSchema, body);
+        if (!store.setRunState(m[1]!, m[2]!, state)) throw new HttpError(404, "no such run");
+        log.info({ definition: m[1], occurrence: m[2], state }, "recurring run updated");
+        return { ok: true };
+      },
+    },
+  ];
 
   const mode = opts.mode ?? "local";
   let failedPairings: number[] = [];
@@ -185,7 +231,8 @@ export function createApp(opts: AppOptions): Server {
         const since = new Date(Date.now() - RECENT_MS).toISOString();
         const [open, closed] = await Promise.all([pc.openIssues().then((l) => mine(l, ctx)), pc.closedSince(since).then((l) => mine(l, ctx))]);
         store.placeNew(open.map((i) => ({ id: i.id, createdAt: i.createdAt, status: i.status })));
-        const board = buildBoard({ open, closed, placements: store.placements(), seen: store.allSeen(), installedAt: store.meta("installed_at")!, assignees: ctx.assignees });
+        const recurring = new Map([...store.allRecurring()].map(([id, r]) => [id, { summary: recurringView(r, opts.timezone).summary, nextRun: r.nextRun, paused: r.paused }]));
+        const board = buildBoard({ open, closed, placements: store.placements(), seen: store.allSeen(), schedules: store.schedules(), recurring, installedAt: store.meta("installed_at")!, assignees: ctx.assignees });
         // Lists truncate long descriptions; the brief is read in full.
         const brief = open.find((i) => i.id === board.brief?.id);
         if (board.brief && brief?.descriptionTruncated) board.brief.description = displayText((await pc.issue(brief.id)).description);
@@ -230,6 +277,8 @@ export function createApp(opts: AppOptions): Server {
         return { ok: true };
       },
     },
+    { method: "POST", path: /^\/api\/issues\/([^/]+)\/schedule$/, handle: async (m, body) => schedule(decodeURIComponent(m[1]!), body) },
+    { method: "POST", path: /^\/api\/issues\/([^/]+)\/recurring$/, handle: async (m, body) => recurringChange(decodeURIComponent(m[1]!), body) },
     {
       method: "PUT",
       path: /^\/api\/buckets\/([a-z]+)$/,
@@ -311,6 +360,13 @@ export function createApp(opts: AppOptions): Server {
     return value;
   }
 
+  async function handleInternal(req: IncomingMessage, res: ServerResponse, url: URL) {
+    const route = internal.find((r) => r.method === req.method && r.path.test(url.pathname));
+    if (!route) throw new HttpError(404, "not found");
+    const body = await readJson(req);
+    send(res, 200, JSON.stringify(await route.handle(url.pathname.match(route.path)!, body, url)), "application/json");
+  }
+
   async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     const path = url.pathname;
     const p = pairing.find((r) => r.method === req.method && r.path.test(path));
@@ -347,6 +403,18 @@ export function createApp(opts: AppOptions): Server {
       log.warn({ client: req.socket.remoteAddress, path: url.pathname }, "LAN request from outside the allowed networks");
       return send(res, 403, "forbidden", "text/plain");
     }
+    if (mode === "internal") {
+      try {
+        if (!opts.internalToken || !bearerMatches(req.headers.authorization, opts.internalToken)) throw new HttpError(401, "unauthorized");
+        if (!String(req.headers.host ?? "") || !opts.allowedHosts.includes(String(req.headers.host).toLowerCase())) throw new HttpError(403, "unknown host");
+        await handleInternal(req, res, url);
+      } catch (err) {
+        const status = err instanceof HttpError ? err.status : err instanceof BadRequest ? 400 : err instanceof PaperclipError ? (err.status === 404 ? 404 : 502) : 500;
+        if (status >= 500 || status === 401) log[status === 401 ? "warn" : "error"]({ err: String((err as Error).message ?? err).slice(0, 500), path: url.pathname }, "internal request failed");
+        if (!res.headersSent) send(res, status, JSON.stringify({ error: (err as Error).message ?? "error" }), "application/json");
+      }
+      return;
+    }
     const rejected = checkRequest(req, opts.allowedHosts);
     if (rejected) {
       log.warn({ method: req.method, path: url.pathname, reason: rejected }, "request rejected");
@@ -362,6 +430,12 @@ export function createApp(opts: AppOptions): Server {
       if (!res.headersSent) send(res, status, JSON.stringify({ error: (err as Error).message ?? "error" }), "application/json");
     }
   });
+}
+
+function bearerMatches(header: string | undefined, token: string): boolean {
+  const given = Buffer.from(/^Bearer (.+)$/.exec(String(header ?? ""))?.[1] ?? "");
+  const want = Buffer.from(token);
+  return given.length === want.length && timingSafeEqual(given, want);
 }
 
 function parse<T extends z.ZodType>(schema: T, body: unknown): z.infer<T> {

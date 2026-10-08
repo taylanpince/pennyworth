@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
@@ -23,6 +23,11 @@ export interface Config {
    * paired devices only, from these client networks, under these host names.
    */
   lan?: { port: number; hosts: string[]; clients: string[]; url: string };
+  /**
+   * The listener for the tasks bridge and the runner (D-25), with a bearer token: off unless the
+   * token file exists.
+   */
+  internal?: { port: number; hosts: string[]; token: string };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -40,7 +45,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     staticDir: env.BOARD_STATIC_DIR ?? new URL("../web", import.meta.url).pathname,
     logLevel: env.LOG_LEVEL ?? "info",
     lan: lanConfig(env),
+    internal: internalConfig(env),
   };
+}
+
+function internalConfig(env: NodeJS.ProcessEnv): Config["internal"] {
+  const file = env.BOARD_INTERNAL_TOKEN_FILE ?? "/run/secrets/board_internal_token";
+  if (!existsSync(file)) return undefined;
+  const token = readFileSync(file, "utf8").trim();
+  if (token.length < 32) throw new Error(`${file}: token too short`);
+  const port = Number(env.BOARD_INTERNAL_PORT ?? 3122);
+  const hosts = (env.BOARD_INTERNAL_HOSTS ?? `board:${port},localhost:${port},127.0.0.1:${port}`).split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+  return { port, hosts, token };
 }
 
 function lanConfig(env: NodeJS.ProcessEnv): Config["lan"] {

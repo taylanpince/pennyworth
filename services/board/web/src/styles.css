@@ -380,3 +380,9 @@ kbd {
 .pair-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .pair-form .btn { justify-content: center; padding: 10px; font-size: 15px; }
 .pair-code { text-align: center; font: 700 30px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.14em; margin: 10px 0 2px; }
+
+/* Scheduled moves and recurring tasks (D-25) */
+.tag.when { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.auto-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.auto-block { display: grid; gap: 6px; }
+.prop-value input.narrow { width: 52px; }

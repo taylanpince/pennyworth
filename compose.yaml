@@ -29,6 +29,7 @@ services:
         PENNYWORTH_OPS_MCP_TOKEN="$$(cat /run/secrets/ops_mcp_token)"
         PENNYWORTH_GOOGLE_MCP_TOKEN="$$(cat /run/secrets/google_mcp_token)"
         PENNYWORTH_SLACK_MCP_TOKEN="$$(cat /run/secrets/slack_mcp_token)"
+        PENNYWORTH_BOARD_TOKEN="$$(cat /run/secrets/board_internal_token)"
         && exec /usr/bin/tini -- docker-entrypoint.sh "$$@"
       - paperclip
     command: ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
@@ -59,6 +60,8 @@ services:
       - ops_mcp_token
       - google_mcp_token
       - slack_mcp_token
+      # The board's internal API, for the Assistant's task_schedule / task_recurring (D-25).
+      - board_internal_token
     pids_limit: 2048
     # Fixed public resolvers: containers keep the host's DNS servers from when they started, and
     # a network or WARP change left every agent run failing at startup (2026-10-07).
@@ -172,10 +175,14 @@ services:
       - ${PENNYWORTH_DATA_DIR:-./data}/board:/data/board
     secrets:
       - paperclip_board_key
+      - board_internal_token
     ports:
       - "127.0.0.1:3120:3120"
       # LAN listener; loopback-only unless .env sets BOARD_LAN_BIND=0.0.0.0 (e.g. with BOARD_LAN_PORT=80).
       - "${BOARD_LAN_BIND:-127.0.0.1}:${BOARD_LAN_PORT:-3121}:3121"
+      # Internal API (D-25): bearer token, /internal/ only. The runner on the host claims recurring
+      # runs here; the tasks bridge in paperclip reaches it as board:3122 on the backplane.
+      - "127.0.0.1:3122:3122"
     # backplane reaches Paperclip; egress only carries the published port (the board makes no outbound calls).
     networks:
       - backplane
@@ -216,3 +223,5 @@ secrets:
     file: ${PENNYWORTH_SECRETS_DIR}/slack_mcp_token
   paperclip_board_key:
     file: ${PENNYWORTH_SECRETS_DIR}/paperclip_board_key
+  board_internal_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/board_internal_token
