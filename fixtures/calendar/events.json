@@ -1,7 +1,7 @@
 [
   {
-    "id": "fixture_oms_privy_20261004T120000Z",
-    "title": "OMS <> Privy Integration",
+    "id": "fixture_oms_nimbus_20261004T120000Z",
+    "title": "OMS <> Nimbus Integration",
     "start": "2026-10-04T14:00:00+02:00",
     "end": "2026-10-04T14:30:00+02:00",
     "timezone": "Europe/Madrid",

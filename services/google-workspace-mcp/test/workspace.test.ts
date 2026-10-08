@@ -11,7 +11,7 @@ describe("google-workspace-mcp", () => {
     const e = normalizeEvent({
       id: "abc_20261004T120000Z",
       recurringEventId: "abc",
-      summary: "OMS <> Privy Integration",
+      summary: "OMS <> Nimbus Integration",
       start: { dateTime: "2026-10-04T14:00:00+02:00", timeZone: "Europe/Madrid" },
       end: { dateTime: "2026-10-04T14:30:00+02:00", timeZone: "Europe/Madrid" },
       attendees: [

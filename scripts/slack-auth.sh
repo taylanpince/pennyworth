@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-time read-only Slack consent for the slack-mcp sidecar (Slack's official MCP,
-# Polygon's registered client from go/mcps). Uses callback http://localhost:3118/callback.
+# your workspace's registered public client). Uses callback http://localhost:3118/callback.
 set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo"

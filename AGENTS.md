@@ -133,7 +133,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 
 ### Google
 
-- **Re-consent can silently switch accounts.** Re-running `scripts/google-auth.sh` once signed in as the *Horizon* account and switched Calendar away from Polygon. Credentials are now multi-account with an explicit primary (`--email … --primary` for tpince@polygon.technology). Calendar and meeting docs use the primary; Gmail and Drive span all accounts.
+- **Re-consent can silently switch accounts.** Re-running `scripts/google-auth.sh` once signed in as a secondary account and switched Calendar away from the work account. Credentials are now multi-account with an explicit primary (`--email … --primary` for the work account). Calendar and meeting docs use the primary; Gmail and Drive span all accounts.
 - **Multi-tab Docs** need the Docs API (`documents.get` with `includeTabsContent`). Drive's text export only returns the first tab; `docs_read` falls back to it.
 - **Meet/Gemini titles carry the organizer's timezone** ("09:30 EDT"). `parseMeetDocTitle` maps the abbreviations; extend `TZ_ABBREVIATIONS` if a new one shows up.
 
@@ -148,7 +148,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 
 ### Slack
 
-- `mcp.slack.com` has no dynamic client registration. It needs Polygon's public client (`SLACK_CLIENT_ID` in `.env`, callback `http://localhost:3118/callback`, PKCE, no secret) and rotating refresh tokens, which are persisted read-write in `~/.config/pennyworth/slack/`.
+- `mcp.slack.com` has no dynamic client registration. It needs a public client registered for the user's workspace (`SLACK_CLIENT_ID` in `.env`, callback `http://localhost:3118/callback`, PKCE, no secret) and rotating refresh tokens, which are persisted read-write in `~/.config/pennyworth/slack/`.
 - Claude Code's own Slack MCP login uses the same port, 3118.
 
 ## User preferences (owner: Taylan Pince)

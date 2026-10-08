@@ -18,9 +18,9 @@ const ev = (e: Partial<SourceEvidence>): SourceEvidence => ({ titleHints: [], te
 const at = (iso: string) => Date.parse(iso);
 const run = (e: SourceEvidence, events: Parameters<typeof scoreCandidates>[1]) => decide(scoreCandidates(e, events, cfg), cfg);
 
-const omsPrivy = event({
+const omsNimbus = event({
   id: "oms",
-  title: "OMS <> Privy Integration",
+  title: "OMS <> Nimbus Integration",
   start: "2026-10-04T14:00:00+02:00",
   end: "2026-10-04T14:30:00+02:00",
   attendees: people("Alice", "Bob", "Taylan"),
@@ -28,8 +28,8 @@ const omsPrivy = event({
 
 describe("filename parsing", () => {
   it("parses whisper-style names with and without time", () => {
-    const a = parseFilename("/t/Joe-Finkel-2026-08-17_22-30-01.txt", cfg.transcripts.filename_patterns, "Europe/Madrid");
-    expect(a.title).toBe("Joe Finkel");
+    const a = parseFilename("/t/Jane-Doe-2026-08-17_22-30-01.txt", cfg.transcripts.filename_patterns, "Europe/Madrid");
+    expect(a.title).toBe("Jane Doe");
     expect(new Date(a.startMs!).toISOString()).toBe("2026-08-17T20:30:01.000Z");
     const b = parseFilename("/t/Agglayer-Roadmap-Huddle-2-2026-09-17.txt", cfg.transcripts.filename_patterns, "Europe/Madrid");
     expect(b).toEqual({ title: "Agglayer Roadmap Huddle 2", date: "2026-09-17" });
@@ -41,16 +41,16 @@ describe("filename parsing", () => {
 
 describe("Meet document titles", () => {
   it("parses transcript and Gemini note titles", () => {
-    const a = parseMeetDocTitle("OMS <> Privy Integration (2026-10-04 14:00 GMT+02:00) - Transcript", "Europe/Madrid");
-    expect(a.title).toBe("OMS <> Privy Integration");
+    const a = parseMeetDocTitle("OMS <> Nimbus Integration (2026-10-04 14:00 GMT+02:00) - Transcript", "Europe/Madrid");
+    expect(a.title).toBe("OMS <> Nimbus Integration");
     expect(new Date(a.startMs!).toISOString()).toBe("2026-10-04T12:00:00.000Z");
     const b = parseMeetDocTitle("Wallet Weekly - 2026/10/04 14:45 CEST - Notes by Gemini", "Europe/Madrid");
     expect(b.title).toBe("Wallet Weekly");
     expect(new Date(b.startMs!).toISOString()).toBe("2026-10-04T12:45:00.000Z");
     expect(parseMeetDocTitle("Random doc", "Europe/Madrid").startMs).toBeUndefined();
     // Named US/other timezones (the meeting organizer's zone), not the user's.
-    const c = parseMeetDocTitle("Confirmed- Settle <> Polygon Weekly Sync - 2026/10/05 09:30 EDT - Notes by Gemini", "Europe/Madrid");
-    expect(c.title).toBe("Confirmed- Settle <> Polygon Weekly Sync");
+    const c = parseMeetDocTitle("Confirmed- Northwind <> Acme Weekly Sync - 2026/10/05 09:30 EDT - Notes by Gemini", "Europe/Madrid");
+    expect(c.title).toBe("Confirmed- Northwind <> Acme Weekly Sync");
     expect(new Date(c.startMs!).toISOString()).toBe("2026-10-05T13:30:00.000Z");
     expect(new Date(parseMeetDocTitle("X - 2026/01/12 10:00 PST - Notes by Gemini", "Europe/Madrid").startMs!).toISOString()).toBe("2026-01-12T18:00:00.000Z");
   });
@@ -58,7 +58,7 @@ describe("Meet document titles", () => {
 
 describe("meeting matching", () => {
   it("exact temporal match with attendee evidence auto-matches", () => {
-    const d = run(ev({ startMs: at("2026-10-04T14:03:00+02:00"), text: "Alice: hi Bob, let's talk about Privy wallets", titleHints: ["Privy wallet integration"] }), [omsPrivy]);
+    const d = run(ev({ startMs: at("2026-10-04T14:03:00+02:00"), text: "Alice: hi Bob, let's talk about Nimbus wallets", titleHints: ["Nimbus wallet integration"] }), [omsNimbus]);
     expect(d.status).toBe("matched");
     expect(d.chosen?.event_id).toBe("oms");
     expect(d.score).toBeGreaterThanOrEqual(75);
@@ -66,22 +66,22 @@ describe("meeting matching", () => {
 
   it("uses the filename timestamp as the start hint", () => {
     const hints = parseFilename("/t/2026-10-04_1401.md", cfg.transcripts.filename_patterns, "Europe/Madrid");
-    const scored = scoreCandidates(ev({ startMs: hints.startMs, dateHint: hints.date }), [omsPrivy], cfg);
+    const scored = scoreCandidates(ev({ startMs: hints.startMs, dateHint: hints.date }), [omsNimbus], cfg);
     expect(scored[0]!.components.temporal).toBe(50);
   });
 
   it("title similarity separates same-time candidates", () => {
     const other = event({ id: "other", title: "Hiring sync", start: "2026-10-04T14:00:00+02:00", end: "2026-10-04T14:30:00+02:00" });
-    const scored = scoreCandidates(ev({ startMs: at("2026-10-04T14:01:00+02:00"), titleHints: ["OMS Privy integration"] }), [other, omsPrivy], cfg);
+    const scored = scoreCandidates(ev({ startMs: at("2026-10-04T14:01:00+02:00"), titleHints: ["OMS Nimbus integration"] }), [other, omsNimbus], cfg);
     expect(scored[0]!.event_id).toBe("oms");
     expect(scored[0]!.components.title).toBe(20);
     expect(scored[1]!.components.title).toBe(0);
   });
 
   it("attendee evidence counts names found in the text", () => {
-    const scored = scoreCandidates(ev({ startMs: at("2026-10-04T14:00:00+02:00"), text: "thanks alice. bob will follow up" }), [omsPrivy], cfg);
+    const scored = scoreCandidates(ev({ startMs: at("2026-10-04T14:00:00+02:00"), text: "thanks alice. bob will follow up" }), [omsNimbus], cfg);
     expect(scored[0]!.components.attendees).toBe(15);
-    const none = scoreCandidates(ev({ startMs: at("2026-10-04T14:00:00+02:00"), text: "no names here" }), [omsPrivy], cfg);
+    const none = scoreCandidates(ev({ startMs: at("2026-10-04T14:00:00+02:00"), text: "no names here" }), [omsNimbus], cfg);
     expect(none[0]!.components.attendees).toBe(0);
   });
 
@@ -104,9 +104,9 @@ describe("meeting matching", () => {
   });
 
   it("ambiguous strong candidates go to review even above the auto threshold", () => {
-    const a = event({ id: "a", title: "OMS Privy Integration", start: "2026-10-04T14:00:00+02:00", end: "2026-10-04T14:30:00+02:00", attendees: people("Alice", "Taylan") });
-    const b = event({ id: "b", title: "OMS Privy Integration (internal)", start: "2026-10-04T14:00:00+02:00", end: "2026-10-04T14:30:00+02:00", attendees: people("Alice", "Taylan") });
-    const d = run(ev({ startMs: at("2026-10-04T14:00:00+02:00"), titleHints: ["OMS Privy Integration"], text: "alice" }), [a, b]);
+    const a = event({ id: "a", title: "OMS Nimbus Integration", start: "2026-10-04T14:00:00+02:00", end: "2026-10-04T14:30:00+02:00", attendees: people("Alice", "Taylan") });
+    const b = event({ id: "b", title: "OMS Nimbus Integration (internal)", start: "2026-10-04T14:00:00+02:00", end: "2026-10-04T14:30:00+02:00", attendees: people("Alice", "Taylan") });
+    const d = run(ev({ startMs: at("2026-10-04T14:00:00+02:00"), titleHints: ["OMS Nimbus Integration"], text: "alice" }), [a, b]);
     expect(d.candidates[0]!.score).toBeGreaterThanOrEqual(75);
     expect(d.status).toBe("needs_review");
   });
@@ -118,22 +118,22 @@ describe("meeting matching", () => {
   });
 
   it("mtime-only whisper transcripts match via end time, title and attendee in filename", () => {
-    const getty = event({ id: "getty", title: "Getty <> Polygon", start: "2026-09-30T16:00:00+02:00", end: "2026-09-30T16:45:00+02:00", attendees: [{ name: "Mark Getty", email: "mark@getty.example" }, { email: "taylan@example.com", self: true }] });
+    const initech = event({ id: "initech", title: "Initech <> Acme", start: "2026-09-30T16:00:00+02:00", end: "2026-09-30T16:45:00+02:00", attendees: [{ name: "Mark Initech", email: "mark@initech.example" }, { email: "taylan@example.com", self: true }] });
     const other = event({ id: "standup", title: "Team standup", start: "2026-09-30T15:00:00+02:00", end: "2026-09-30T15:15:00+02:00" });
-    const d = run(ev({ endMs: at("2026-09-30T16:49:28+02:00"), dateHint: "2026-09-30", filenameTitle: "Getty" }), [getty, other]);
+    const d = run(ev({ endMs: at("2026-09-30T16:49:28+02:00"), dateHint: "2026-09-30", filenameTitle: "Initech" }), [initech, other]);
     expect(d.status).toBe("matched");
-    expect(d.chosen?.event_id).toBe("getty");
+    expect(d.chosen?.event_id).toBe("initech");
   });
 
   it("ignores declined, cancelled and all-day events", () => {
-    const declined = event({ ...omsPrivy, id: "declined", attendees: [{ email: "taylan@example.com", self: true, response_status: "declined" }] });
-    const cancelled = event({ ...omsPrivy, id: "cancelled", status: "cancelled" });
-    const allDay = event({ ...omsPrivy, id: "allday", all_day: true });
+    const declined = event({ ...omsNimbus, id: "declined", attendees: [{ email: "taylan@example.com", self: true, response_status: "declined" }] });
+    const cancelled = event({ ...omsNimbus, id: "cancelled", status: "cancelled" });
+    const allDay = event({ ...omsNimbus, id: "allday", all_day: true });
     expect(scoreCandidates(ev({ startMs: at("2026-10-04T14:00:00+02:00") }), [declined, cancelled, allDay], cfg)).toEqual([]);
   });
 
   it("matches a shared meeting document to an event the user declined", () => {
-    const rtb = event({ id: "rtb", title: "OMS RTB (weekly)", start: "2026-10-05T19:00:00+02:00", end: "2026-10-05T19:30:00+02:00", attendees: [...people("Vojtech"), { email: "taylan@example.com", self: true, response_status: "declined" }] });
+    const rtb = event({ id: "rtb", title: "OMS RTB (weekly)", start: "2026-10-05T19:00:00+02:00", end: "2026-10-05T19:30:00+02:00", attendees: [...people("Sam"), { email: "taylan@example.com", self: true, response_status: "declined" }] });
     const family = event({ id: "family", title: "Family Time (ask before booking)", start: "2026-10-05T19:00:00+02:00", end: "2026-10-05T20:00:00+02:00" });
     const d = run(ev({ startMs: at("2026-10-05T19:02:00+02:00"), filenameTitle: "OMS RTB (weekly)", driveFileId: "doc1" }), [family, rtb]);
     expect(d.status).toBe("matched");
@@ -141,8 +141,8 @@ describe("meeting matching", () => {
   });
 
   it("a Drive document attached to the event is an explicit match", () => {
-    const withDoc = event({ ...omsPrivy, id: "withdoc", attachments: [{ file_id: "drive123", title: "Transcript" }] });
-    const sibling = event({ ...omsPrivy, id: "sibling" });
+    const withDoc = event({ ...omsNimbus, id: "withdoc", attachments: [{ file_id: "drive123", title: "Transcript" }] });
+    const sibling = event({ ...omsNimbus, id: "sibling" });
     const d = run(ev({ endMs: at("2026-10-04T14:35:00+02:00"), driveFileId: "drive123" }), [sibling, withDoc]);
     expect(d.status).toBe("matched");
     expect(d.chosen?.event_id).toBe("withdoc");

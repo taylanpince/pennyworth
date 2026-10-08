@@ -123,16 +123,16 @@ export const people = (...names: string[]) =>
   names.map((n) => ({ name: n, email: `${n.toLowerCase()}@example.com`, self: n === "Taylan" }));
 
 export const OMS_PRIVY = event({
-  id: "evt_oms_privy_20261004",
-  title: "OMS <> Privy Integration",
+  id: "evt_oms_nimbus_20261004",
+  title: "OMS <> Nimbus Integration",
   start: "2026-10-04T14:00:00+02:00",
   end: "2026-10-04T14:30:00+02:00",
   attendees: people("Alice", "Bob", "Taylan"),
 });
 
 export const EXTRACTION = {
-  summary: "Discussed integrating Privy embedded wallets into the Open Money Stack.",
-  decisions: [{ text: "Use Privy for embedded wallet onboarding in the pilot", kind: "explicit" as const }],
+  summary: "Discussed integrating Nimbus embedded wallets into the Open Money Stack.",
+  decisions: [{ text: "Use Nimbus for embedded wallet onboarding in the pilot", kind: "explicit" as const }],
   actions: [
     { owner: "Taylan", action: "Review the delegated signing proposal", deadline: null },
     { owner: "Alice", action: "Send revised architecture diagram", deadline: "Friday" },
@@ -140,5 +140,5 @@ export const EXTRACTION = {
   open_questions: ["Which chains are in scope for the pilot?"],
   context: [],
   people: ["Alice", "Bob"],
-  topics: ["Open Money Stack", "Privy"],
+  topics: ["Open Money Stack", "Nimbus"],
 };

@@ -53,7 +53,7 @@ Your task gives today's date and the user's Slack user ID (`U…`). Below, `<me>
 4. **Create tasks.** Use one `task_create` per conversation, using the root message of the thread:
    - `marker`: `source:slack:<channel_id>:<thread_ts or message ts>`.
    - `title`:
-     - for needs-response: `Reply to <person>: <topic>`, e.g. "Reply to Heena: review JPM sync agenda";
+     - for needs-response: `Reply to <person>: <topic>`, e.g. "Reply to Dana: review Globex sync agenda";
      - for todo: the action itself;
    - `priority`: `high` for an explicit deadline today or tomorrow, or a blocker. `medium` otherwise. `low` for nice-to-haves.
    - `description`, in this format:
@@ -62,15 +62,15 @@ Your task gives today's date and the user's Slack user ID (`U…`). Below, `<me>
      ## Source
 
      Type: Slack
-     Channel: #team-oms (or "DM with Heena Bheeroo")
-     From: Heena Bheeroo
+     Channel: #team-payments (or "DM with Dana Whitfield")
+     From: Dana Whitfield
      Sent: 2026-10-05 13:47
      Permalink: https://…
      PR: https://github.com/<owner>/<repo>/pull/<number>
 
      ## Reason
 
-     Direct request to review the agenda for tomorrow's JPM sync.
+     Direct request to review the agenda for tomorrow's Globex sync.
 
      ## Suggested action
 

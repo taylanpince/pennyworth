@@ -126,7 +126,7 @@ Also:
 
 ## D-11: Security approval
 
-The AI Tool Hub page lists Paperclip as "Security team only". The user cleared using it with the Security team lead, who runs Paperclip himself, before implementation started (2026-10-04).
+Pennyworth reads work email, Slack, calendars and documents. The user cleared running it on work data with their organization's security team before implementation started (2026-10-04). Anyone else running it on work accounts should do the same.
 
 ## D-12: Todo list = Paperclip tasks
 
@@ -142,8 +142,8 @@ The AI Tool Hub page lists Paperclip as "Security team only". The user cleared u
 
 ## D-13: Slack through Slack's official MCP, behind a read-only proxy
 
-- **Decision:** `services/slack-mcp` proxies `https://mcp.slack.com/mcp`, which is approved on go/mcps, with the user's token. It exposes an allowlist of read tools; anything matching send, post, schedule, update, create, delete, reaction, draft, upload or similar is never exposed, even if allowlisted.
-- **Auth:** OAuth 2 with PKCE, using Polygon's public client (`SLACK_CLIENT_ID`) and its registered loopback callback on port 3118. Only read and search user scopes are requested.
+- **Decision:** `services/slack-mcp` proxies `https://mcp.slack.com/mcp`, with the user's token. It exposes an allowlist of read tools; anything matching send, post, schedule, update, create, delete, reaction, draft, upload or similar is never exposed, even if allowlisted.
+- **Auth:** OAuth 2 with PKCE, using a public client registered for the workspace (`SLACK_CLIENT_ID`) and its registered loopback callback on port 3118. Only read and search user scopes are requested.
 - **Tokens:** Slack rotates refresh tokens, so the token file lives in `$PENNYWORTH_SECRETS_DIR/slack/` (0700), mounted read-write into the sidecar only.
 - **Why not Codex's own MCP OAuth:** the login would have to run inside the container, where the browser callback can't reach. A proxy also lets us enforce read-only access in code, independent of the Slack app's configured scopes.
 - **Polling:** the Slack Scout polls every 30 minutes during work hours, with no public ingress (spec §29, §25).

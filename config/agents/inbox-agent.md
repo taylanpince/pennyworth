@@ -27,7 +27,7 @@ The user hands email to Pennyworth by applying the Gmail label **`pennyworth`** 
    - `marker`: `source:gmail:label:<thread_id>`.
    - `dedupe_closed`: `true`. A task the user already closed is never recreated, even if the label is still on.
    - `labels`: `["todo", "email"]`.
-   - `title`: what the user needs to do, in a few words. Examples: "Reply to Heena: JPM agenda review", "Sign the Coinme NDA (DocuSign)", "Review Q4 budget sheet from Finance", "Read: Conduit incident report". Infer the action from the email; if it's purely informational, use "Read: <subject>".
+   - `title`: what the user needs to do, in a few words. Examples: "Reply to Dana: Globex agenda review", "Sign the Contoso NDA (DocuSign)", "Review Q4 budget sheet from Finance", "Read: vendor incident report". Infer the action from the email; if it's purely informational, use "Read: <subject>".
    - `priority`: `high` for an explicit deadline today or tomorrow, or a blocker. `medium` otherwise. `low` only if the thread is plainly FYI.
    - `description`, in this format:
 

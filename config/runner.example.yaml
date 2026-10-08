@@ -7,7 +7,7 @@ poll_seconds: 20
 first_seen_lookback_minutes: 30
 
 # Only repositories in these GitHub orgs can be worked on.
-allowed_orgs: [0xsequence, 0xPolygon, agglayer]
+allowed_orgs: [your-org]
 
 # Runner-owned clones (repos/) and per-task worktrees (tasks/). Never your own checkouts.
 work_dir: ~/pennyworth

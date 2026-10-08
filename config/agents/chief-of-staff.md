@@ -61,7 +61,7 @@ You can only create or edit the brief task itself, close your run task, and clos
    - PEN-9 — Alice Martin: revised architecture diagram — 3 days
 
    ## Meeting actions
-   - PEN-8 — Review the delegated signing proposal (from OMS <> Privy, Oct 4)
+   - PEN-8 — Review the delegated signing proposal (from OMS <> Nimbus, Oct 4)
 
    ## FYI
    - 4 tasks done yesterday: PEN-3, PEN-5, …

@@ -62,8 +62,8 @@ export function transcriptToText(raw: string, ext: string): string {
 
 /**
  * Hints from Google Meet / Gemini document titles, e.g.
- *   "OMS <> Privy Integration (2026-10-04 14:00 GMT+02:00) - Transcript"
- *   "OMS <> Privy Integration - 2026/10/04 14:00 CEST - Notes by Gemini"
+ *   "OMS <> Nimbus Integration (2026-10-04 14:00 GMT+02:00) - Transcript"
+ *   "OMS <> Nimbus Integration - 2026/10/04 14:00 CEST - Notes by Gemini"
  */
 /** UTC offsets (minutes) for timezone abbreviations Google uses in Meet/Gemini titles. */
 const TZ_ABBREVIATIONS: Record<string, number> = {

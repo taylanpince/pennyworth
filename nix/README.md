@@ -6,13 +6,13 @@ Nothing in this repository changes your system configuration automatically, and 
 
 ```nix
 # home.nix
-imports = [ /home/taylan/development/pennyworth/nix/transcript-watcher.nix ];
+imports = [ /home/you/pennyworth/nix/transcript-watcher.nix ];
 
 services.pennyworth-transcripts = {
   enable = true;
-  repoPath = "/home/taylan/development/pennyworth";
-  transcriptsDir = "/home/taylan/Documents/transcripts";
-  extraDirs = [ "/home/taylan/Documents/transcripts/1-1s" ];   # PathChanged is not recursive
+  repoPath = "/home/you/pennyworth";
+  transcriptsDir = "/home/you/Documents/transcripts";
+  extraDirs = [ "/home/you/Documents/transcripts/1-1s" ];   # PathChanged is not recursive
 };
 ```
 

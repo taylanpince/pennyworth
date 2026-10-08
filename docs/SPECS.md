@@ -839,7 +839,7 @@ Meetings/YYYY/MM/
 Example:
 
 ```text
-Meetings/2026/10/2026-10-04 1400 - OMS Privy Integration.md
+Meetings/2026/10/2026-10-04 1400 - OMS Nimbus Integration.md
 ```
 
 Suggested frontmatter:
@@ -866,7 +866,7 @@ processed_by: paperclip
 Body:
 
 ```markdown
-# OMS <> Privy Integration
+# OMS <> Nimbus Integration
 
 ## Summary
 
@@ -914,7 +914,7 @@ The append target is:
 Entry format:
 
 ```markdown
-### 2026-10-04 — OMS <> Privy Integration
+### 2026-10-04 — OMS <> Nimbus Integration
 <!-- paperclip-meeting:GOOGLE_CALENDAR_EVENT_ID -->
 
 **Attendees:** Alice, Bob
@@ -930,7 +930,7 @@ Entry format:
 **Open questions**
 - ...
 
-[[Meetings/2026/10/2026-10-04 1400 - OMS Privy Integration]]
+[[Meetings/2026/10/2026-10-04 1400 - OMS Nimbus Integration]]
 ```
 
 The HTML marker is mandatory.
@@ -1720,7 +1720,7 @@ Calendar contains:
 
 ```text
 14:00–14:30
-OMS <> Privy Integration
+OMS <> Nimbus Integration
 Alice, Bob, Taylan
 ```
 
@@ -1730,7 +1730,7 @@ At 14:32 a file appears:
 Transcripts/2026-10-04_1401.md
 ```
 
-It discusses Privy wallet integration.
+It discusses Nimbus wallet integration.
 
 ### Expected flow
 
@@ -1745,7 +1745,7 @@ new transcript discovered
 ↓
 Calendar candidates retrieved
 ↓
-OMS <> Privy scores >75
+OMS <> Nimbus scores >75
 ↓
 association persisted
 ↓
