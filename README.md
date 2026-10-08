@@ -4,56 +4,64 @@
 
 # Pennyworth
 
-A local-first personal operations system. Paperclip is the control plane (agents, tasks, routines), Obsidian is the long-term memory, and a small deterministic service, **ops-mcp**, sits between them.
+A local-first personal executive assistant. It runs on your own machine, reads your meetings, calendar, Slack and labelled email, and turns them into meeting notes in Obsidian and a single task list you work from a board. It also does research and drafting on request, and runs coding jobs in your repositories when you ask in plain words.
 
-Phase 1, **local meeting memory**, is implemented. Meeting transcripts are matched to Google Calendar events, then the system writes:
+It is built on [Paperclip](https://github.com/paperclipai/paperclip) (agents, tasks, routines) with Codex agents, Obsidian as long-term memory, and small deterministic services in between. It was built for one person's workflow and is opinionated about it: read-only access to every source, nothing is ever sent on your behalf, and judgement stays in agents while matching, routing, writing and deduplication stay in code.
 
-- a canonical meeting note to Obsidian;
-- a dated entry under `## Meeting Log` in the right project note;
-- Paperclip tasks for genuine action items.
+- **Meetings:** transcripts (local files, or Google Meet transcripts and Gemini notes in Drive) are matched to Calendar events. Pennyworth writes a canonical meeting note, appends a dated entry to the right project note, and creates tasks for your own action items.
+- **Slack:** messages waiting on your reply, and things you promised, become tasks. They close themselves once you answer, or once you review the PR you were asked about.
+- **Email:** threads you label `pennyworth` in Gmail become tasks, and close when you remove the label.
+- **Daily brief:** every weekday morning, a ranked view of your day: priorities, meetings, what's stale.
+- **Assistant:** research and drafts (agendas, summaries) from Slack, Drive, Docs, Calendar and your notes, posted as task comments for you to review. It also acts on your replies to any task.
+- **Coding jobs:** assign a task to an Engineer and say what you want. Codex, Claude Code or an OpenRouter model works in its own git worktree, as you, and nothing is pushed until you say `push` or `pr`.
+- **Board:** a keyboard-driven task board on localhost, also usable from a paired phone at home.
 
-All of it is idempotent, and nothing ambiguous is ever written. The spec lives in [`docs/SPECS.md`](docs/SPECS.md). Every deviation from it is explained in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+All writes are idempotent, and nothing ambiguous is written. [`docs/SPECS.md`](docs/SPECS.md) is the original spec, and [`docs/DECISIONS.md`](docs/DECISIONS.md) (D-1 to D-24) explains every deviation from it.
 
 ```text
-host (NixOS)
-├── ~/Documents/transcripts ──(read-only)──┐
-├── Obsidian vault: only polygon/, sequence/, people/, Meetings/ ──(rw)──┐
-├── systemd --user path watcher ── signed webhook ──┐                     │
+host (Linux, systemd user services)
+├── pennyworth-runner (systemd --user, runs as you)       services/runner/
+│     engineer tasks → Codex / Claude Code / OpenRouter jobs in its own worktrees
+│     your replies on tasks → the Assistant; review-request tasks → closed from GitHub
+├── transcript watcher (systemd --user .path) ── signed webhook ──► "Meeting scan"
 └── docker compose (all containers: non-root, cap_drop ALL, no-new-privileges)
     ├── paperclip              127.0.0.1:3100 only; Codex agents (read-only sandbox, no shell)
-    │   └── Meeting Librarian ── MCP ──► ops-mcp, google-workspace-mcp, paperclip-tasks bridge
-    ├── ops-mcp                no Internet route; SQLite state; the only vault writer
-    └── google-workspace-mcp   Calendar + Drive, read-only scopes, GET requests only
+    ├── ops-mcp                no Internet route; SQLite state; the only Obsidian writer
+    ├── google-workspace-mcp   Calendar, Drive, Docs, Gmail: read-only scopes, GET requests only
+    ├── slack-mcp              read-only proxy to Slack's official MCP server
+    └── board                  127.0.0.1:3120 task board (optional LAN listener for paired phones)
+services/paperclip-tasks-mcp   stdio bridge, mounted into paperclip, for agents' task updates
 ```
 
-## Commands
+## Requirements
 
-| | |
-|---|---|
-| Start everything | `docker compose up -d` |
-| Stop everything | `docker compose down` (no agent keeps running on the host) |
-| Health | `scripts/healthcheck.sh` |
-| Security acceptance checks | `scripts/verify-security.sh` |
-| Backup / restore | `scripts/backup.sh` / `scripts/restore.sh <archive>` (restore refuses while running) |
-| Re-apply Paperclip config | `node scripts/paperclip-setup.mjs` (idempotent) |
-| Wake the Meeting Librarian now | `scripts/trigger-meeting-scan.sh` |
-| Your todo list | `scripts/todo.mjs` (see [Todo list](#todo-list)) |
-| Logs | `docker compose logs -f ops-mcp` (structured; no transcript text, no secrets) |
-| Tests | `npm test --prefix services/ops-mcp` and `npm test --prefix services/google-workspace-mcp` |
+- Linux with systemd user services, and Docker with Compose. NixOS is what it's developed on; [`nix/`](nix/) has opt-in modules, and plain unit files work too.
+- Node.js 24 on the host (scripts and the runner).
+- A ChatGPT account for Codex (the Paperclip agents).
+- An Obsidian vault (any folder of markdown works).
+- A Google Workspace account where you can create an OAuth client.
+- Optional: Slack (a public OAuth client registered for your workspace), `gh` and Codex/Claude Code/opencode on the host for coding jobs, an OpenRouter key, Tailscale for the board away from home.
 
-## First run
+## Setup
 
-Already done for you: `scripts/bootstrap.sh` (secrets in `~/.config/pennyworth`, config files, data dirs, vault mounts), image builds, and `docker compose up -d`. To start from scratch on another machine: `cp .env.example .env`, edit it, then run `scripts/bootstrap.sh` and `docker compose up -d --build`.
+1. **Configure.** `cp .env.example .env` and set the host paths: secrets directory, transcripts folder, vault and the vault folders Pennyworth may see. Then:
 
-1. **Create your Paperclip account and provision everything.** This prompts for an email and password, creates the account, claims the instance, then creates the company, labels, Meeting Librarian, routine and webhook:
+   ```sh
+   scripts/bootstrap.sh            # secrets in ~/.config/pennyworth, config files from config/*.example.yaml, data dirs, vault mounts
+   docker compose up -d --build
+   ```
+
+   Edit the generated `config/system.yaml` (your names and emails, timezone, transcript roots), `config/paperclip.yaml` (agents, schedules, tools) and `config/routing.yaml`. They are gitignored.
+
+2. **Create your Paperclip account and provision everything.** This prompts for an email and password, claims the instance, and creates the company, labels, agents, routines and webhook. It's idempotent: re-run it after any change to `config/paperclip.yaml` or `config/agents/*.md`.
 
    ```sh
    node scripts/paperclip-setup.mjs
    ```
 
-   Afterwards, set `PAPERCLIP_DISABLE_SIGN_UP=true` in `.env` and run `docker compose up -d`.
+   Afterwards set `PAPERCLIP_DISABLE_SIGN_UP=true` in `.env` and run `docker compose up -d`.
 
-2. **Log Codex in with your company ChatGPT account** (device flow, once):
+3. **Log Codex in** (device flow, once):
 
    ```sh
    docker compose exec -it -u node paperclip codex -c 'cli_auth_credentials_store="file"' login --device-auth
@@ -61,25 +69,72 @@ Already done for you: `scripts/bootstrap.sh` (secrets in `~/.config/pennyworth`,
 
    The `-u node` matters: the server must be able to read the resulting `/paperclip/.codex/auth.json`.
 
-3. **Connect Google read-only** (see [Google](#google) below):
+4. **Connect Google** (see [Google](#google)) and, optionally, [Slack](#slack).
 
-   ```sh
-   scripts/google-auth.sh ~/Downloads/client_secret_….json
+5. **Install the transcript watcher** with the snippet in [`nix/README.md`](nix/README.md) (Home Manager, or two plain unit files).
+
+6. **Install the runner** if you want coding jobs and reply handling. Edit `config/runner.yaml` (allowed GitHub orgs, engines, devshells), then run `services/runner/src/main.mjs` as a systemd user service:
+
+   ```ini
+   # ~/.config/systemd/user/pennyworth-runner.service
+   [Unit]
+   Description=Pennyworth runner
+   After=network-online.target
+
+   [Service]
+   ExecStart=/usr/bin/env node --disable-warning=ExperimentalWarning /path/to/pennyworth/services/runner/src/main.mjs
+   Restart=on-failure
+   RestartSec=30
+
+   [Install]
+   WantedBy=default.target
    ```
 
-4. **Install the transcript watcher** with the Home Manager snippet in [`nix/README.md`](nix/README.md).
+   Make sure its `PATH` has `git`, `gh` and the engines you use.
 
-5. **Check:** `scripts/healthcheck.sh` should be all green.
+7. **Check:** `scripts/healthcheck.sh` should be all green, and `scripts/verify-security.sh` should pass.
 
-Then drop a transcript into `~/Documents/transcripts`, or have a Meet call that produces a transcript, and watch the **Meeting scan** task in Paperclip at <http://localhost:3100>.
+Then drop a transcript into your transcripts folder, or have a Meet call that produces one, and watch the **Meeting scan** task in Paperclip at <http://localhost:3100>, or the board at <http://localhost:3120>.
+
+**Trying it without Google:** set `GOOGLE_FIXTURES_DIR=/fixtures` in `.env` and run `docker compose up -d`. The sidecar then serves `fixtures/calendar/events.json`; copy `fixtures/transcripts/2026-10-04_1401.md` into your transcripts folder. Unset the variable afterwards.
+
+## Commands
+
+| | |
+|---|---|
+| Start / stop | `docker compose up -d` / `docker compose down` (no agent keeps running on the host) |
+| Health | `scripts/healthcheck.sh` |
+| Security checks | `scripts/verify-security.sh` (containers, ports, egress, and a secret scan of the repo) |
+| Backup / restore | `scripts/backup.sh` / `scripts/restore.sh <archive>` (restore refuses while running) |
+| Re-apply Paperclip config | `node scripts/paperclip-setup.mjs` |
+| Run the meeting scan now | `scripts/trigger-meeting-scan.sh` |
+| Todo list in the terminal | `scripts/todo.mjs` (see [Todo list](#todo-list)) |
+| Logs | `docker compose logs -f ops-mcp` (structured; no transcript text, no secrets), `journalctl --user -u pennyworth-runner -f` |
+| Tests | `npm test --prefix services/<ops-mcp\|google-workspace-mcp\|slack-mcp\|board\|runner>` |
+| Intake evaluation | `npm run eval:intake --prefix services/runner` (real comments against the request reader; see `config/intake-cases.example.yaml`) |
+
+[`AGENTS.md`](AGENTS.md) has the deploy commands per service, debugging recipes and the pitfalls found so far.
+
+## Agents
+
+| Agent | Runs | Can use |
+|---|---|---|
+| Meeting Librarian | file watcher + every 15 min in work hours | ops-mcp; Calendar/Drive read; its own tasks |
+| Chief of Staff | weekdays 08:30 → "Daily Brief — date" | Calendar read; Paperclip task list/create/update |
+| Slack Scout | every 30 min in work hours | Slack read/search; Paperclip task search/create/update/close |
+| Inbox Agent | every 30 min in work hours: one task per Gmail thread labelled `pennyworth` (archived or not), closed when the label is removed | Gmail read/search; Paperclip task search/create/update/close |
+| Assistant | when assigned, and on your task replies | Slack/Docs/Drive/Calendar read; notes read + meeting-note corrections; cached web search; Paperclip tasks |
+| Engineer · Codex / · Claude / · GLM | never woken: assignment targets for the runner | none (the runner does the work) |
+
+Each agent sees only the MCP servers and tools listed for it in `config/paperclip.yaml` (`mcp_servers`, `enabled_tools`); everything else is disabled in its Codex arguments. Schedules live there too. Run a routine on demand with **Run now** in Paperclip.
+
+Every task Pennyworth creates is assigned to you, and only for *your own* clear actions. Other people's commitments stay in the meeting notes.
 
 ## How meeting processing works
 
-1. **Wake-up.** The watcher, or the 15-minute work-hours schedule, fires the *Meeting scan* routine. The Meeting Librarian (Codex) wakes up.
-2. **Scan.** `transcripts_scan` registers new or changed files and returns work items.
-   - Files are identified by canonical path and SHA-256. A changed file becomes a new revision.
-   - Files must be unchanged for `stability_seconds` before they count.
-3. **Match.** For each item the agent reads the calendar for the item's time window and passes all events to `meeting_match`. ops-mcp scores each candidate:
+1. **Wake-up.** The watcher, or the 15-minute schedule, fires the *Meeting scan* routine, which wakes the Meeting Librarian.
+2. **Scan.** `transcripts_scan` registers new or changed files (by canonical path and SHA-256; a changed file is a new revision) once they've been stable for `stability_seconds`. Meet transcripts and Gemini notes are found in Drive.
+3. **Match.** The agent reads the calendar around each item and passes the events to `meeting_match`. ops-mcp scores each candidate:
 
    | Component | Points |
    |---|---|
@@ -89,54 +144,39 @@ Then drop a transcript into `~/Documents/transcripts`, or have a Meet call that 
    | Filename | 0–10 |
    | Meet link / location | 0–5 |
 
-   It then decides:
-   - **≥ 75 and unambiguous:** matched.
-   - **55–74, or ambiguous:** a review task.
-   - **< 55:** unmatched, retried later.
+   **≥ 75 and unambiguous:** matched. **55–74, or ambiguous:** a review task. **< 55:** unmatched, retried later. A Drive document attached to exactly one event matches it directly. Events you declined still count: Gemini notes are shared for those too.
+4. **Publish.** The agent reads the source and calls `meeting_publish` with a structured extraction (summary, explicit or probable decisions, actions with owner and deadline only when stated, open questions). ops-mcp then:
+   - writes `Meetings/YYYY/MM/YYYY-MM-DD HHMM - Title.md`;
+   - routes the meeting: explicit rules in `config/routing.yaml`, then remembered choices, then topic keywords, else the agent's best guess of an existing project note (or none). It never asks you;
+   - appends a Meeting Log entry with a `<!-- paperclip-meeting:<event id> -->` marker (never twice);
+   - creates tasks for your own action items.
 
-   A Drive document attached to exactly one event is matched to it directly.
-4. **Publish.** The agent reads the source and calls `meeting_publish` with a structured extraction (summary, decisions as explicit or probable, actions with owner and deadline only when stated, open questions). ops-mcp then:
-   - creates `Meetings/YYYY/MM/YYYY-MM-DD HHMM - Title.md`;
-   - routes the meeting: explicit rules, then remembered choices, then topic keywords, else the agent's best guess of an existing project note (or none). It never asks you;
-   - appends the Meeting Log entry with a `<!-- paperclip-meeting:<event id> -->` marker (never twice);
-   - creates action tasks with markers: `meeting-action` for yours, `waiting-on` for other people's.
+**Review tasks:** comment `pick 2` (number from the list) or `ignore`, then wait for the next scan or click **Run now**.
 
-### Resolving review tasks
-
-Comment on the task in Paperclip, then wait for the next scan, or click **Run now** on the Meeting scan routine:
-
-- **Which meeting was this?** `pick 2` (number from the list) or `ignore`.
-
-### Routing rules
-
-Edit `config/routing.yaml` (examples inside). Explicit regex rules always win, so add one to correct a wrong guess. Targets must be existing notes in the mounted vault folders.
+**Routing:** explicit regex rules in `config/routing.yaml` always win, so add one to correct a wrong guess. Targets must be existing notes in the mounted vault folders.
 
 ## Board
 
 **http://localhost:3120** is where you work your tasks. It shows every open task assigned to you, the Assistant or an Engineer, in five columns:
 
-- **Triage**: every new task lands here (from Slack, email, meetings, or added on the board). Sort it into one of the others.
-- **Today**, **Tomorrow**, **Later**, **Backlog**: ranked top to bottom. At midnight (your `timezone` in `config/system.yaml`), Tomorrow moves into Today, below what's still there.
+- **Triage**: every new task lands here (from Slack, email, meetings, or added on the board).
+- **Today**, **Tomorrow**, **Later**, **Backlog**: ranked top to bottom. At midnight in your timezone, Tomorrow moves into Today.
 
-Drag cards to rank or move them; on a phone, use a card's arrow. Open a card to do everything else: edit the title and description, change priority, status and labels, assign it to yourself, the Assistant or an Engineer (with model and effort), read the whole thread and reply, and mark it done or cancelled (with undo). Replies reach the same handlers as before (the Assistant, the runner or the review flow); the box says which. **Brief** opens today's Daily Brief. Task references there (and in descriptions and comments) open the task and show its status: ✓ struck through when done, ✕ when cancelled, a half-filled dot while in progress; hover for the title. **Done** shows what closed in the last 48 hours, so you can reopen it.
+Drag cards to rank or move them (on a phone, use a card's arrow). Open a card to edit it, change priority, status and labels, reassign it (to an Engineer with model and effort), read the thread and reply, or close it with undo. Task references such as `PEN-12` in text open the task and show its status. **Brief** opens today's Daily Brief; **Done** shows the last 48 hours.
 
-Keyboard: `j`/`k` and `h`/`l` (or arrows) to move around, `Enter` to open, `e` done, `1`–`5` to move to Triage…Backlog, `J`/`K` to rank, `c` new task, `/` search, `b` brief, `?` for the rest.
+Keyboard: `j`/`k` and `h`/`l` (or arrows) to move, `Enter` to open, `e` done, `1`–`5` to move to Triage…Backlog, `J`/`K` to rank, `c` new task, `/` search, `b` brief, `?` for the rest.
 
-Bucket and rank are the board's own (`data/board/board.sqlite`); everything else is the Paperclip task. The board acts as you with the board key, which stays in the container; it's published on 127.0.0.1 only and refuses requests for other host names or from other sites.
+Bucket and rank live in the board's own SQLite (`data/board/`); everything else is the Paperclip task. The board acts as you with a board key that stays in the container, listens on 127.0.0.1 only, and refuses other host names and cross-site requests.
 
-**On your phone, at home:** the board is at **http://pennyworth.local** on the home Wi-Fi, for paired devices only. Click **Phone** on the laptop's board, then open pennyworth.local in Safari on the phone and type the code shown (or scan the QR code and tap **Pair** in Safari: the browser you pair from is the one that stays signed in); the phone stays paired (remove devices in the same panel). Add the page to your home screen for an app-like icon.
+**On your phone, at home:** set `BOARD_LAN_CLIENTS` to your home subnet (e.g. `192.168.1.0/24`), `BOARD_LAN_BIND=0.0.0.0` and `BOARD_LAN_PORT=80` in `.env`, then `docker compose up -d board`. Click **Phone** on the laptop's board and enter the code shown at http://pennyworth.local on the phone (or scan the QR code). Only paired devices get in; remove them in the same panel. The name is published over mDNS by [`nix/board-mdns.nix`](nix/board-mdns.nix) while you're on the home Wi-Fi. It's plain HTTP, so only enable it on networks you trust. Some VPN firewalls block LAN traffic while connected.
 
-- Setup: in `.env`, `BOARD_LAN_CLIENTS=192.168.7.0/24` (your home subnet; nothing else may connect), `BOARD_LAN_BIND=0.0.0.0` and `BOARD_LAN_PORT=80`, then `docker compose up -d board`. The name comes from the NixOS module `nix/board-mdns.nix` (vendored into `~/config/nixos/modules/pennyworth-mdns.nix`, `services.pennyworth-mdns = { enable = true; ssid = "…"; }`, plus `services.avahi.publish.userServices = true`), which publishes it over mDNS only while the laptop is on that Wi-Fi.
-- It's plain HTTP: fine on your own Wi-Fi, but don't open it on networks you don't trust. NordVPN's firewall blocks LAN traffic while connected unless `nordvpn set lan-discovery on`.
-- Away from home: `tailscale serve --bg --https=443 http://127.0.0.1:3121`, with the tailnet name added to `BOARD_LAN_HOSTS` and the tailnet range (`100.64.0.0/10`) to `BOARD_LAN_CLIENTS`.
+**Away from home:** `tailscale serve --bg --https=443 http://127.0.0.1:3121`, with the tailnet name added to `BOARD_LAN_HOSTS` and `100.64.0.0/10` to `BOARD_LAN_CLIENTS`.
 
 ## Todo list
 
-Your todo list lives in Paperclip. It contains your own items (label `todo`) plus action items from meetings (`meeting-action`). The Chief of Staff ranks it every weekday at 08:30 in the **Daily Brief** task. It only *suggests* priority changes; you decide.
-
 ```sh
 todo                                 # open todos + meeting actions, by priority
-todo add "Draft OMS roadmap" -p high -n "for Thursday's review"
+todo add "Draft the Q4 roadmap" -p high -n "for Thursday's review"
 todo prio PEN-12 critical            # critical | high | medium | low
 todo done PEN-12 "sent to Alice"
 todo show PEN-12
@@ -145,150 +185,110 @@ todo brief                           # today's daily brief
 todo --all                           # include reviews and briefs
 ```
 
-`todo` is `scripts/todo.mjs`; alias or symlink it onto your PATH. You can also add and edit tasks in the Paperclip UI. Give them the `todo` label so they show up here and in the brief.
-
-## Agents
-
-| Agent | Runs | Can use |
-|---|---|---|
-| Meeting Librarian | file watcher + every 15 min, weekdays 08–20 | ops-mcp; Calendar/Drive read; close or comment on its own tasks |
-| Chief of Staff | weekdays 08:30 → "Daily Brief — date" | Calendar read (list/get events only); Paperclip task list/create/update |
-| Slack Scout | every 30 min, weekdays 08–20 | Slack read/search only; Paperclip task search/create/update/close |
-| Inbox Agent | every 30 min, weekdays 08–19: one todo per email thread you label `pennyworth` in Gmail (archived or not), closed when you remove the label | Gmail read/search only; Paperclip task search/create/update/close |
-| Assistant | when assigned, and on your task replies | Slack/Docs/Drive/Calendar read; notes read + meeting-note corrections; Paperclip tasks incl. hand-back |
-| pennyworth-runner (host service, not a Paperclip agent) | your comments on `engineer` tasks | Codex, Claude Code or OpenRouter (picked by the Engineer the task is assigned to) in its own git worktrees, as you; read-only gh; no pushes except your `push`/`pr` |
-
-Each agent sees only the MCP servers and tools listed for it in `config/paperclip.yaml` (`mcp_servers`, `enabled_tools`). Everything else is disabled in its Codex arguments. Run a routine on demand with "Run now" in Paperclip.
+`todo` is `scripts/todo.mjs`; alias or symlink it onto your PATH. The Chief of Staff ranks the list every weekday morning in the **Daily Brief** task. It only *suggests* priority changes; you decide.
 
 ## Assistant
 
 For anything that isn't code: research, drafts, and acting on your replies.
 
-- **Assign a task to Assistant**, e.g. "Update the agenda for today's JPM call from #ext-… and the previous agendas doc". It reads Slack, Google Docs (all tabs, once the Docs API is enabled), Drive, Calendar and your notes. It posts the deliverable as a comment for you to review and paste, then assigns the task back to you. To follow up, comment and reassign it to Assistant.
-- **Reply on any of your tasks.** About 90 seconds after your last comment, pennyworth-runner hands it to the Assistant, which acts on clear intent:
-  - fixes names and details in the task and in Pennyworth's meeting notes;
-  - records context ("1:1 with her on Thursday");
-  - closes the task ("done", "not relevant");
-  - answers questions.
+- **Assign a task to the Assistant**, e.g. "Update the agenda for today's partner call from #ext-… and the previous agendas doc". It reads Slack, Google Docs (all tabs), Drive, Calendar, your notes and public web pages (from a search cache, never live). It posts the deliverable as a comment for you to review and paste, then assigns the task back to you.
+- **Reply on any of your tasks.** About 90 seconds after your last comment, the runner hands it to the Assistant, which acts on clear intent: fixes names and details in the task and in the meeting notes Pennyworth wrote, records context, closes the task ("done", "not relevant"), or answers questions. It replies with one line saying what changed.
+- **Work across many repositories:** ask it to open an Engineer sub-task per repository. Reply "go" on the parent to start them all, then **pr** on the parent to open every PR (D-24).
 
-  It replies with one line saying what changed. Notes to self that need no action get no reply.
+It never sends messages and never edits Slack, Docs or Calendar.
 
-It never sends messages and never edits Slack, Docs or Calendar. In your notes it can only correct text Pennyworth wrote for a meeting.
+## Coding jobs
 
-## Coding jobs (engineer)
+Comment on a task and the work happens in a repository on this machine, the way you'd run an agent in a terminal tab, but tracked in Paperclip.
 
-Comment on a task and the work happens in a repository on this machine, the way you'd run Codex in a terminal tab, but tracked in Paperclip.
+1. **Assign the task to an Engineer.** The Engineer picks the engine: **Engineer · Codex**, **Engineer · Claude** (Claude Code) or **Engineer · GLM** (OpenRouter through opencode). To pick the model and effort too, switch the assignee's **Model lane** to **Override**. Tasks you wrote start right away. Tasks Pennyworth created from Slack, email or meetings wait for your comment, because their text is other people's words.
+2. **Say what you want, in plain words:** which repository (link or org/name), any reference repositories, whether you want an answer, a report/spec or the change itself, and optionally an engine or model ("use Claude", "use GLM"). A short model call reads the request; code checks its answer against the repositories you mentioned and the known models, and asks you if it can't tell. There's no syntax to learn.
+3. **The runner picks it up** within about 20 seconds. It clones the repo into `~/pennyworth/repos`, creates a worktree on branch `pennyworth/<task>`, runs the engine inside your devshells under Codex's sandbox (writes only in the worktree and build caches), posts the report on the task and sets it to *in review*. In implement mode it commits with a conventional commit message.
+4. **Follow-ups** continue the same session in the same worktree. If the PR was merged meanwhile, the work moves to a fresh branch from the latest base.
 
-1. Assign the task to an Engineer, or add the label **engineer**. The Engineer picks the engine: **Engineer · Codex**, **Engineer · Claude** (Claude Code, Opus 5.5 by default) or **Engineer · GLM** (OpenRouter through opencode). To pick the model and thinking effort too, open the task's assignee options and switch **Model lane** to **Override**. Without an override, the Engineer's primary model is used; you can change that on the agent's page. Codex and Claude Code use the effort setting; GLM ignores it. If you wrote the task yourself, its title and description are the request and work starts right away. Tasks Pennyworth created (from Slack, email or meetings) wait for your comment: their descriptions are other people's words, so they're never taken as instructions.
-2. Comment with what you want, in plain words: which repository to work in (link or org/name), any repositories to use as references, whether you want a report/spec first or the change made, and optionally an engine or model ("use the astra model", "use Claude", "use opus", "use GLM"). Naming one moves the task to the matching Engineer and model, so the task always shows what runs it. A short Codex call reads the request; the runner checks its answers against the repositories you mentioned and the known models, and asks you in plain words if it can't tell which repository you mean (reply with just the name). Reference repositories are cloned read-only next to the worktree. Empty repositories work too: the task branch starts from scratch.
+You can also talk about the run itself: "stop that", "how's it going?", "start over", "we're done, clean up".
 
-   Each comment is judged on its own: a question gets a direct answer and no code changes, a request for research, a review or a spec gets a report, and only an explicit request for changes gets them. Short follow-ups such as "continue" keep the previous kind.
-
-3. The **pennyworth-runner** service (systemd user service, runs as you) picks it up within about 20 seconds:
-   - it clones the repo into `~/pennyworth/repos` and creates the worktree `~/pennyworth/tasks/<TASK>-<repo>` on branch `pennyworth/<task>`;
-   - it runs the engine inside the devshells, with Codex's sandbox (writes only in the worktree and build caches);
-   - it posts the report on the task and sets the status to *in review*.
-
-   In implement mode, the runner commits the changes with the agent's proposed conventional commit message.
-4. Follow-up comments continue the same agent session in the same worktree. If the task's PR has been merged in the meantime, the work moves to a new branch (`pennyworth/<task>-2`, …) from the latest base branch, carrying over any commits made since the merge, and **pr** opens a new PR. If the PR was closed without merging, **pr** opens a new one from the same branch.
-
-**Work across many repositories** (D-24): keep the task assigned to you and ask the Assistant in a comment, for example "open an Engineer task per repo with GLM, and give me a checklist for the archiving". It creates one sub-task per repository and lists them on your task. Reply "go" there to start them all (two at a time), or say what to change. Each sub-task reports on its own task, and when they've all finished the parent gets a summary table. Reply **pr** on the parent to open all their PRs (the links come back as a table), or **pr** on a single sub-task for just that one.
-
-You can also just say what you want about the run itself: "stop that", "how's it going?", "start over with a fresh conversation", "we're done, clean up". The same short Codex call reads these. Clean-up refuses while there are uncommitted changes.
-
-Publishing takes the exact word, as a comment on its own. If you write "looks good, push it", the runner asks you to reply with the word:
+Publishing takes the exact word, as a comment on its own:
 
 | Command | What it does |
 |---|---|
-| `push` | publish `pennyworth/<task>` to GitHub (never forced). Exception: if the repository is still empty, the work becomes its first commit on `main` (the first branch pushed to an empty repo becomes its default) |
-| `pr` | push and open a **draft** PR with the report as description |
+| `push` | publish `pennyworth/<task>` to GitHub (never forced). An empty repository gets the work as its first commit on `main` |
+| `pr` | push and open a **draft** PR, with a title and description written for the repository's reviewers |
 
-Agents can't push or write to GitHub themselves:
+Agents can't push or write to GitHub themselves: `gh` is wrapped read-only, pushes are disabled in the runner's clones, a pre-push hook and an ssh wrapper both refuse them, and after each run the runner checks that nothing appeared on GitHub. Only *your* comments are instructions.
 
-- `gh` is wrapped read-only;
-- pushes are disabled in the runner's clones;
-- a pre-push hook and an ssh wrapper both refuse pushes;
-- after each run, the runner checks that nothing appeared on GitHub.
-
-Only *your* comments are instructions. Task text from Slack, email or meetings is passed to the agent as untrusted context. Job logs are in `~/.local/state/pennyworth-runner/logs/`. Configuration (orgs, engines, devshells, limits) is in `config/runner.yaml`.
-
-```sh
-systemctl --user status pennyworth-runner
-journalctl --user -u pennyworth-runner -f
-```
-
-OpenRouter jobs read the key from `~/.config/pennyworth/openrouter_key` (0600).
-
-Claude Code jobs use a long-lived subscription token, not your interactive login: run `claude setup-token` once and save the token it prints to `~/.config/pennyworth/claude_oauth_token` (0600). They run in a runner-owned Claude home (`~/.local/state/pennyworth-runner/claude`) with no settings files, MCP servers, plugins or claude.ai connectors, a fixed set of built-in tools (shell, files, web, subagents), and `codex sandbox` around the whole process.
+Engine credentials live in `~/.config/pennyworth/` (0600): `openrouter_key` for OpenRouter, and `claude_oauth_token` from `claude setup-token` for Claude Code. Claude Code runs in a runner-owned home with no settings, MCP servers, plugins or connectors, a fixed tool allowlist, and `codex sandbox` around the whole process.
 
 ## Slack
 
-Pennyworth reads Slack through Slack's official MCP server (`mcp.slack.com`). It uses Polygon's registered OAuth client from go/mcps, a public client with callback `http://localhost:3118/callback`, set as `SLACK_CLIENT_ID` in `.env`.
-
-- The `slack-mcp` sidecar holds your user token, refreshes it (Slack rotates refresh tokens), and exposes **only** read tools: search, read channel/thread, user and channel lookups. Send, draft, schedule, react, canvas and list tools are never listed, and are refused if called.
-- Consent asks only for read and search scopes.
+Pennyworth reads Slack through Slack's official MCP server (`mcp.slack.com`). That server has no dynamic client registration, so you need a public OAuth client registered for your workspace, with callback `http://localhost:3118/callback`. Set its ID as `SLACK_CLIENT_ID` in `.env`, then:
 
 ```sh
-scripts/slack-auth.sh         # once: open the printed URL, approve; then:
-node scripts/paperclip-setup.mjs   # re-activates the Slack scan routine
+scripts/slack-auth.sh              # once: open the printed URL and approve
+node scripts/paperclip-setup.mjs   # activates the Slack scan routine
 ```
 
-The Slack Scout creates two kinds of tasks:
+The `slack-mcp` sidecar holds your user token, refreshes it (Slack rotates refresh tokens), and exposes **only** read tools. Send, draft, schedule, react, canvas and list tools are never listed, and are refused if called. Consent asks only for read and search scopes.
 
-- `needs-response`: someone is waiting for your reply. It is closed automatically once you answer in the thread. A request to review a GitHub PR also closes once you've submitted a review on GitHub after the ask, or the PR is merged (done) or closed (cancelled). The runner checks every 5 minutes with read-only `gh` queries and comments with what it saw.
+The Slack Scout creates two kinds of tasks, each with a permalink and a `source:slack:<channel>:<ts>` marker so nothing is duplicated:
+
+- `needs-response`: someone is waiting for your reply. It closes once you answer in the thread. A request to review a GitHub PR closes once you've reviewed it, or it's merged or closed (the runner checks with read-only `gh`).
 - `todo`: something you promised.
-
-Every task carries a permalink and the marker `source:slack:<channel>:<ts>`, so nothing is duplicated. `todo` lists the needs-response items as `reply`.
 
 ## Google
 
-Pennyworth uses its own read-only sidecar (`services/google-workspace-mcp`). Paperclip's native Google connector depends on Google's Developer Preview enrollment ([D-9](docs/DECISIONS.md)).
+Pennyworth uses its own read-only sidecar (`services/google-workspace-mcp`) rather than Paperclip's Google connector ([D-9](docs/DECISIONS.md)).
 
-1. In a Google Cloud project under your Workspace account, enable the **Google Calendar API** and the **Google Drive API**.
-2. Configure the OAuth consent screen as *Internal* if your Workspace allows it.
-3. Create an OAuth client of type **Desktop app** and download its JSON.
-4. Enable the **Gmail API** and **Google Docs API** too. Run `scripts/google-auth.sh <that json>` (or `scripts/google-auth.sh` with no argument to paste the client ID and secret instead) and approve in the browser. The only scopes requested are `calendar.events.readonly`, `drive.readonly` and `gmail.readonly`. Re-run `scripts/google-auth.sh` without arguments after scopes change; it reuses the client on file. The refresh token goes to `~/.config/pennyworth/google_oauth.json` (0600) and is mounted into the sidecar only.
+1. In a Google Cloud project under your Workspace account, enable the **Calendar**, **Drive**, **Docs** and **Gmail** APIs.
+2. Configure the OAuth consent screen (*Internal* if your Workspace allows it) and create an OAuth client of type **Desktop app**.
+3. Run `scripts/google-auth.sh <client json>` (or no argument, to paste the ID and secret) and approve in the browser. The only scopes are `calendar.events.readonly`, `drive.readonly` and `gmail.readonly`. The refresh token goes to `~/.config/pennyworth/google_oauth.json` (0600) and is mounted into the sidecar only.
 
-**Several accounts:** run `scripts/google-auth.sh --email you@work.com --primary` for the account whose Calendar and Meet transcripts Pennyworth should use, then `scripts/google-auth.sh --email you@other.com` for each extra account. Gmail inboxes and Drive search cover every connected account; tasks note which account an email came from.
+**Several accounts:** `scripts/google-auth.sh --email you@work.com --primary` for the account whose Calendar and Meet transcripts Pennyworth should use, then `scripts/google-auth.sh --email you@other.com` for each extra account. Gmail and Drive cover every connected account.
 
-If Workspace policy blocks the consent, nothing else breaks: matching reports "calendar unavailable" and sources stay pending. Do not weaken Workspace settings to work around it.
-
-**Testing without Google:** set `GOOGLE_FIXTURES_DIR=/fixtures` in `.env` and run `docker compose up -d`. The sidecar then serves `fixtures/calendar/events.json`. Copy `fixtures/transcripts/2026-10-04_1401.md` into your transcripts folder to run the §41 scenario. Unset the variable afterwards.
+If Workspace policy blocks consent, nothing else breaks: matching reports "calendar unavailable" and sources stay pending. Don't weaken Workspace settings to work around it, and check your organization's policy before connecting work accounts.
 
 ## Configuration
 
 | File | Purpose | In git |
 |---|---|---|
-| `.env` | host paths, user IDs, vault folders, subnets | no (`.env.example`) |
-| `config/system.yaml` | ops-mcp: timezone, your names and emails, transcript roots, cutoff, vault roots, thresholds | no (`*.example.yaml`) |
-| `config/routing.yaml` | meeting → note rules | no |
-| `config/paperclip.yaml` | company, labels, agents, routines and schedules, MCP servers, Codex hardening | no |
+| `.env` | host paths, user IDs, vault folders, board LAN settings, Slack client ID | no (`.env.example`) |
+| `config/system.yaml` | ops-mcp: timezone, your names and emails, transcript roots, cutoff, vault roots, thresholds | no (`system.example.yaml`) |
+| `config/routing.yaml` | meeting → note rules | no (`routing.example.yaml`) |
+| `config/paperclip.yaml` | company, labels, agents, routines and schedules, MCP servers, Codex hardening | no (`paperclip.example.yaml`) |
+| `config/runner.yaml` | runner: allowed orgs, engines, devshells, limits | no (`runner.example.yaml`) |
 | `config/agents/*.md` | agent instructions (system prompts) | yes |
-| `~/.config/pennyworth/` | secrets (0700 dir, 0600 files): Paperclip auth/JWT secrets, board and agent keys, MCP tokens, webhook secret, Google token | never |
-| `data/` | Paperclip DB and workspaces, ops-mcp SQLite | no |
+| `~/.config/pennyworth/` | secrets (0700 dir, 0600 files): Paperclip secrets, board and agent keys, MCP tokens, webhook secret, Google/Slack/engine tokens | never |
+| `data/` | Paperclip DB and workspaces, ops-mcp and board SQLite | no |
 
-`transcripts.ignore_before` in `config/system.yaml` is set to 2026-10-05, so your existing transcripts are not backfilled. Remove it, or set an earlier date, to backfill. Each old meeting is then matched and published like a new one.
+`transcripts.ignore_before` in `config/system.yaml` stops existing transcripts from being backfilled. Remove it, or set an earlier date, to backfill.
 
-## Security model (short)
+## Security model
 
 - Paperclip has no vault, transcript or home mounts and no Docker socket, and listens on loopback only.
 - ops-mcp is the only vault writer. It sees only the configured vault folders, can't delete or replace notes, and has no Internet route.
-- Agents run Codex with its read-only sandbox. Shell, browser, computer-use and ChatGPT app connectors are disabled. Agents act only through ops-mcp, read-only Google tools, and Paperclip task updates.
-- No component can send email or Slack messages, or write to Calendar, Drive or GitHub.
-- Source content is treated as untrusted. Model output is schema-validated and escaped before it reaches markdown, so it can't forge markers or headings.
+- Agents run Codex with its read-only sandbox; shell, browser, computer-use and app connectors are disabled, and live web search is never combined with private-data tools. Agents act only through ops-mcp, read-only Google and Slack tools, and Paperclip task updates.
+- No component can send email or Slack messages, or write to Calendar, Drive or Docs. Only your exact `push`/`pr` reaches GitHub.
+- Source content is untrusted: every agent prompt says so, and model output is schema-validated and escaped before it reaches markdown, so it can't forge markers or headings.
 
-`scripts/verify-security.sh` checks the mechanical parts of SPECS §40. Known gaps and trade-offs are listed in [`docs/DECISIONS.md`](docs/DECISIONS.md) (rootful Docker on this host, direct MCP delivery to Codex).
+`scripts/verify-security.sh` checks the mechanical parts. Known gaps and trade-offs (rootful Docker, direct MCP delivery to Codex) are in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ## Layout
 
 ```text
-compose.yaml                 stack definition (pinned Paperclip image)
-config/                      examples + agent instructions (local copies are gitignored)
-services/ops-mcp/            TypeScript MCP service: ingestion, matcher, vault writer, routing, tasks, tests
-services/google-workspace-mcp/  read-only Calendar/Drive MCP sidecar (+ fixture mode, consent helper)
+compose.yaml                    stack definition (pinned Paperclip image)
+config/                         examples + agent instructions (local copies are gitignored)
+services/ops-mcp/               TypeScript MCP service: ingestion, matcher, vault writer, routing, tasks
+services/google-workspace-mcp/  read-only Calendar/Drive/Docs/Gmail MCP sidecar (+ fixture mode, consent helper)
+services/slack-mcp/             read-only proxy to mcp.slack.com
+services/board/                 task board: server + web app
+services/runner/                host service for coding jobs, replies and review-request tasks
 services/paperclip-tasks-mcp/   stdio bridge so sandboxed agents can update Paperclip tasks
-scripts/                     bootstrap, setup, health, backup/restore, security checks, watcher trigger
-nix/                         opt-in Home Manager watcher module and NixOS notes
-fixtures/                    calendar events, transcripts and a vault note for tests and demos
-docs/                        spec, decisions
+scripts/                        bootstrap, setup, health, backup/restore, security checks, auth helpers, todo CLI
+nix/                            opt-in Home Manager watcher and mDNS modules
+fixtures/                       calendar events, transcripts and a vault note for tests and demos
+docs/                           spec and decisions
 ```
+
+## License
+
+[MIT](LICENSE)
