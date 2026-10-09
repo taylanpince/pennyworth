@@ -2,7 +2,7 @@ import type { AddressInfo } from "node:net";
 import pino from "pino";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
-import { inNetworks, parseCidr } from "../src/config.js";
+import { inNetworks, lanConfig, parseCidr } from "../src/config.js";
 import type { Paperclip } from "../src/paperclip.js";
 import { Store } from "../src/store.js";
 
@@ -15,6 +15,15 @@ describe("client networks", () => {
     expect(inNetworks("192.168.8.1", ["192.168.7.0/24"])).toBe(false);
     expect(inNetworks("10.231.1.1", ["192.168.7.0/24"])).toBe(false);
     expect(inNetworks(undefined, ["0.0.0.0/0"])).toBe(false);
+  });
+});
+
+describe("LAN config", () => {
+  it("sends pairing links to BOARD_LAN_URL, or the first host when it's empty", () => {
+    const env = { BOARD_LAN_CLIENTS: "192.168.7.0/24", BOARD_LAN_HOSTS: "pennyworth.local,bloomware.example.ts.net" };
+    expect(lanConfig(env)?.url).toBe("http://pennyworth.local");
+    expect(lanConfig({ ...env, BOARD_LAN_URL: "" })?.url).toBe("http://pennyworth.local");
+    expect(lanConfig({ ...env, BOARD_LAN_URL: "https://bloomware.example.ts.net/" })?.url).toBe("https://bloomware.example.ts.net");
   });
 });
 

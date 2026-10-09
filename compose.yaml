@@ -201,6 +201,8 @@ services:
       # Paired devices only, at BOARD_LAN_HOSTS (pennyworth.local is published by mDNS).
       BOARD_LAN_CLIENTS: "${BOARD_LAN_CLIENTS:-}"
       BOARD_LAN_HOSTS: "${BOARD_LAN_HOSTS:-pennyworth.local}"
+      # Where pairing links send the phone (default http://<first LAN host>), e.g. the tailnet name.
+      BOARD_LAN_URL: "${BOARD_LAN_URL:-}"
     volumes:
       - ${PENNYWORTH_CONFIG_DIR:-./config}/system.yaml:/config/system.yaml:ro
       - ${PENNYWORTH_DATA_DIR:-./data}/board:/data/board

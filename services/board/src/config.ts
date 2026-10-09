@@ -64,12 +64,12 @@ function internalConfig(env: NodeJS.ProcessEnv): Config["internal"] {
   return { port, hosts, token };
 }
 
-function lanConfig(env: NodeJS.ProcessEnv): Config["lan"] {
+export function lanConfig(env: NodeJS.ProcessEnv): Config["lan"] {
   const clients = (env.BOARD_LAN_CLIENTS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   if (!clients.length) return undefined;
   for (const c of clients) if (!parseCidr(c)) throw new Error(`BOARD_LAN_CLIENTS: not an IPv4 CIDR: ${c}`);
   const hosts = (env.BOARD_LAN_HOSTS ?? "pennyworth.local").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
-  return { port: Number(env.BOARD_LAN_PORT ?? 3121), hosts, clients, url: env.BOARD_LAN_URL ?? `http://${hosts[0]}` };
+  return { port: Number(env.BOARD_LAN_PORT ?? 3121), hosts, clients, url: (env.BOARD_LAN_URL || `http://${hosts[0]}`).replace(/\/+$/, "") };
 }
 
 /** "192.168.7.0/24" → network and mask as 32-bit numbers. */

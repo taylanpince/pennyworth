@@ -179,7 +179,7 @@ Bucket and rank live in the board's own SQLite (`data/board/`); everything else 
 
 **On your phone, at home:** set `BOARD_LAN_CLIENTS` to your home subnet (e.g. `192.168.1.0/24`), `BOARD_LAN_BIND=0.0.0.0` and `BOARD_LAN_PORT=80` in `.env`, then `docker compose up -d board`. Click **Phone** on the laptop's board and enter the code shown at http://pennyworth.local on the phone (or scan the QR code). Only paired devices get in; remove them in the same panel. The name is published over mDNS by [`nix/board-mdns.nix`](nix/board-mdns.nix) while you're on the home Wi-Fi. It's plain HTTP, so only enable it on networks you trust. Some VPN firewalls block LAN traffic while connected.
 
-**Away from home:** `tailscale serve --bg --https=443 http://127.0.0.1:3121`, with the tailnet name added to `BOARD_LAN_HOSTS` and `100.64.0.0/10` to `BOARD_LAN_CLIENTS`.
+**Anywhere, over Tailscale:** run `tailscale serve --bg --https=443 http://127.0.0.1:<BOARD_LAN_PORT>`. Then add the tailnet name to `BOARD_LAN_HOSTS`, set `BOARD_LAN_URL=https://<machine>.<tailnet>.ts.net`, and add `10.231.1.1/32` to `BOARD_LAN_CLIENTS`. Tailscale's proxy connects over loopback, so requests reach the board from the egress network's gateway, not from the phone's tailnet address. Pair the phone at that URL and add it to the Home Screen from there. A home-screen app stays on the address it was added from, and `pennyworth.local` can't be reached over Tailscale, so use the tailnet URL on the phone and keep Tailscale on, at home too.
 
 ## Todo list
 
