@@ -289,7 +289,7 @@ Pennyworth reads work email, Slack, calendars and documents. The user cleared ru
 - **What's stored:** `scout.json` keeps cursors and message IDs only. Message text stays in memory and is re-read after a restart, in line with the upstream server's own rule of never persisting content.
 - **Chat identity:** `chat_ref`s are opaque and change whenever the user edits the allowlist. Task markers use them (`source:telegram:<chat_ref>:<message_id>`), and `telegram_followups` falls back to the chat title, which the description's `Chat:` line carries. Message IDs are not contiguous: small groups and DMs share the account's counter. Context is therefore read as "the messages before", never as an ID range.
 - **Coverage:** only the chats on the allowlist are seen. A new client group means adding it in the server's chat picker.
-- **Security:** only the Telegram Scout has the `telegram` server. It has no send or draft tool, and its prompt forbids copying credentials (people paste API keys in these chats) into tasks. The proxy has no published ports and mounts only its own directory.
+- **Security:** only the Telegram Scout has the scout tools (the Assistant reads on request, D-29). It has no send or draft tool, and its prompt forbids copying credentials (people paste API keys in these chats) into tasks. The proxy has no published ports and mounts only its own directory.
 
 ## D-28: Tomorrow means the next workday, and leftovers are marked
 
@@ -297,3 +297,10 @@ Pennyworth reads work email, Slack, calendars and documents. The user cleared ru
 - **Workdays:** the rollover only runs on `workdays` in `config/system.yaml` (Monday to Friday by default). A day off keeps the last rollover date, so the next workday rolls over once. The Tomorrow column says "Rolls into Today on Monday" when the next workday isn't the next day. Scheduled moves and recurring runs keep the exact dates they were given.
 - **Carried over:** each placement counts the rollovers it has stayed in Today through (`carried`). Reordering within Today keeps the count; any move to another column, a move by hand, a scheduled move or arriving from Tomorrow resets it. Cards show "Carried Nd", and a bar on top of Today handles all of them at once: **Keep** (they count as planned from now on), **→ Tomorrow** or **→ Later** (to the top, in order, cancelling their schedules).
 - **Order:** leftovers stay on top of Today, above the new plan (the user's choice). Nothing moves on its own: the board never drops old leftovers to Later by itself.
+
+## D-29: The Assistant reads Telegram on request
+
+- **Problem:** the user asked on a Telegram task (PEN-622) for the endpoints a partner had shared in the chat. The Assistant had no Telegram tools, so it asked him to paste the message.
+- **Decision:** the Assistant gets the four upstream read tools (`list_allowed_chats`, `read_chat_history`, `search_chat_history`, `get_new_messages`) through `enabled_tools`. The scout tools (`telegram_mentions`, `telegram_mentions_ack`, `telegram_followups`) stay with the Telegram Scout, so the Assistant can't acknowledge candidates away. Its prompt uses Telegram only when the task or the user's comment points there, and reads around a message rather than whole chats.
+- **Why direct calls are fine here:** D-27 keeps the *scan* off the agent's tool path. A lookup is a few calls of a few seconds each (`tool_timeout_sec` is 300), and the reads are stateless: cursors are arguments, so they don't disturb the scout's.
+- **Security:** same posture as Slack and Gmail for this agent: read-only, content untrusted, and the Scout's rule against copying credentials pasted into chats. Cached web search stays safe for the same reason as D-19: no fetches to arbitrary hosts.

@@ -142,8 +142,10 @@ agents:
     timeout_sec: 3600
     # Public web pages and search via OpenAI's cached index only (D-19).
     web_search: cached
-    mcp_servers: [slack, google_workspace, paperclip_tasks, ops_mcp]
+    mcp_servers: [slack, telegram, google_workspace, paperclip_tasks, ops_mcp]
     enabled_tools:
+      # Reads only, on request (D-29); the scout tools stay with the Telegram Scout.
+      telegram: [list_allowed_chats, read_chat_history, search_chat_history, get_new_messages]
       ops_mcp: [obsidian_search, obsidian_read, obsidian_read_document_map, meeting_note_correct]
       google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
       # task_create_engineer_task: Engineer sub-tasks that wait for the user's go-ahead (D-24).

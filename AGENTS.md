@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-28) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-29) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -33,7 +33,7 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`:
 | Slack Scout | Slack items for the user |
 | Telegram Scout | Telegram mentions, replies and DMs for the user, from the proxy's prepared candidates |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
-| Assistant | research and drafts, acting on the user's replies (including scheduling a task or making it recurring), and running recurring tasks |
+| Assistant | research and drafts (Slack, Telegram, Google, notes, cached web), acting on the user's replies (including scheduling a task or making it recurring), and running recurring tasks |
 | Engineer · Codex / · Claude / · GLM | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20) |
 
 ## Everyday commands

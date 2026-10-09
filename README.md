@@ -17,7 +17,7 @@ It is built on [Paperclip](https://github.com/paperclipai/paperclip) (agents, ta
 - **Coding jobs:** assign a task to an Engineer and say what you want. Codex, Claude Code or an OpenRouter model works in its own git worktree, as you, and nothing is pushed until you say `push` or `pr`.
 - **Board:** a keyboard-driven task board on localhost, also usable from a paired phone at home.
 
-All writes are idempotent, and nothing ambiguous is written. [`docs/SPECS.md`](docs/SPECS.md) is the original spec, and [`docs/DECISIONS.md`](docs/DECISIONS.md) (D-1 to D-27) explains every deviation from it.
+All writes are idempotent, and nothing ambiguous is written. [`docs/SPECS.md`](docs/SPECS.md) is the original spec, and [`docs/DECISIONS.md`](docs/DECISIONS.md) (D-1 to D-29) explains every deviation from it.
 
 ```text
 host (Linux, systemd user services)
@@ -126,7 +126,7 @@ Then drop a transcript into your transcripts folder, or have a Meet call that pr
 | Slack Scout | every 30 min in work hours | Slack read/search; Paperclip task search/create/update/close |
 | Telegram Scout | every 30 min in work hours | Telegram read (allowed chats) and prepared mention candidates; Paperclip task search/create/update/close |
 | Inbox Agent | every 30 min in work hours: one task per Gmail thread labelled `pennyworth` (archived or not), closed when the label is removed | Gmail read/search; Paperclip task search/create/update/close |
-| Assistant | when assigned, and on your task replies | Slack/Docs/Drive/Calendar read; notes read + meeting-note corrections; cached web search; Paperclip tasks |
+| Assistant | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; notes read + meeting-note corrections; cached web search; Paperclip tasks |
 | Engineer · Codex / · Claude / · GLM | never woken: assignment targets for the runner | none (the runner does the work) |
 
 Each agent sees only the MCP servers and tools listed for it in `config/paperclip.yaml` (`mcp_servers`, `enabled_tools`); everything else is disabled in its Codex arguments. Schedules live there too. Run a routine on demand with **Run now** in Paperclip.
@@ -200,7 +200,7 @@ todo --all                           # include reviews and briefs
 
 For anything that isn't code: research, drafts, and acting on your replies.
 
-- **Assign a task to the Assistant**, e.g. "Update the agenda for today's partner call from #ext-… and the previous agendas doc". It reads Slack, Google Docs (all tabs), Drive, Calendar, your notes and public web pages (from a search cache, never live). It posts the deliverable as a comment for you to review and paste, then assigns the task back to you.
+- **Assign a task to the Assistant**, e.g. "Update the agenda for today's partner call from #ext-… and the previous agendas doc". It reads Slack, your allowed Telegram chats, Google Docs (all tabs), Drive, Calendar, your notes and public web pages (from a search cache, never live). It posts the deliverable as a comment for you to review and paste, then assigns the task back to you.
 - **Reply on any of your tasks.** About 90 seconds after your last comment, the runner hands it to the Assistant, which acts on clear intent: fixes names and details in the task and in the meeting notes Pennyworth wrote, records context, closes the task ("done", "not relevant"), or answers questions. It replies with one line saying what changed.
 - **Work across many repositories:** ask it to open an Engineer sub-task per repository. Reply "go" on the parent to start them all, then **pr** on the parent to open every PR (D-24).
 
