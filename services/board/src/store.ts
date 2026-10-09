@@ -15,6 +15,8 @@ export const localDate = (tz: string, at = new Date()) => new Intl.DateTimeForma
 export interface Placement {
   bucket: Bucket;
   rank: number;
+  /** How many rollovers the task has stayed in Today through, unfinished (0 once it's moved or kept). */
+  carried: number;
 }
 
 export interface NewIssue {
@@ -100,6 +102,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS recurring (issue_id TEXT PRIMARY KEY, rule TEXT NOT NULL, repos TEXT NOT NULL, next_run TEXT, manual_at TEXT, paused INTEGER NOT NULL DEFAULT 0, last_until TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS recurring_runs (issue_id TEXT NOT NULL, occurrence TEXT NOT NULL, output_id TEXT NOT NULL, output_identifier TEXT NOT NULL, since TEXT NOT NULL, until TEXT NOT NULL, previous TEXT, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, claimed_at TEXT NOT NULL, PRIMARY KEY (issue_id, occurrence));
     `);
+    const columns = (this.db.prepare("PRAGMA table_info(placements)").all() as { name: string }[]).map((c) => c.name);
+    if (!columns.includes("carried")) this.db.exec("ALTER TABLE placements ADD COLUMN carried INTEGER NOT NULL DEFAULT 0");
     if (!this.meta("installed_at")) this.setMeta("installed_at", new Date().toISOString());
   }
 
@@ -112,8 +116,8 @@ export class Store {
   }
 
   placements(): Map<string, Placement> {
-    const rows = this.db.prepare("SELECT issue_id, bucket, rank FROM placements").all() as { issue_id: string; bucket: string; rank: number }[];
-    return new Map(rows.filter((r) => isBucket(r.bucket)).map((r) => [r.issue_id, { bucket: r.bucket as Bucket, rank: r.rank }]));
+    const rows = this.db.prepare("SELECT issue_id, bucket, rank, carried FROM placements").all() as { issue_id: string; bucket: string; rank: number; carried: number }[];
+    return new Map(rows.filter((r) => isBucket(r.bucket)).map((r) => [r.issue_id, { bucket: r.bucket as Bucket, rank: r.rank, carried: r.carried }]));
   }
 
   /** New tasks land at the top of Triage, newest first (Paperclip backlog tasks go to Backlog). */
@@ -134,11 +138,14 @@ export class Store {
     });
   }
 
-  /** The full new order of one bucket (after a drag): ranks 0..n-1, moving tasks into it as needed. */
+  /**
+   * The full new order of one bucket (after a drag): ranks 0..n-1, moving tasks into it as needed.
+   * Reordering keeps a task's carried-over count; arriving from another column resets it.
+   */
   setOrder(bucket: Bucket, ids: string[]): void {
     const now = new Date().toISOString();
     const stmt = this.db.prepare(
-      "INSERT INTO placements (issue_id, bucket, rank, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(issue_id) DO UPDATE SET bucket = excluded.bucket, rank = excluded.rank, updated_at = excluded.updated_at",
+      "INSERT INTO placements (issue_id, bucket, rank, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(issue_id) DO UPDATE SET carried = CASE WHEN placements.bucket = excluded.bucket THEN placements.carried ELSE 0 END, bucket = excluded.bucket, rank = excluded.rank, updated_at = excluded.updated_at",
     );
     const before = this.placements();
     this.tx(() =>
@@ -290,18 +297,20 @@ export class Store {
   }
 
   /**
-   * Midnight rollover: on the first check of a new local day, Tomorrow joins Today below what's
-   * already there (unfinished Today tasks stay on top). Returns how many tasks moved.
+   * Rollover: on the first check of a new workday (D-28), Tomorrow joins Today below what's already
+   * there. Unfinished Today tasks stay on top and count one more day carried over. Days off don't
+   * roll over, so Friday's Tomorrow lands on Monday. Returns how many tasks moved.
    */
-  rollover(today: string): number {
+  rollover(today: string, workday = true): number {
     const last = this.meta("rollover_date");
-    if (last === today) return 0;
+    if (last === today || !workday) return 0;
     let moved = 0;
     this.tx(() => {
       if (last && last < today) {
+        this.db.prepare("UPDATE placements SET carried = carried + 1 WHERE bucket = 'today'").run();
         const max = (this.db.prepare("SELECT MAX(rank) AS m FROM placements WHERE bucket = 'today'").get() as { m: number | null }).m ?? -1;
         const rows = this.db.prepare("SELECT issue_id FROM placements WHERE bucket = 'tomorrow' ORDER BY rank").all() as { issue_id: string }[];
-        const stmt = this.db.prepare("UPDATE placements SET bucket = 'today', rank = ?, updated_at = ? WHERE issue_id = ?");
+        const stmt = this.db.prepare("UPDATE placements SET bucket = 'today', rank = ?, carried = 0, updated_at = ? WHERE issue_id = ?");
         const now = new Date().toISOString();
         rows.forEach((r, i) => stmt.run(max + 1 + i, now, r.issue_id));
         moved = rows.length;
@@ -309,6 +318,26 @@ export class Store {
       this.setMeta("rollover_date", today);
     });
     return moved;
+  }
+
+  /** Today's carried-over tasks, top first. */
+  carried(): string[] {
+    return (this.db.prepare("SELECT issue_id FROM placements WHERE bucket = 'today' AND carried > 0 ORDER BY rank").all() as { issue_id: string }[]).map((r) => r.issue_id);
+  }
+
+  /** Keep the carried-over tasks in Today: they count as planned for today from now on. */
+  keepCarried(): number {
+    return Number(this.db.prepare("UPDATE placements SET carried = 0 WHERE bucket = 'today' AND carried > 0").run().changes);
+  }
+
+  /** Move the given tasks, in order, to the top of another column (like moving each by hand). */
+  moveAll(ids: string[], bucket: Bucket): void {
+    this.tx(() => {
+      for (const id of [...ids].reverse()) {
+        this.put(id, bucket, "top");
+        this.unschedule(id);
+      }
+    });
   }
 
   seenAt(issueId: string): string {
@@ -379,7 +408,7 @@ export class Store {
     const agg = position === "top" ? "MIN(rank) - 1" : "MAX(rank) + 1";
     const rank = (this.db.prepare(`SELECT ${agg} AS r FROM placements WHERE bucket = ? AND issue_id != ?`).get(bucket, issueId) as { r: number | null }).r ?? 0;
     this.db
-      .prepare("INSERT INTO placements (issue_id, bucket, rank, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(issue_id) DO UPDATE SET bucket = excluded.bucket, rank = excluded.rank, updated_at = excluded.updated_at")
+      .prepare("INSERT INTO placements (issue_id, bucket, rank, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(issue_id) DO UPDATE SET bucket = excluded.bucket, rank = excluded.rank, carried = 0, updated_at = excluded.updated_at")
       .run(issueId, bucket, rank, new Date().toISOString());
   }
 

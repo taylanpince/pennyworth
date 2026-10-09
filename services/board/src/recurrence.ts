@@ -38,6 +38,12 @@ const toUtc = (date: string) => {
 const fromUtc = (d: Date) => d.toISOString().slice(0, 10);
 export const addDays = (date: string, n: number) => fromUtc(new Date(toUtc(date).getTime() + n * 86_400_000));
 const isoWeekday = (date: string) => ((toUtc(date).getUTCDay() + 6) % 7) + 1; // 1 = Monday
+export const weekdayOf = (date: string): Weekday => WEEKDAYS[isoWeekday(date) - 1]!;
+/** The first workday after `date` (Friday → Monday with the default Monday to Friday week). */
+export function nextWorkday(date: string, workdays: readonly Weekday[]): string {
+  for (let n = 1; n <= 7; n++) if (workdays.includes(weekdayOf(addDays(date, n)))) return addDays(date, n);
+  return addDays(date, 1);
+}
 const daysInMonth = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate(); // m is 1-based
 const dayDiff = (a: string, b: string) => Math.round((toUtc(b).getTime() - toUtc(a).getTime()) / 86_400_000);
 const monthIndex = (date: string) => Number(date.slice(0, 4)) * 12 + Number(date.slice(5, 7)) - 1;

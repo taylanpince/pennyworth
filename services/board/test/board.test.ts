@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { checkRequest } from "../src/app.js";
 import { BadRequest, UpdateSchema, assignees, buildBoard, commentView, keepMarkers, paperclipUpdate, replyTarget } from "../src/board.js";
 import type { Agent, Issue, Label } from "../src/paperclip.js";
+import { nextWorkday } from "../src/recurrence.js";
 import { Store, localDate } from "../src/store.js";
 
 const agents: Agent[] = [
@@ -80,6 +81,53 @@ describe("store", () => {
     expect(p.get("l1")?.bucket).toBe("later");
   });
 
+  it("rolls over on workdays only: Friday's Tomorrow lands on Monday", () => {
+    const s = new Store(":memory:");
+    s.rollover("2026-10-09"); // Friday
+    s.setOrder("tomorrow", ["m1"]);
+    expect(s.rollover("2026-10-10", false)).toBe(0); // Saturday
+    expect(s.rollover("2026-10-11", false)).toBe(0); // Sunday
+    expect(s.placements().get("m1")?.bucket).toBe("tomorrow");
+    expect(s.rollover("2026-10-12")).toBe(1); // Monday
+    expect(s.placements().get("m1")?.bucket).toBe("today");
+    expect(nextWorkday("2026-10-09", ["monday", "tuesday", "wednesday", "thursday", "friday"])).toBe("2026-10-12");
+    expect(nextWorkday("2026-10-08", ["monday", "tuesday", "wednesday", "thursday", "friday"])).toBe("2026-10-09");
+    expect(nextWorkday("2026-10-10", ["monday", "tuesday", "wednesday", "thursday", "friday"])).toBe("2026-10-12");
+  });
+
+  it("counts the days a task is carried over in Today, until it's moved or kept", () => {
+    const s = new Store(":memory:");
+    s.rollover("2026-10-07");
+    s.setOrder("today", ["t1", "t2"]);
+    s.setOrder("tomorrow", ["m1"]);
+    s.rollover("2026-10-08");
+    const carried = () => Object.fromEntries([...s.placements()].map(([k, v]) => [k, v.carried]));
+    expect(carried()).toEqual({ t1: 1, t2: 1, m1: 0 });
+    s.setOrder("today", ["m1", "t2", "t1"]); // reordering keeps the count
+    s.rollover("2026-10-09");
+    expect(carried()).toEqual({ t1: 2, t2: 2, m1: 1 });
+    expect(s.carried()).toEqual(["m1", "t2", "t1"]);
+    s.move("t1", "later"); // a move by hand resets it
+    s.setOrder("today", ["t1", "m1", "t2"]); // and so does coming back from another column
+    expect(carried()).toMatchObject({ t1: 0, t2: 2 });
+    expect(s.keepCarried()).toBe(2);
+    expect(s.carried()).toEqual([]);
+  });
+
+  it("moves the carried-over tasks on together, in order, to the top of a column", () => {
+    const s = new Store(":memory:");
+    s.rollover("2026-10-07");
+    s.setOrder("today", ["t1", "t2"]);
+    s.setOrder("tomorrow", ["m1", "x"]);
+    s.rollover("2026-10-08");
+    s.schedule("t2", "2026-10-20", "today");
+    s.moveAll(s.carried(), "tomorrow");
+    const order = (b: string) => [...s.placements()].filter(([, v]) => v.bucket === b).sort((a, c) => a[1].rank - c[1].rank).map(([k]) => k);
+    expect(order("tomorrow")).toEqual(["t1", "t2"]);
+    expect(order("today")).toEqual(["m1", "x"]);
+    expect(s.schedules().has("t2")).toBe(false);
+  });
+
   it("knows the local date in the user's timezone", () => {
     expect(localDate("Europe/Madrid", new Date("2026-10-07T22:30:00Z"))).toBe("2026-10-08");
     expect(localDate("UTC", new Date("2026-10-07T22:30:00Z"))).toBe("2026-10-07");
@@ -103,7 +151,7 @@ describe("board", () => {
     const board = buildBoard({
       open: [brief, a, c, a],
       closed: [done],
-      placements: new Map([["c", { bucket: "today", rank: 0 }]]),
+      placements: new Map([["c", { bucket: "today", rank: 0, carried: 2 }]]),
       seen: new Map([["a", "2026-10-07T11:00:00.000Z"]]),
       installedAt: "2026-10-07T09:00:00.000Z",
       assignees: list,
@@ -111,7 +159,8 @@ describe("board", () => {
     expect(board.buckets.today.map((x) => x.identifier)).toEqual(["PEN-3"]);
     expect(board.buckets.triage.map((x) => x.identifier)).toEqual(["PEN-2"]);
     expect(board.buckets.triage[0]!.unread).toBe(true);
-    expect(board.buckets.today[0]).toMatchObject({ assignee: CLAUDE, executor: { effort: "high" }, unread: false });
+    expect(board.buckets.today[0]).toMatchObject({ assignee: CLAUDE, executor: { effort: "high" }, unread: false, carried: 2 });
+    expect(board.buckets.triage[0]!.carried).toBeUndefined();
     expect(board.brief).toEqual({ id: "b", identifier: "PEN-9", title: "Daily Brief", description: "# Brief" });
     expect(board.done.map((x) => x.identifier)).toEqual(["PEN-4"]);
   });

@@ -1,9 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { WEEKDAYS, type Weekday } from "./recurrence.js";
 
 const SystemSchema = z.object({
   timezone: z.string().default("UTC"),
+  /** The days Tomorrow rolls into Today (D-28). */
+  workdays: z.array(z.enum(WEEKDAYS)).min(1).default(["monday", "tuesday", "wednesday", "thursday", "friday"]),
   paperclip: z.object({ company_id: z.string().uuid() }),
 });
 
@@ -12,6 +15,7 @@ export interface Config {
   companyId: string;
   boardKey: string;
   timezone: string;
+  workdays: Weekday[];
   dbPath: string;
   port: number;
   /** Host headers the board answers to (DNS-rebinding guard), e.g. localhost:3120. */
@@ -39,6 +43,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     companyId: system.paperclip.company_id,
     boardKey: readFileSync(env.BOARD_KEY_FILE ?? "/run/secrets/paperclip_board_key", "utf8").trim(),
     timezone: system.timezone,
+    workdays: system.workdays,
     dbPath: env.BOARD_DB ?? "/data/board/board.sqlite",
     port,
     allowedHosts: hosts,

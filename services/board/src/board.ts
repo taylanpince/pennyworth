@@ -69,6 +69,8 @@ export interface Card {
   activityAt: string;
   /** A move scheduled for a later date (D-25). */
   scheduled?: { date: string; bucket: Bucket };
+  /** In Today: how many workdays it has been carried over unfinished (D-28). */
+  carried?: number;
   /** Set on recurring tasks (D-25): the rule in words and the next run. */
   recurring?: { summary: string; nextRun: string | null; paused: boolean };
 }
@@ -129,7 +131,8 @@ export function buildBoard(input: BoardInput): Board {
     }
     const scheduled = input.schedules?.get(issue.id);
     if (scheduled) card.scheduled = { date: scheduled.date, bucket: scheduled.bucket };
-    const p = input.placements.get(issue.id) ?? { bucket: "triage" as Bucket, rank: -Infinity };
+    const p = input.placements.get(issue.id) ?? { bucket: "triage" as Bucket, rank: -Infinity, carried: 0 };
+    if (p.bucket === "today" && p.carried > 0) card.carried = p.carried;
     buckets[p.bucket].push(card);
     ranked.set(issue.id, p.rank);
   }

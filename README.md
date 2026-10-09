@@ -164,7 +164,7 @@ Every task Pennyworth creates is assigned to you, and only for *your own* clear 
 **http://localhost:3120** is where you work your tasks. It shows every open task assigned to you, the Assistant or an Engineer, in five columns:
 
 - **Triage**: every new task lands here (from Slack, email, meetings, or added on the board).
-- **Today**, **Tomorrow**, **Later**, **Backlog**: ranked top to bottom. At midnight in your timezone, Tomorrow moves into Today.
+- **Today**, **Tomorrow**, **Later**, **Backlog**: ranked top to bottom. At the start of each workday (Monday to Friday, set by `workdays` in `config/system.yaml`), Tomorrow moves into Today below what's left over, so Friday's Tomorrow lands on Monday. Leftovers show how many days they've been carried over, and **Keep**, **→ Tomorrow** or **→ Later** at the top of Today handles them all at once.
 
 Drag cards to rank or move them (on a phone, use a card's arrow). Open a card to edit it, change priority, status and labels, reassign it (to an Engineer with model and effort), read the thread and reply, or close it with undo. Task references such as `PEN-12` in text open the task and show its status. **Brief** opens today's Daily Brief; **Done** shows the last 48 hours.
 

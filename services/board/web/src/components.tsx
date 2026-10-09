@@ -62,6 +62,11 @@ export function CardView({ card, assignees, selected, overlay, closed, onOpen, o
             ↑ {BUCKET_NAMES[card.scheduled.bucket]} {shortDate(card.scheduled.date)}
           </span>
         )}
+        {card.carried ? (
+          <span className="tag carried" title={`Left unfinished in Today for ${card.carried} workday${card.carried === 1 ? "" : "s"}`}>
+            Carried {card.carried}d
+          </span>
+        ) : null}
         {card.recurring && (
           <span className="tag when" title={card.recurring.summary}>
             ↻ {card.recurring.paused ? "Paused" : card.recurring.nextRun ? `Next ${shortDate(card.recurring.nextRun)}` : card.recurring.summary}

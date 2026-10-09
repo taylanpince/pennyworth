@@ -8,7 +8,8 @@ import { RecurringSchema, RunStateSchema, ScheduleSchema, changeRecurring, claim
 import { BadRequest, CreateSchema, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
 import { inNetworks } from "./config.js";
 import { Paperclip, PaperclipError, type Issue } from "./paperclip.js";
-import { BUCKETS, isBucket, type Store } from "./store.js";
+import { addDays, nextWorkday, type Weekday } from "./recurrence.js";
+import { BUCKETS, isBucket, localDate, type Store } from "./store.js";
 
 export interface AppOptions {
   paperclip: Paperclip;
@@ -17,6 +18,8 @@ export interface AppOptions {
   allowedHosts: string[];
   staticDir: string;
   timezone: string;
+  /** The days Tomorrow rolls into Today (D-28); Monday to Friday when not given. */
+  workdays?: Weekday[];
   /**
    * "local": the loopback listener, trusted as the user. "lan": the home-network listener (D-23):
    * only clients from `lan.clients`, and the API only for paired devices (session cookie).
@@ -36,6 +39,7 @@ const sessionToken = (req: IncomingMessage) =>
 
 const REF = /^(?:[0-9a-f-]{36}|[A-Z][A-Z0-9]{1,9}-\d{1,7})$/;
 const RECENT_MS = 48 * 3_600_000;
+const WORKWEEK: Weekday[] = ["monday", "tuesday", "wednesday", "thursday", "friday"];
 
 // The page and its assets only. Remote images are blocked too (tracking pixels in email/Slack text).
 const SECURITY_HEADERS: Record<string, string> = {
@@ -236,7 +240,10 @@ export function createApp(opts: AppOptions): Server {
         // Lists truncate long descriptions; the brief is read in full.
         const brief = open.find((i) => i.id === board.brief?.id);
         if (board.brief && brief?.descriptionTruncated) board.brief.description = displayText((await pc.issue(brief.id)).description);
-        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, buckets: board.buckets };
+        // When Tomorrow next rolls into Today: the next calendar day, except before days off.
+        const today = localDate(opts.timezone);
+        const rollsOn = nextWorkday(today, opts.workdays ?? WORKWEEK);
+        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, rollsOn, rollsTomorrow: rollsOn === addDays(today, 1), buckets: board.buckets };
       },
     },
     { method: "GET", path: /^\/api\/issues\/([^/]+)$/, handle: async (m) => issueView(decodeURIComponent(m[1]!)) },
@@ -291,6 +298,21 @@ export function createApp(opts: AppOptions): Server {
         const open = new Set(mine(await pc.openIssues(), ctx).map((i) => i.id));
         store.setOrder(bucket, ids.filter((id) => open.has(id)));
         return { ok: true };
+      },
+    },
+    {
+      method: "POST",
+      path: /^\/api\/buckets\/today\/carried$/,
+      handle: async (_m, body) => {
+        // Today's carried-over tasks, all at once (D-28): keep them for today, or move them on.
+        const { action } = parse(z.object({ action: z.enum(["keep", "tomorrow", "later"]) }).strict(), body);
+        if (action === "keep") return { ok: true, count: store.keepCarried() };
+        const ctx = await context();
+        const open = new Set(mine(await pc.openIssues(), ctx).map((i) => i.id));
+        const ids = store.carried().filter((id) => open.has(id));
+        store.moveAll(ids, action);
+        log.info({ moved: ids.length, to: action }, "carried-over tasks moved");
+        return { ok: true, count: ids.length };
       },
     },
     {

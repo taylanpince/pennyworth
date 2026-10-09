@@ -201,6 +201,24 @@ export function App() {
     }
   }
 
+  /** All of Today's carried-over tasks at once (D-28): keep them for today, or move them on. */
+  async function carriedAction(action: "keep" | "tomorrow" | "later") {
+    const cur = itemsRef.current;
+    if (!cur) return;
+    const carried = cur.today.filter((c) => c.carried);
+    hold();
+    if (action === "keep") setItems({ ...cur, today: cur.today.map((c) => ({ ...c, carried: undefined })) });
+    else setItems({ ...cur, today: cur.today.filter((c) => !c.carried), [action]: [...carried.map((c) => ({ ...c, carried: undefined })), ...cur[action]] });
+    try {
+      const { count } = await api.carried(action);
+      toast(action === "keep" ? "Kept for today" : `Moved ${count} to ${BUCKET_NAMES[action]}`);
+      void refresh(true);
+    } catch (e) {
+      toast(`Couldn't update: ${(e as Error).message}`);
+      void refresh(true);
+    }
+  }
+
   async function addTask(title: string, bucket: Bucket) {
     try {
       const t = await api.create(title, bucket);
@@ -438,6 +456,7 @@ export function App() {
               onDone={markDone}
               onMove={(c, to) => void moveCard(c.id, to)}
               onAdd={(title) => addTask(title, b)}
+              onCarried={b === "today" ? (action) => void carriedAction(action) : undefined}
               addRef={b === "triage" ? addRef : undefined}
               timezone={board.timezone}
             />
@@ -541,15 +560,22 @@ interface ColumnProps {
   onDone: (c: Card) => void;
   onMove: (c: Card, b: Bucket) => void;
   onAdd: (title: string) => Promise<void>;
+  onCarried?: (action: "keep" | "tomorrow" | "later") => void;
   addRef?: React.RefObject<HTMLInputElement | null>;
   timezone: string;
 }
 
-function Column({ bucket, cards, total, board, selected, dragDisabled, onOpen, onDone, onMove, onAdd, addRef, timezone }: ColumnProps) {
+function Column({ bucket, cards, total, board, selected, dragDisabled, onOpen, onDone, onMove, onAdd, onCarried, addRef, timezone }: ColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: bucket });
   const [adding, setAdding] = useState(bucket === "triage");
   const [title, setTitle] = useState("");
-  const hint = bucket === "today" ? new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", timeZone: timezone }) : HINTS[bucket];
+  const hint =
+    bucket === "today"
+      ? new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", timeZone: timezone })
+      : bucket === "tomorrow" && !board.rollsTomorrow
+        ? `Rolls into Today on ${new Date(`${board.rollsOn}T12:00:00`).toLocaleDateString(undefined, { weekday: "long" })}`
+        : HINTS[bucket];
+  const carried = onCarried ? cards.filter((c) => c.carried).length : 0;
   async function submit() {
     const t = title.trim();
     if (!t) return;
@@ -593,6 +619,23 @@ function Column({ bucket, cards, total, board, selected, dragDisabled, onOpen, o
         </form>
       )}
       <div className="col-body" ref={setNodeRef}>
+        {carried > 0 && (
+          <div className="carried-bar">
+            <span title="Left unfinished from earlier days: keep them for today, or move them on">
+              Carried over · <b>{carried}</b>
+            </span>
+            <span className="spacer" />
+            <button className="btn" title="Keep them for today" onClick={() => onCarried!("keep")}>
+              Keep
+            </button>
+            <button className="btn" onClick={() => onCarried!("tomorrow")}>
+              → Tomorrow
+            </button>
+            <button className="btn" onClick={() => onCarried!("later")}>
+              → Later
+            </button>
+          </div>
+        )}
         <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           {cards.map((c) => (
             <SortableCard key={c.id} card={c} assignees={board.assignees} selected={c.id === selected} disabled={dragDisabled} onOpen={onOpen} onDone={onDone} onMove={onMove} current={bucket} />
@@ -634,7 +677,7 @@ function Help() {
             </div>
           ))}
         </dl>
-        <p className="muted small">Drag cards to rank them; Tomorrow moves into Today at midnight. Open a task to bring it back on a date or make it repeat.</p>
+        <p className="muted small">Drag cards to rank them; Tomorrow moves into Today at the start of the next workday, below what's left over. Open a task to bring it back on a date or make it repeat.</p>
       </div>
     </div>
   );

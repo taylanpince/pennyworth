@@ -2,6 +2,8 @@
 # Paths are as seen inside the ops-mcp container.
 
 timezone: Europe/Madrid
+# The board rolls Tomorrow into Today only on these days (Friday's Tomorrow lands on Monday).
+workdays: [monday, tuesday, wednesday, thursday, friday]
 
 # Your names/emails as they appear in calendar invites and transcripts. Used to
 # exclude you from attendee evidence and to decide which action items are yours.

@@ -2,6 +2,7 @@ import pino from "pino";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { Paperclip } from "./paperclip.js";
+import { weekdayOf } from "./recurrence.js";
 import { Store, localDate } from "./store.js";
 
 const cfg = loadConfig();
@@ -9,12 +10,12 @@ const log = pino({ level: cfg.logLevel, redact: { paths: ["authorization", "*.au
 const store = new Store(cfg.dbPath);
 const paperclip = new Paperclip(cfg.paperclipUrl, cfg.companyId, cfg.boardKey);
 
-/** Every minute: Tomorrow → Today at midnight, then any scheduled moves that are due (D-25), on top. */
+/** Every minute: Tomorrow → Today at the start of a workday (D-28), then any scheduled moves that are due (D-25), on top. */
 function rollover() {
   try {
     const today = localDate(cfg.timezone);
-    const moved = store.rollover(today);
-    if (moved) log.info({ moved }, "midnight rollover: Tomorrow → Today");
+    const moved = store.rollover(today, cfg.workdays.includes(weekdayOf(today)));
+    if (moved) log.info({ moved }, "rollover: Tomorrow → Today");
     const scheduled = store.applySchedules(today);
     if (scheduled.length) log.info({ moved: scheduled.length }, "scheduled moves applied");
   } catch (err) {
@@ -24,7 +25,7 @@ function rollover() {
 rollover();
 setInterval(rollover, 60_000).unref();
 
-const common = { paperclip, store, log, staticDir: cfg.staticDir, timezone: cfg.timezone, lan: cfg.lan };
+const common = { paperclip, store, log, staticDir: cfg.staticDir, timezone: cfg.timezone, workdays: cfg.workdays, lan: cfg.lan };
 const server = createApp({ ...common, allowedHosts: cfg.allowedHosts, mode: "local" });
 server.listen(cfg.port, "0.0.0.0", () => log.info({ port: cfg.port, hosts: cfg.allowedHosts }, "board listening"));
 // Phones on the home network (D-23): a separate port, paired devices only.

@@ -31,6 +31,8 @@ export interface Card {
   activityAt: string;
   scheduled?: { date: string; bucket: Bucket };
   recurring?: { summary: string; nextRun: string | null; paused: boolean };
+  /** In Today: workdays carried over unfinished (D-28). */
+  carried?: number;
 }
 
 export const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
@@ -60,6 +62,9 @@ export interface Board {
   labels: Label[];
   prefix: string;
   timezone: string;
+  /** The next workday, when Tomorrow rolls into Today (D-28). */
+  rollsOn: string;
+  rollsTomorrow: boolean;
 }
 
 export interface CommentView {
