@@ -17,7 +17,7 @@ It is built on [Paperclip](https://github.com/paperclipai/paperclip) (agents, ta
 - **Coding jobs:** assign a task to an Engineer and say what you want. Codex, Claude Code or an OpenRouter model works in its own git worktree, as you, and nothing is pushed until you say `push` or `pr`.
 - **Board:** a keyboard-driven task board on localhost, also usable from a paired phone at home.
 
-All writes are idempotent, and nothing ambiguous is written. [`docs/SPECS.md`](docs/SPECS.md) is the original spec, and [`docs/DECISIONS.md`](docs/DECISIONS.md) (D-1 to D-29) explains every deviation from it.
+All writes are idempotent, and nothing ambiguous is written. [`docs/SPECS.md`](docs/SPECS.md) is the original spec, and [`docs/DECISIONS.md`](docs/DECISIONS.md) (D-1 to D-30) explains every deviation from it.
 
 ```text
 host (Linux, systemd user services)
@@ -243,6 +243,8 @@ The Slack Scout creates two kinds of tasks, each with a permalink and a `source:
 
 - `needs-response`: someone is waiting for your reply. It closes once you answer in the thread. A request to review a GitHub PR closes once you've reviewed it, or it's merged or closed (the runner checks with read-only `gh`).
 - `todo`: something you promised.
+
+To hand Pennyworth a Slack message yourself, react to it with your task emoji (📌 `:pushpin:`, set in the Slack scan routine). It becomes a `todo` on the next scan, whoever wrote it and however old it is. Remove the reaction and the task closes. A task you close stays closed. Slack's own Later list can't be used: Slack has no API for it that tells open items from completed ones ([D-30](docs/DECISIONS.md)).
 
 ## Telegram
 

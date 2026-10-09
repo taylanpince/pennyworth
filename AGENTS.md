@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-29) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-30) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -169,6 +169,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Tasks:**
   - Tasks only for *his own* clear action items. No waiting-on tasks for other people's commitments, and no tasks for ownerless actions.
   - **Email:** only threads he labels `pennyworth` in Gmail (any account, archived or not) become todos, closed when he removes the label. Never mirror the whole inbox: that produced junk tasks (meeting accepts, receipts).
+  - **Slack hand-offs:** messages he reacts to with :pushpin: become todos, closed when he removes the reaction (D-30). Not Slack's Later list: `is:saved` search also returns hundreds of completed items, and `saved.list` refuses OAuth tokens.
   - Replies on meeting match review tasks (`pick N`, `ignore`) are handled by ops-mcp. Replies on other tasks go to the Assistant. Code work is assigned to an Engineer: Engineer · Codex, · Claude or · GLM, with the model picked on the task. "use Claude" or "use GLM" in a comment still works and moves the picker.
   - **Scheduling and recurring tasks (D-25):** "bring this back on Tuesday" or "make this repeat every Monday" in a comment goes to the Assistant, which calls `task_schedule` / `task_recurring`. Dates and rules are validated and run by board code. A recurring task's description is its instructions, and each run lands on top of Today as a draft for him to finish (no per-run approval: his choice). Runs default to 07:00.
   - **Today and Tomorrow (D-28):** Tomorrow means the next workday (Friday's lands on Monday). Leftovers stay on top of Today, marked "Carried Nd", with one-click Keep / → Tomorrow / → Later. Never move leftovers automatically.

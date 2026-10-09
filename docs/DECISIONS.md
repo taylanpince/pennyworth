@@ -304,3 +304,14 @@ Pennyworth reads work email, Slack, calendars and documents. The user cleared ru
 - **Decision:** the Assistant gets the four upstream read tools (`list_allowed_chats`, `read_chat_history`, `search_chat_history`, `get_new_messages`) through `enabled_tools`. The scout tools (`telegram_mentions`, `telegram_mentions_ack`, `telegram_followups`) stay with the Telegram Scout, so the Assistant can't acknowledge candidates away. Its prompt uses Telegram only when the task or the user's comment points there, and reads around a message rather than whole chats.
 - **Why direct calls are fine here:** D-27 keeps the *scan* off the agent's tool path. A lookup is a few calls of a few seconds each (`tool_timeout_sec` is 300), and the reads are stateless: cursors are arguments, so they don't disturb the scout's.
 - **Security:** same posture as Slack and Gmail for this agent: read-only, content untrusted, and the Scout's rule against copying credentials pasted into chats. Cached web search stays safe for the same reason as D-19: no fetches to arbitrary hosts.
+
+## D-30: Slack hand-offs by emoji reaction, not Slack's Later list
+
+- **Problem:** the user wanted his Slack "remind me later" items (the Later list) that aren't completed to become tasks.
+- **What doesn't work:**
+  - Slack's MCP server has no tool for Later, and Slack says there is no Later API.
+  - `stars.list` stopped reflecting saved items in 2023.
+  - The undocumented `saved.list`, which has saved, completed and archived filters, answers `not_allowed_token_type` to our OAuth user token. It accepts only the web client's session token, which can do anything the account can. Pennyworth won't hold that token.
+  - Search's `is:saved` returns every saved message, completed or not: over 300 results going back two months, with his 8 open items among them. No search modifier separates them (`-is:completed`, `is:overdue` and the like are read as keywords).
+- **Decision:** the Gmail label pattern (D-16, the Inbox Agent), with a reaction as the label. A message he reacts to with his task emoji (`:pushpin:`, in the Slack scan routine's description) becomes a `todo` with marker `source:slack:pin:<channel>:<ts>`. The Slack Scout finds them with `hasmy::pushpin:` (verified to filter: an unused emoji returns nothing). It closes the task when the reaction is gone, but only after a complete search, and never recreates a task he closed (`dedupe_closed`).
+- **Why an emoji:** reacting needs no new scope and is read-only for us. It works on any message, including his own. Removing the reaction is the "done" signal the Later list would have given. `:pushpin:` was unused (no earlier reactions), so turning this on brought in no backlog.

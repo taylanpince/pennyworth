@@ -211,9 +211,10 @@ routines:
     title: Slack scan
     agent: slack-scout
     description: |
-      Today is {{date}}. Your Slack user ID is U00000000. Follow your instructions: find
-      Slack messages that need the user, create or update tasks (deduplicated), close
-      tasks the user has already answered, then close this task with a count summary.
+      Today is {{date}}. Your Slack user ID is U00000000. Your task emoji is :pushpin:. Follow your
+      instructions: find Slack messages that need the user and the messages they pinned with
+      their task emoji, create or update tasks (deduplicated), close tasks the user has
+      answered or unpinned, then close this task with a count summary.
     concurrency: skip_if_active
     schedules:
       - { cron: "*/30 8-20 * * 1-5", timezone: Europe/Madrid, label: "work hours" }
