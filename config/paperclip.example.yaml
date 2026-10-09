@@ -176,12 +176,21 @@ agents:
     dispatch: runner
     mcp_servers: []
 
-  engineer-glm:
-    name: Engineer · GLM
+  engineer-openrouter:                # was engineer-glm; setup renames the existing agent
+    name: Engineer · OpenRouter
     title: Coding jobs with OpenRouter models via opencode (pennyworth-runner)
     instructions: config/agents/engineer.md
     adapter: opencode_local
     model: openrouter/z-ai/glm-5.3-flash
+    # Offered in the board's model picker and known to the runner ("use DeepSeek"). Any other
+    # OpenRouter model id still works when typed in full.
+    models:
+      - openrouter/z-ai/glm-5.3-flash
+      - openrouter/z-ai/glm-5.3
+      - openrouter/deepseek/deepseek-v4.1-flash
+      - openrouter/deepseek/deepseek-v4-pro
+      - openrouter/moonshotai/kimi-k3
+      - openrouter/qwen/qwen3-coder-next
     dispatch: runner
     mcp_servers: []
 

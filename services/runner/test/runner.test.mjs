@@ -205,7 +205,7 @@ describe("human-approved push", () => {
 });
 
 describe("plain-language intake", async () => {
-  const { intakePrompt, resolveModelAlias, validateIntake } = await import("../src/intake.mjs");
+  const { intakePrompt, resolveModelAlias, resolveOpenRouterModel, validateIntake } = await import("../src/intake.mjs");
   const models = ["gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.5"];
   const candidates = ["0xPolygon/indexer-gateway-a", "0xPolygon/indexer-gateway-b"];
 
@@ -234,6 +234,18 @@ describe("plain-language intake", async () => {
     assert.deepEqual([read("", "sonnet").engine, read("", "sonnet").model], ["claude", "sonnet"]);
     assert.equal(read("claude", "astra").model, undefined);
     assert.deepEqual([read("", "astra").engine, read("", "astra").model], ["codex", "gpt-6-astra"]);
+  });
+
+  it("reads requests for OpenRouter models", () => {
+    const openrouter = ["z-ai/glm-5.3-flash", "z-ai/glm-5.3", "deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v4-pro"];
+    const read = (engine, model) => validateIntake({ repo: "", references: [], mode: "", engine, model, question: "" }, { candidates, models, openrouter });
+    assert.deepEqual([read("openrouter", "deepseek").engine, read("openrouter", "deepseek").model], ["openrouter", "deepseek/deepseek-v4.1-flash"]);
+    assert.equal(read("openrouter", "glm5.3-flash").model, "z-ai/glm-5.3-flash");
+    assert.equal(read("openrouter", "deepseek-v4-pro").model, "deepseek/deepseek-v4-pro");
+    assert.equal(read("openrouter", "moonshotai/kimi-k3").model, "moonshotai/kimi-k3");
+    assert.deepEqual([read("glm", "").engine, read("openrouter", "").model], ["openrouter", undefined]);
+    assert.equal(read("openrouter", "opus").model, undefined);
+    assert.equal(resolveOpenRouterModel("rm -rf /", openrouter), undefined);
   });
 
   it("fences untrusted task text in the intake prompt", () => {
@@ -626,6 +638,43 @@ describe("public PR text", async () => {
     const p = describePrompt({ repo: "0xPolygon/x", base: "main", request: "Body: `Adds a notice.`", messages: ["chore: add notice"], stat: "", diff: "", report: "" });
     assert.match(p, /use them exactly/);
     assert.match(p, /Never mention them, or any task tracker, ticket number, agent, AI tool, local file path or machine/);
+  });
+});
+
+describe("branch names in the repository's style", async () => {
+  const { branchGuidance, checkBranchName, chooseBranchName, exampleBranches, fallbackBranchName, isLocalBranch } = await import("../src/branch.mjs");
+  it("keeps people's branches, the user's first, and drops bots and our own", () => {
+    const prs = [
+      { headRefName: "taylanpince/add-notice", author: { login: "taylanpince" } },
+      { headRefName: "feat/relayer-status", author: { login: "patrislav" } },
+      { headRefName: "dependabot/go_modules/x-1.2", author: { login: "app/dependabot", is_bot: true } },
+      { headRefName: "pennyworth/pen-18", author: { login: "taylanpince" } },
+      { headRefName: "main", author: { login: "someone" } },
+    ];
+    assert.deepEqual(exampleBranches(prs, { login: "TaylanPince", base: "main" }), { mine: ["taylanpince/add-notice"], others: ["feat/relayer-status"] });
+  });
+  it("only accepts names we would push", () => {
+    const opts = { base: "main", defaultBranch: "main" };
+    assert.equal(checkBranchName("feat/add-balance-cache", opts), "feat/add-balance-cache");
+    for (const bad of ["main", "pennyworth/pen-18", "feat/pen-18-fix", "fix/codex-run", "feat/../x", "feat/x.lock", "-x", "feat x", "a".repeat(81), "feat//x", "x/"]) assert.equal(checkBranchName(bad, opts), "", bad);
+    assert.equal(isLocalBranch("pennyworth/pen-18-2"), true);
+  });
+  it("falls back to <type>/<slug> from the commit subject", () => {
+    assert.equal(fallbackBranchName("feat(api): Add balance cache!"), "feat/add-balance-cache");
+    assert.equal(fallbackBranchName("Update README"), "chore/update-readme");
+    assert.equal(fallbackBranchName("fix: PEN-18 notice"), "fix/update");
+  });
+  it("finds branch rules in contributing guides", () => {
+    const g = branchGuidance([["CONTRIBUTING.md", "# Contributing\n\nIntro.\n\nName branches <type>/<short-name>, e.g. feat/new-api.\n\nOther stuff.\nMore."], ["AGENTS.md", "no rules here"]]);
+    assert.match(g, /^CONTRIBUTING.md:\n[\s\S]*Name branches <type>\/<short-name>/);
+    assert.doesNotMatch(g, /AGENTS|More\./);
+  });
+  it("checks the writer's answer, falls back without one, and never reuses a taken name", async () => {
+    const base = { repo: "0xPolygon/x", base: "main", defaultBranch: "main", login: "taylanpince", guidance: "", prs: [], request: "", messages: ["fix: typo"] };
+    const taken = new Set(["fix/typo"]);
+    assert.deepEqual(await chooseBranchName({ ...base, taken: async (n) => taken.has(n), ask: async () => { throw new Error("offline"); } }), { name: "fix/typo-2", generated: false });
+    assert.deepEqual(await chooseBranchName({ ...base, taken: async () => false, ask: async () => ({ branch: "taylanpince/fix-typo" }) }), { name: "taylanpince/fix-typo", generated: true });
+    assert.deepEqual(await chooseBranchName({ ...base, taken: async () => false, ask: async () => ({ branch: "pennyworth/fix-typo" }) }), { name: "fix/typo", generated: false });
   });
 });
 

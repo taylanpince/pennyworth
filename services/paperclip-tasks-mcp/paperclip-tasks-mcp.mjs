@@ -22,8 +22,20 @@ const CURRENT_TASK = process.env.PAPERCLIP_TASK_ID || "";
 const STATUSES = ["todo", "in_progress", "done", "cancelled"];
 
 // Engineer sub-tasks (D-24): engines map to the Engineer agents' setup keys.
-const ENGINES = ["codex", "claude", "glm"];
+const ENGINES = ["codex", "claude", "openrouter"];
+const ADAPTERS = { codex: "codex_local", claude: "claude_local", openrouter: "opencode_local" };
 const MAX_SUBTASKS = 40;
+
+/** An OpenRouter model id (provider/model) for what the user named, or "" (as the runner's intake). */
+function openrouterModel(name, listed) {
+  const n = String(name).trim().toLowerCase().replace(/^openrouter\//, "");
+  const models = listed.filter((m) => typeof m === "string" && m.startsWith("openrouter/")).map((m) => m.slice("openrouter/".length));
+  const flat = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const known = models.find((m) => m.toLowerCase() === n) ?? models.find((m) => flat(m.split("/").pop()) === flat(n)) ?? models.find((m) => flat(m).includes(flat(n)));
+  if (known) return known;
+  if (/^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._:-]*$/.test(n)) return n;
+  return /^glm/.test(n) ? `z-ai/${n}` : "";
+}
 
 async function api(method, path, body) {
   if (!KEY) throw new Error("PAPERCLIP_API_KEY is not set (only available inside a Paperclip run)");
@@ -226,8 +238,8 @@ const TOOLS = {
         parent: { type: "string", description: "the user's task to split, e.g. PEN-357" },
         title: { type: "string" },
         description: { type: "string", description: "markdown; the complete request for this one task" },
-        engine: { type: "string", enum: ENGINES, description: "codex (default), claude or glm, as the user asked" },
-        model: { type: "string", description: "optional model the user named, e.g. gpt-6-astra, opus, z-ai/glm-5.3-flash" },
+        engine: { type: "string", enum: ENGINES, description: "codex (default), claude, or openrouter (GLM, DeepSeek, Kimi… models), as the user asked" },
+        model: { type: "string", description: "optional model the user named, e.g. gpt-6-astra, opus, deepseek, z-ai/glm-5.3-flash" },
         marker: { type: "string", description: "stable key within the parent, e.g. the repo name" },
       },
       required: ["parent", "title", "description", "engine", "marker"],
@@ -239,6 +251,7 @@ const TOOLS = {
       // Code work is gated by the user's go-ahead (D-24); only the Assistant may queue it.
       const me = await api("GET", "/api/agents/me");
       if (me?.metadata?.setupKey !== "pennyworth:assistant") throw new Error("only the Assistant can create Engineer tasks");
+      if (engine === "glm") engine = "openrouter"; // the OpenRouter Engineer was "Engineer · GLM"
       if (!ENGINES.includes(engine)) throw new Error(`engine must be one of ${ENGINES.join(", ")}`);
       const p = await api("GET", `/api/issues/${issueRef(parent)}`);
       const owner = await ownerUserId();
@@ -251,16 +264,15 @@ const TOOLS = {
       const siblings = await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/issues?${new URLSearchParams({ parentId: p.id, limit: "200" })}`);
       if (siblings.filter((i) => i.parentId === p.id).length >= MAX_SUBTASKS) throw new Error(`a task can have at most ${MAX_SUBTASKS} Engineer sub-tasks`);
       const agents = await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/agents`);
-      const setupKey = engine === "codex" ? "pennyworth:engineer" : `pennyworth:engineer-${engine}`;
-      const agent = agents.find((a) => a.metadata?.setupKey === setupKey && a.status !== "terminated");
+      const agent = agents.find((a) => a.adapterType === ADAPTERS[engine] && /^pennyworth:engineer(-|$)/.test(a.metadata?.setupKey ?? "") && a.status !== "terminated");
       if (!agent) throw new Error(`no Engineer for ${engine}`);
       const m2 = String(model ?? "").trim();
       if (m2 && !/^[A-Za-z0-9._:\/\[\]-]{1,100}$/.test(m2)) throw new Error("invalid model");
-      // opencode model ids are openrouter/<provider>/<model>. "glm-5.3-flash" means z-ai's model; a
-      // bare name we can't place is dropped, so the Engineer's default model runs instead.
-      const orModel = m2.replace(/^openrouter\//, "");
-      const glmModel = orModel.includes("/") ? orModel : /^glm/i.test(orModel) ? `z-ai/${orModel.toLowerCase()}` : "";
-      const modelId = engine === "glm" ? (glmModel ? `openrouter/${glmModel}` : "") : m2;
+      // opencode model ids are openrouter/<provider>/<model>. A name like "deepseek" or "glm-5.3-flash"
+      // is matched against the OpenRouter Engineer's listed models; a bare name we can't place is
+      // dropped, so the Engineer's default model runs instead.
+      const orModel = engine === "openrouter" && m2 ? openrouterModel(m2, [agent.adapterConfig?.model, ...(Array.isArray(agent.metadata?.models) ? agent.metadata.models : [])]) : "";
+      const modelId = engine === "openrouter" ? (orModel ? `openrouter/${orModel}` : "") : m2;
       const body = {
         title: String(title).slice(0, 200),
         description: `${String(description).replace(/<!--|-->/g, "").slice(0, 60_000)}\n\n<!-- source:${m} -->`,

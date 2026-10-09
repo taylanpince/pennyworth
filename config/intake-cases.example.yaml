@@ -72,3 +72,16 @@
     waiting: *a1
   expect:
     decision: hold
+
+- id: OpenRouter model by family name
+  why: "\"deepseek\" is an OpenRouter model, mapped to the one listed for the OpenRouter Engineer"
+  title: New balance gateway
+  comment: Try this again with deepseek please, the last attempt went in circles.
+  context: { known_repo: 0xPolygon/example-gateway, previous_mode: implement, has_work: true }
+  expect: { action: run, mode: implement, engine: openrouter, model: deepseek/deepseek-v4.1-flash }
+
+- id: OpenRouter without a model
+  title: New balance gateway
+  comment: Use OpenRouter for this one and write up how the balance cache works.
+  context: { known_repo: 0xPolygon/example-gateway }
+  expect: { action: run, mode: investigate, engine: openrouter, model: null }

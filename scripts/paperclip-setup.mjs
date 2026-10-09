@@ -193,6 +193,9 @@ function runnerAgentBody(key, a, existing) {
   const model = a.model || existing?.adapterConfig?.model || "";
   if (a.adapter === "opencode_local" && !/^openrouter\/\S+$/.test(model)) fail(`agent ${key}: opencode_local needs model: openrouter/<model>`);
   const adapterConfig = { ...(model ? { model } : {}) };
+  // Models offered in the board picker and known to the runner (opencode ids, openrouter/<model>).
+  const models = a.models ?? [];
+  if (!Array.isArray(models) || models.some((m) => typeof m !== "string" || (a.adapter === "opencode_local" && !/^openrouter\/\S+$/.test(m)))) fail(`agent ${key}: models must be a list of model ids${a.adapter === "opencode_local" ? " (openrouter/<model>)" : ""}`);
   if (a.adapter === "codex_local") adapterConfig.dangerouslyBypassApprovalsAndSandbox = false;
   if (a.adapter === "claude_local") adapterConfig.dangerouslySkipPermissions = false;
   return {
@@ -202,7 +205,7 @@ function runnerAgentBody(key, a, existing) {
     adapterType: a.adapter,
     adapterConfig,
     runtimeConfig: { heartbeat: { enabled: false, intervalSec: 0, wakeOnDemand: false, maxConcurrentRuns: 1 } },
-    metadata: { setupKey: `pennyworth:${key}`, runnerEngine: true },
+    metadata: { setupKey: `pennyworth:${key}`, runnerEngine: true, ...(models.length ? { models } : {}) },
   };
 }
 
@@ -249,12 +252,16 @@ function agentBody(key, a, existing) {
   };
 }
 
+// Agents whose config key changed: the existing agent (and the tasks assigned to it) is kept.
+const PREVIOUS_KEYS = { "engineer-openrouter": "engineer-glm" };
+
 async function ensureAgents(companyId) {
   const { json: agents } = await api("GET", `/api/companies/${companyId}/agents`);
   const result = {};
   for (const [key, a] of Object.entries(cfg.agents ?? {})) {
     const instructions = readFileSync(resolve(repo, a.instructions), "utf8");
-    let agent = agents.find((x) => x.metadata?.setupKey === `pennyworth:${key}` && x.status !== "terminated") ?? agents.find((x) => x.name === a.name && x.status !== "terminated");
+    const keys = [key, PREVIOUS_KEYS[key]].filter(Boolean).map((k) => `pennyworth:${k}`);
+    let agent = agents.find((x) => keys.includes(x.metadata?.setupKey) && x.status !== "terminated") ?? agents.find((x) => x.name === a.name && x.status !== "terminated");
     const body = agentBody(key, a, agent);
     if (agent && agent.adapterType !== body.adapterType) fail(`agent ${a.name}: adapter is ${agent.adapterType} in Paperclip, ${body.adapterType} in the config`);
     if (!agent) {

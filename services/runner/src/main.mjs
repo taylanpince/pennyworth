@@ -2,15 +2,16 @@
 // Pennyworth runner: turns your comments on Paperclip tasks labelled "engineer" into
 // Codex / Claude Code / OpenRouter coding jobs in runner-owned git worktrees on this machine.
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { RUNNER_MARKER, branchFor, isAgentSubtask, ownRequest, findRepos, isClaudeModel, normalizeRepo, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
+import { RUNNER_MARKER, branchFor, isAgentSubtask, ownRequest, findRepos, isClaudeModel, normalizeRepo, openrouterModels, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree, startFreshBranch, nextBranchName } from "./git.mjs";
 import { codexModels, readApproval, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
+import { branchGuidance, checkBranchName, chooseBranchName, isLocalBranch } from "./branch.mjs";
 import { cleanMessages, leaksInternal, writePrDescription } from "./describe.mjs";
 import { commitMessage, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, publishFooter, subtaskSummary, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
@@ -232,7 +233,8 @@ async function handleRequest(issue, latest) {
   const before = state.task(issue.id);
   const busy = running.has(issue.id) || queue.some((j) => j.issue.id === issue.id);
   const hasWork = await taskHasCommits(before);
-  const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, latest, candidates, known: before.repo, previousMode: before.mode, busy, hasWork, lastResult: await lastReport(issue.id).catch(() => undefined) })
+  const openrouter = openrouterModels(await pc.engineerAgents().catch(() => []));
+  const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, latest, candidates, openrouter, known: before.repo, previousMode: before.mode, busy, hasWork, lastResult: await lastReport(issue.id).catch(() => undefined) })
     .catch((err) => (log("intake failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }), undefined));
   // Publishing needs something to publish: "build X and prepare a PR" on a fresh task is a run.
   const action = (read?.action === "push" || read?.action === "pr") && !hasWork ? "run" : (read?.action ?? "run");
@@ -362,7 +364,7 @@ async function applySettings(issue, task, settings) {
     fields.repo = repo.slug;
   }
   if (settings.base) fields.base = settings.base.trim();
-  if (settings.model && !isClaudeModel(settings.model)) settings.model = resolveModelAlias(settings.model, codexModels()) ?? settings.model;
+  if (settings.model && settings.engine !== "openrouter" && !isClaudeModel(settings.model)) settings.model = resolveModelAlias(settings.model, codexModels()) ?? settings.model;
   if (settings.engine || settings.model) fields.engine = resolveEngine(settings, cfg, task.engine);
   if (settings.mode) fields.mode = resolveMode(settings, task.mode);
   if (Object.keys(fields).length) state.updateTask(issue.id, fields);
@@ -407,7 +409,7 @@ async function startJob({ issue, instructions, read, candidates }) {
     const inferred = {};
     if (read?.repo && !before.repo) inferred.repo = read.repo;
     inferred.mode = read?.mode ?? "investigate"; // judged per request; if unreadable, change nothing
-    if (read?.engine === "glm") inferred.engine = "glm";
+    if (read?.engine === "openrouter") Object.assign(inferred, { engine: "openrouter" }, read.model ? { model: read.model } : {});
     else if (read?.engine === "claude") Object.assign(inferred, { engine: "claude" }, read.model ? { model: read.model } : {});
     else if (read?.model) Object.assign(inferred, { engine: "codex", model: read.model });
     let task = await applySettings(issue, before, inferred);
@@ -656,6 +658,10 @@ async function runCommand(issue, task, command) {
   if (command === "pr" && (await remoteIsEmpty(clone))) {
     return void (await pc.comment(issue.id, `The repository is still empty, so there's no branch to open a PR against. Reply **push** to publish this work as \`${task.base}\`.`));
   }
+  // The first push publishes the work under a name in the repository's style, not pennyworth/<task>.
+  if (isLocalBranch(task.branch) && !(await remoteIsEmpty(clone)) && !(await remoteHasBranch(clone, task.branch))) {
+    task = await renameForPublishing(issue, task, clone, repo);
+  }
   // "pr" always pushes the task branch first: it may never have been pushed (the first push into an
   // empty repository goes to the base branch instead), and an open PR should get the latest commits.
   const head = await git(task.worktree, "log", "-1", "--format=%H %s");
@@ -667,7 +673,7 @@ async function runCommand(issue, task, command) {
     ));
   }
   if (command === "push" || command === "pr") {
-    if (!task.branch?.startsWith("pennyworth/")) throw new Error(`refusing to push unexpected branch ${task.branch}`);
+    if (!checkBranchName(task.branch, { base: task.base, defaultBranch: await defaultBranch(clone) }) && !isLocalBranch(task.branch)) throw new Error(`refusing to push unexpected branch ${task.branch}`);
     const target = await pushBranch(clone, task.worktree, task.branch, { initialBranch: task.base }).catch((err) => {
       throw new UserError(`I couldn't push \`${task.branch}\`. Git said:\n\`\`\`\n${String(err.stderr || err.message).trim().slice(-800)}\n\`\`\``);
     });
@@ -725,6 +731,29 @@ async function prRequest(full) {
   const parent = await pc.issue(full.parentId).catch(() => undefined);
   const parentText = parent ? ownRequest(parent) : "";
   return parentText ? `${own}\n\nThis change is one repository of a larger request (its rules for PR titles and bodies apply):\n\n${parent.title}\n\n${parentText}` : own;
+}
+
+/**
+ * Rename the task's local branch to a name that follows the repository's conventions (its
+ * contributing guide, the user's own recent branches, then everyone's), before its first push.
+ */
+async function renameForPublishing(issue, task, clone, repo) {
+  const realGh = await findRealGh();
+  const ghJson = (args) => execFileP(realGh, args).then(({ stdout }) => JSON.parse(stdout), () => undefined);
+  const login = (await ghJson(["api", "user"]))?.login ?? "";
+  const prs = (await ghJson(["pr", "list", "--repo", repo.slug, "--state", "all", "--limit", "60", "--json", "headRefName,author"])) ?? [];
+  const docs = ["CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md", "AGENTS.md", "CLAUDE.md", ".github/pull_request_template.md"];
+  const guidance = branchGuidance(docs.map((f) => [f, existsSync(join(task.worktree, f)) ? readFileSync(join(task.worktree, f), "utf8") : ""]));
+  const messages = cleanMessages(await git(task.worktree, "log", "--reverse", "--format=%B%x1e", `origin/${task.base}..HEAD`).catch(() => ""));
+  const taken = async (name) => Boolean(await git(clone, "branch", "--list", name)) || (await remoteHasBranch(clone, name));
+  const { name, generated } = await chooseBranchName({
+    cfg, repo: repo.slug, base: task.base, defaultBranch: await defaultBranch(clone), login, guidance, prs,
+    request: await prRequest(await pc.issue(issue.id)), messages, taken,
+  });
+  await git(task.worktree, "branch", "-m", name);
+  state.updateTask(issue.id, { branch: name });
+  log("branch named for publishing", { issue: issue.identifier, from: task.branch, to: name, generated });
+  return state.task(issue.id);
 }
 
 /** Commit subjects are public: never let a task number or our tooling into one. */

@@ -361,9 +361,9 @@ export function createApp(opts: AppOptions): Server {
         const ctx = await context();
         const a = ctx.assignees.find((x) => x.key === m[1] && x.kind === "engineer");
         if (!a?.adapterType) throw new HttpError(404, "not an Engineer");
-        let models = (await pc.models(a.adapterType).catch(() => [])).map((x) => x.id);
-        if (a.engine === "openrouter") models = models.filter((x) => x.startsWith("openrouter/"));
-        if (a.defaultModel && !models.includes(a.defaultModel)) models.unshift(a.defaultModel);
+        let listed = (await pc.models(a.adapterType).catch(() => [])).map((x) => x.id);
+        if (a.engine === "openrouter") listed = listed.filter((x) => x.startsWith("openrouter/"));
+        const models = [...new Set([...(a.defaultModel ? [a.defaultModel] : []), ...(a.models ?? []), ...listed])];
         return { default: a.defaultModel ?? null, models, efforts: a.efforts ?? [] };
       },
     },

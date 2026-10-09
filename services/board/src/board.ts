@@ -20,6 +20,8 @@ export interface Assignee {
   engine?: Engine;
   adapterType?: string;
   defaultModel?: string;
+  /** Models offered for this Engineer (config/paperclip.yaml `models`), besides Paperclip's list. */
+  models?: string[];
   efforts?: string[];
 }
 
@@ -34,7 +36,8 @@ export function assignees(agents: Agent[]): Assignee[] {
   for (const a of engineers) {
     const engine = ADAPTER_ENGINE[a.adapterType]!;
     const model = typeof a.adapterConfig?.model === "string" ? a.adapterConfig.model : "";
-    out.push({ key: a.id, kind: "engineer", name: a.name, engine, adapterType: a.adapterType, defaultModel: model || undefined, efforts: EFFORTS[engine] });
+    const models = Array.isArray(a.metadata?.models) ? a.metadata.models.filter((m): m is string => typeof m === "string") : [];
+    out.push({ key: a.id, kind: "engineer", name: a.name, engine, adapterType: a.adapterType, defaultModel: model || undefined, ...(models.length ? { models } : {}), efforts: EFFORTS[engine] });
   }
   return out;
 }

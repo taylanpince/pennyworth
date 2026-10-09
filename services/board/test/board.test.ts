@@ -9,11 +9,11 @@ const agents: Agent[] = [
   { id: "00000000-0000-0000-0000-00000000000a", name: "Assistant", status: "idle", adapterType: "codex_local", metadata: { setupKey: "pennyworth:assistant" } },
   { id: "00000000-0000-0000-0000-0000000000c1", name: "Engineer · Claude", status: "idle", adapterType: "claude_local", adapterConfig: { model: "claude-opus-5-5" }, metadata: { setupKey: "pennyworth:engineer-claude" } },
   { id: "00000000-0000-0000-0000-0000000000c0", name: "Engineer · Codex", status: "idle", adapterType: "codex_local", adapterConfig: {}, metadata: { setupKey: "pennyworth:engineer" } },
-  { id: "00000000-0000-0000-0000-0000000000c2", name: "Engineer · GLM", status: "idle", adapterType: "opencode_local", adapterConfig: { model: "openrouter/z-ai/glm-5.3-flash" }, metadata: { setupKey: "pennyworth:engineer-glm" } },
+  { id: "00000000-0000-0000-0000-0000000000c2", name: "Engineer · OpenRouter", status: "idle", adapterType: "opencode_local", adapterConfig: { model: "openrouter/z-ai/glm-5.3-flash" }, metadata: { setupKey: "pennyworth:engineer-openrouter", models: ["openrouter/deepseek/deepseek-v4.1-flash", 7] } },
   { id: "00000000-0000-0000-0000-0000000000ee", name: "Slack Scout", status: "idle", adapterType: "codex_local", metadata: { setupKey: "pennyworth:slack-scout" } },
 ];
 const list = assignees(agents);
-const [CODEX, CLAUDE, GLM] = ["c0", "c1", "c2"].map((s) => `00000000-0000-0000-0000-0000000000${s}`);
+const [CODEX, CLAUDE, OPENROUTER] = ["c0", "c1", "c2"].map((s) => `00000000-0000-0000-0000-0000000000${s}`);
 const labels: Label[] = [{ id: "00000000-0000-0000-0000-00000000001a", name: "todo", color: "#0891b2" }];
 
 const issue = (over: Partial<Issue> = {}): Issue => ({
@@ -33,10 +33,10 @@ const issue = (over: Partial<Issue> = {}): Issue => ({
 });
 
 describe("assignees", () => {
-  it("offers you, the Assistant and the Engineers (Codex, Claude, GLM), nobody else", () => {
-    expect(list.map((a) => a.name)).toEqual(["You", "Assistant", "Engineer · Codex", "Engineer · Claude", "Engineer · GLM"]);
+  it("offers you, the Assistant and the Engineers (Codex, Claude, OpenRouter), nobody else", () => {
+    expect(list.map((a) => a.name)).toEqual(["You", "Assistant", "Engineer · Codex", "Engineer · Claude", "Engineer · OpenRouter"]);
     expect(list.find((a) => a.key === CLAUDE)).toMatchObject({ engine: "claude", defaultModel: "claude-opus-5-5", efforts: ["low", "medium", "high", "xhigh", "max"] });
-    expect(list.find((a) => a.key === GLM)?.efforts).toEqual([]);
+    expect(list.find((a) => a.key === OPENROUTER)).toMatchObject({ efforts: [], models: ["openrouter/deepseek/deepseek-v4.1-flash"] });
   });
 });
 
@@ -189,7 +189,7 @@ describe("edits", () => {
     expect(paperclipUpdate(withModel, { effort: "low" }, ctx).assigneeAdapterOverrides).toEqual({ adapterConfig: { model: "gpt-6-astra", modelReasoningEffort: "low" } });
     // The Engineer's primary model is no override.
     expect(paperclipUpdate(issue({ assigneeAgentId: CLAUDE, assigneeUserId: null }), { model: "claude-opus-5-5", effort: "" }, ctx).assigneeAdapterOverrides).toBeNull();
-    expect(paperclipUpdate(issue(), { assignee: GLM, model: "z-ai/glm-5.3" }, ctx).assigneeAdapterOverrides).toEqual({ adapterConfig: { model: "openrouter/z-ai/glm-5.3" } });
+    expect(paperclipUpdate(issue(), { assignee: OPENROUTER, model: "z-ai/glm-5.3" }, ctx).assigneeAdapterOverrides).toEqual({ adapterConfig: { model: "openrouter/z-ai/glm-5.3" } });
     expect(() => paperclipUpdate(issue(), { model: "gpt-5.6-sol" }, ctx)).toThrow(/Engineer/);
     expect(() => paperclipUpdate(onCodex, { effort: "max" }, ctx)).toThrow(/effort/);
     expect(() => paperclipUpdate(issue(), { labelIds: ["00000000-0000-0000-0000-0000000000ff"] }, ctx)).toThrow(/label/);

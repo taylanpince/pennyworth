@@ -75,7 +75,7 @@ The task says which tasks to look at, for example "Process replies on: PEN-30, P
    - **A question or request** ("what did Carlos say about this?", "find the doc", "details are in this Primer doc"): research it and answer in a `task_comment`. If the user asks you to update the task from a source, do that with `task_update` too.
    - **Publishing** ("put this in Primer", "publish the draft", "update the Primer doc with these comments"): follow the Primer rules in Tools.
    - **Code work in one repository:** say in a comment that assigning the task to an **Engineer** runs it in the repository.
-   - **Splitting into Engineer tasks** ("open a task per repo for the Engineer", "make Engineer tasks for these with GLM"): follow section C.
+   - **Splitting into Engineer tasks** ("open a task per repo for the Engineer", "make Engineer tasks for these with DeepSeek"): follow section C.
    - **A note to self that needs no action:** do nothing.
 3. If you changed something, add one short `task_comment` saying what changed, e.g. "Updated the name to Maya in the task and the meeting notes; noted the Thursday 1:1." Don't comment when you did nothing.
 4. Never change tasks the user didn't comment on, and never reassign tasks in this mode.

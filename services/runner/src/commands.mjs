@@ -54,7 +54,7 @@ export function findRepos(text, allowedOrgs) {
 
 /**
  * Resolve the engine for a job: `engine: codex` (default), `engine: claude` (Claude Code),
- * `engine: glm` / `openrouter` (configured default OpenRouter model), `engine: openrouter:<model>`,
+ * `engine: openrouter` / `glm` (configured default OpenRouter model), `engine: openrouter:<model>`,
  * or a bare OpenRouter model id like `z-ai/glm-5.3`. A Claude model name alone (`model: opus`)
  * picks Claude Code.
  */
@@ -69,7 +69,7 @@ export function resolveEngine(directives, cfg, previous) {
   if (raw.includes("/")) return { kind: "openrouter", model: directives.engine.trim() };
   if (!raw && isClaudeModel(model)) return { kind: "claude", model };
   if (!raw && model) return { kind: previous?.kind === "claude" ? "codex" : previous?.kind ?? "codex", model };
-  throw new Error(`unknown engine "${directives.engine}" (use codex, claude, glm, or openrouter:<model>)`);
+  throw new Error(`unknown engine "${directives.engine}" (use codex, claude, openrouter, or openrouter:<model>)`);
 }
 
 // The Engineer agents (D-20): Paperclip adapter type ↔ runner engine.
@@ -112,6 +112,13 @@ export function pickerFor(engine, engineers) {
   const model = engine.model && engine.kind === "openrouter" ? `openrouter/${engine.model}` : engine.model;
   const config = { ...(model && model !== agent.adapterConfig?.model ? { model } : {}), ...(engine.effort && EFFORT_KEY[engine.kind] ? { [EFFORT_KEY[engine.kind]]: engine.effort } : {}) };
   return { assigneeAgentId: agent.id, assigneeAdapterOverrides: Object.keys(config).length ? { adapterConfig: config } : null };
+}
+
+/** OpenRouter models offered for the OpenRouter Engineer (config/paperclip.yaml `models`), primary first. */
+export function openrouterModels(engineers) {
+  const agent = engineers.find((a) => a.adapterType === "opencode_local");
+  const ids = [agent?.adapterConfig?.model, ...(Array.isArray(agent?.metadata?.models) ? agent.metadata.models : [])];
+  return [...new Set(ids.filter((m) => typeof m === "string" && m.startsWith("openrouter/")).map((m) => m.slice("openrouter/".length)))];
 }
 
 /** Claude Code model names: the aliases (opus, sonnet, haiku, fable) or a full `claude-…` id. */
