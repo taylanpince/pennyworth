@@ -17,7 +17,7 @@ It is built on [Paperclip](https://github.com/paperclipai/paperclip) (agents, ta
 - **Coding jobs:** assign a task to an Engineer and say what you want. Codex, Claude Code or an OpenRouter model works in its own git worktree, as you, and nothing is pushed until you say `push` or `pr`.
 - **Board:** a keyboard-driven task board on localhost, also usable from a paired phone at home.
 
-All writes are idempotent, and nothing ambiguous is written. [`docs/SPECS.md`](docs/SPECS.md) is the original spec, and [`docs/DECISIONS.md`](docs/DECISIONS.md) (D-1 to D-30) explains every deviation from it.
+All writes are idempotent, and nothing ambiguous is written. [`docs/SPECS.md`](docs/SPECS.md) is the original spec, and [`docs/DECISIONS.md`](docs/DECISIONS.md) (D-1 to D-31) explains every deviation from it.
 
 ```text
 host (Linux, systemd user services)
@@ -31,6 +31,7 @@ host (Linux, systemd user services)
     ├── google-workspace-mcp   Calendar, Drive, Docs, Gmail: read-only scopes, GET requests only
     ├── slack-mcp              read-only proxy to Slack's official MCP server
     ├── telegram-mcp           read-only proxy to a Telegram MCP; scans your chats for mentions in the background
+    ├── primer-mcp             proxy to your organization's Primer: read documents, publish when you ask
     └── board                  127.0.0.1:3120 task board (optional LAN listener for paired phones)
 services/paperclip-tasks-mcp   stdio bridge, mounted into paperclip, for agents' task updates
 ```
@@ -126,7 +127,7 @@ Then drop a transcript into your transcripts folder, or have a Meet call that pr
 | Slack Scout | every 30 min in work hours | Slack read/search; Paperclip task search/create/update/close |
 | Telegram Scout | every 30 min in work hours | Telegram read (allowed chats) and prepared mention candidates; Paperclip task search/create/update/close |
 | Inbox Agent | every 30 min in work hours: one task per Gmail thread labelled `pennyworth` (archived or not), closed when the label is removed | Gmail read/search; Paperclip task search/create/update/close |
-| Assistant | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; notes read + meeting-note corrections; cached web search; Paperclip tasks |
+| Assistant | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; Primer read + publish when asked; notes read + meeting-note corrections; cached web search; Paperclip tasks |
 | Engineer · Codex / · Claude / · GLM | never woken: assignment targets for the runner | none (the runner does the work) |
 
 Each agent sees only the MCP servers and tools listed for it in `config/paperclip.yaml` (`mcp_servers`, `enabled_tools`); everything else is disabled in its Codex arguments. Schedules live there too. Run a routine on demand with **Run now** in Paperclip.
@@ -259,6 +260,17 @@ The callback is `http://localhost:3119/callback`, so open the URL on the machine
 
 The `telegram-mcp` sidecar exposes only read tools: drafting and changing the chat allowlist are never listed. It scans your chats every 15 minutes (the server takes seconds per call), keeping only cursors and message IDs on disk. It finds mentions of you by handle or name, replies to your messages, DMs and your own messages. The Telegram Scout decides which need a task, using the Slack Scout's rules, and closes a `needs-response` task once you've replied in the chat.
 
+## Primer
+
+Optional. Primer is your organization's document host. The Assistant reads Primer links on your tasks (latest version and reviewers' comments), and publishes a draft as a new document or a new version when you ask on the task ("put this in Primer", "update the Primer doc"). It replies with the link. Set `PRIMER_MCP_URL` (the server's `/mcp` endpoint) in `.env`, then:
+
+```sh
+scripts/primer-auth.sh             # once: open the printed URL, sign in, approve
+node scripts/paperclip-setup.mjs   # gives the Assistant the primer server
+```
+
+The `primer-mcp` sidecar holds the token pair (Primer rotates the refresh token on every use) and exposes only reads plus `primer_create_document` and `primer_add_version`. Deleting, sharing, changing visibility and page events are never listed ([D-31](docs/DECISIONS.md)). New documents are visible to your whole organization, as with any Primer document. Change that in Primer if you need to.
+
 ## Google
 
 Pennyworth uses its own read-only sidecar (`services/google-workspace-mcp`) rather than Paperclip's Google connector ([D-9](docs/DECISIONS.md)).
@@ -275,7 +287,7 @@ If Workspace policy blocks consent, nothing else breaks: matching reports "calen
 
 | File | Purpose | In git |
 |---|---|---|
-| `.env` | host paths, user IDs, vault folders, board LAN settings, Slack client ID, Telegram endpoint and your names there | no (`.env.example`) |
+| `.env` | host paths, user IDs, vault folders, board LAN settings, Slack client ID, Telegram endpoint and your names there, Primer endpoint | no (`.env.example`) |
 | `config/system.yaml` | ops-mcp: timezone, your names and emails, transcript roots, cutoff, vault roots, thresholds | no (`system.example.yaml`) |
 | `config/routing.yaml` | meeting → note rules | no (`routing.example.yaml`) |
 | `config/paperclip.yaml` | company, labels, agents, routines and schedules, MCP servers, Codex hardening | no (`paperclip.example.yaml`) |

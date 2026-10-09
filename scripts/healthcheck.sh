@@ -60,6 +60,14 @@ else
   printf '  skip  telegram (not connected: %s)\n' "$(echo "$t_health" | cut -c1-80)"
 fi
 
+p_health="$(dc exec -T paperclip node -e "fetch('http://primer-mcp:8084/healthz').then(r=>r.text()).then(console.log).catch(e=>{console.log(e.message);process.exit(1)})" 2>/dev/null)"
+if echo "$p_health" | grep -q '"ok":true'; then
+  ptoken="$(cat "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/primer_mcp_token" 2>/dev/null)"
+  check "primer (whoami)" sh -c "docker compose --env-file '$env_file' exec -T paperclip node /tmp/mcp-call.mjs http://primer-mcp:8084/mcp primer_whoami '{}' '$ptoken' >/dev/null"
+else
+  printf '  skip  primer (not connected: %s)\n' "$(echo "$p_health" | cut -c1-80)"
+fi
+
 check "board (127.0.0.1:3120)" sh -c 'curl -fsS --max-time 5 http://127.0.0.1:3120/healthz | grep -q ok && curl -fsS --max-time 10 http://127.0.0.1:3120/api/board | grep -q "\"buckets\""'
 
 check "watcher webhook configured" test -s "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/meeting_webhook_url"

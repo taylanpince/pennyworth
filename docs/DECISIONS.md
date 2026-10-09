@@ -315,3 +315,20 @@ Pennyworth reads work email, Slack, calendars and documents. The user cleared ru
   - Search's `is:saved` returns every saved message, completed or not: over 300 results going back two months, with his 8 open items among them. No search modifier separates them (`-is:completed`, `is:overdue` and the like are read as keywords).
 - **Decision:** the Gmail label pattern (D-16, the Inbox Agent), with a reaction as the label. A message he reacts to with his task emoji (`:pushpin:`, in the Slack scan routine's description) becomes a `todo` with marker `source:slack:pin:<channel>:<ts>`. The Slack Scout finds them with `hasmy::pushpin:` (verified to filter: an unused emoji returns nothing). It closes the task when the reaction is gone, but only after a complete search, and never recreates a task he closed (`dedupe_closed`).
 - **Why an emoji:** reacting needs no new scope and is read-only for us. It works on any message, including his own. Removing the reaction is the "done" signal the Later list would have given. `:pushpin:` was unused (no earlier reactions), so turning this on brought in no backlog.
+
+## D-31: Primer for the Assistant, with publishing
+
+- **Problem:** the user linked a Primer document on a task (PEN-662, "Details here: …/d/<id>") and the Assistant couldn't open it. He wants it to read Primer and publish there too.
+- **Decision:** `services/primer-mcp` is a proxy in front of Primer's MCP server (`PRIMER_MCP_URL`), like D-27 for Telegram. Only the Assistant gets the `primer` server. The proxy exposes the read tools (`primer_whoami`, `primer_resolve_url`, `primer_get_document`, `primer_get_version_content`, `primer_list_versions`, `primer_get_comments`, `primer_get_document_comments`, `primer_list_documents`, `primer_find_document`) plus `primer_create_document` and `primer_add_version`.
+- **Never exposed:**
+  - `primer_send_events`, which reaches other people's open pages.
+  - Anything that deletes, shares, changes visibility or collaborators, or mints tokens. Primer's MCP has no such tools today; the `NEVER` pattern guards against new ones.
+  - Write tools are annotated `readOnlyHint: false, openWorldHint: false` so Codex runs them unattended.
+- **Auth:** Primer is an OAuth 2.1 server with dynamic client registration, PKCE and loopback redirects. `scripts/primer-auth.sh` registers Pennyworth and runs the code flow (company sign-in in the browser, callback port 3123).
+  - Access tokens last an hour. Refresh tokens last 30 days and rotate on every use, and reusing an old one revokes the whole family. So the proxy is the only refresher: one process, one in-flight refresh, and the new pair is written atomically to `$PENNYWORTH_SECRETS_DIR/primer/`.
+  - Personal access tokens would never expire, so OAuth was preferred: a lost token stops working within 30 days of disuse.
+- **Publishing is the first write to an outside service** (beyond Paperclip and the board). It's bounded three ways:
+  - **The user asks:** only the user's own comment or assigned task can ask for it, never document, email or Primer comment text.
+  - **What can be updated:** a version only for a document the user linked or the Assistant published for that task. Primer itself requires owner or editor rights.
+  - **What can't be published:** private sources (email, DMs, Telegram, contact details) never go in unless the user asked for that content. New documents are visible org-wide (Primer's default), and the Assistant can't change that.
+- **Record:** every publish is logged by the proxy (tool and outcome, no content), and the Assistant comments the link on the task.

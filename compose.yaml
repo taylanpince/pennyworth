@@ -21,7 +21,7 @@ services:
     entrypoint:
       - /bin/sh
       - -c
-      # Also exports the bearer tokens Codex sends to ops-mcp, google-workspace-mcp, slack-mcp and telegram-mcp
+      # Also exports the bearer tokens Codex sends to ops-mcp, google-workspace-mcp, slack-mcp, telegram-mcp and primer-mcp
       # (bearer_token_env_var in the shared Codex config). $$ escapes compose interpolation.
       - >-
         export BETTER_AUTH_SECRET="$$(cat /run/secrets/paperclip_auth_secret)"
@@ -30,6 +30,7 @@ services:
         PENNYWORTH_GOOGLE_MCP_TOKEN="$$(cat /run/secrets/google_mcp_token)"
         PENNYWORTH_SLACK_MCP_TOKEN="$$(cat /run/secrets/slack_mcp_token)"
         PENNYWORTH_TELEGRAM_MCP_TOKEN="$$(cat /run/secrets/telegram_mcp_token)"
+        PENNYWORTH_PRIMER_MCP_TOKEN="$$(cat /run/secrets/primer_mcp_token)"
         PENNYWORTH_BOARD_TOKEN="$$(cat /run/secrets/board_internal_token)"
         && exec /usr/bin/tini -- docker-entrypoint.sh "$$@"
       - paperclip
@@ -62,6 +63,7 @@ services:
       - google_mcp_token
       - slack_mcp_token
       - telegram_mcp_token
+      - primer_mcp_token
       # The board's internal API, for the Assistant's task_schedule / task_recurring (D-25).
       - board_internal_token
     pids_limit: 2048
@@ -180,6 +182,29 @@ services:
       - backplane
       - egress
 
+  # Primer, the organization's document host: read, and publish documents and versions (D-31).
+  primer-mcp:
+    <<: *hardening
+    build: ./services/primer-mcp
+    image: pennyworth/primer-mcp:local
+    user: "${PUID:-1000}:${PGID:-100}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    environment:
+      PRIMER_MCP_URL: "${PRIMER_MCP_URL:-}"
+      PRIMER_TOKEN_FILE: /state/token.json
+      MCP_TOKEN_FILE: /run/secrets/primer_mcp_token
+    volumes:
+      # Read-write: Primer rotates the refresh token on every refresh.
+      - ${PENNYWORTH_SECRETS_DIR}/primer:/state
+    secrets:
+      - primer_mcp_token
+    dns: [1.1.1.1, 8.8.8.8]   # see paperclip
+    networks:
+      - backplane
+      - egress
+
   # The task board (D-22): Today/Tomorrow/Later over your Paperclip tasks. Acts as you through the
   # board key, kept server-side; loopback only (put `tailscale serve` in front for the phone).
   board:
@@ -256,6 +281,8 @@ secrets:
     file: ${PENNYWORTH_SECRETS_DIR}/slack_mcp_token
   telegram_mcp_token:
     file: ${PENNYWORTH_SECRETS_DIR}/telegram_mcp_token
+  primer_mcp_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/primer_mcp_token
   paperclip_board_key:
     file: ${PENNYWORTH_SECRETS_DIR}/paperclip_board_key
   board_internal_token:

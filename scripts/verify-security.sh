@@ -47,6 +47,11 @@ for c in $containers; do
       [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
         && pass "telegram-mcp: only its own token/state directory mounted" || fail "telegram-mcp has unexpected mounts: $mounts"
       ;;
+    *primer-mcp*)
+      [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "primer-mcp: no published ports" || fail "primer-mcp publishes ports"
+      [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
+        && pass "primer-mcp: only its own token directory mounted" || fail "primer-mcp has unexpected mounts: $mounts"
+      ;;
     *board*)
       # 3120 is the trusted local board; 3121 (LAN, D-23) may be published, but only serves paired devices.
       local_port="$(docker inspect "$c" --format '{{json (index .HostConfig.PortBindings "3120/tcp")}}')"
@@ -94,6 +99,7 @@ pass "ops-mcp exposes no delete/replace/arbitrary-write tools (see services/ops-
 pass "google-workspace-mcp requests only *.readonly scopes and has GET-only client code"
 pass "slack-mcp exposes only allowlisted read tools and never send/react/edit tools (services/slack-mcp/src/policy.ts)"
 pass "telegram-mcp exposes only allowlisted read tools; never send, draft or allowlist-change tools (services/telegram-mcp/src/policy.ts)"
+pass "primer-mcp exposes reads plus create-document/add-version only; never delete, share, visibility or page-event tools (services/primer-mcp/src/policy.ts)"
 pass "no email/Slack/Telegram send or calendar write tool is configured for any agent"
 
 echo

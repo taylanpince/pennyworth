@@ -34,6 +34,10 @@ mcp_servers:
   telegram:
     url: http://telegram-mcp:8083/mcp
     bearer_token_env_var: PENNYWORTH_TELEGRAM_MCP_TOKEN
+  # Read, plus publishing documents and versions; never delete or share (D-31).
+  primer:
+    url: http://primer-mcp:8084/mcp
+    bearer_token_env_var: PENNYWORTH_PRIMER_MCP_TOKEN
   paperclip_tasks:
     command: node
     args: [/opt/pennyworth/paperclip-tasks-mcp.mjs]
@@ -142,7 +146,7 @@ agents:
     timeout_sec: 3600
     # Public web pages and search via OpenAI's cached index only (D-19).
     web_search: cached
-    mcp_servers: [slack, telegram, google_workspace, paperclip_tasks, ops_mcp]
+    mcp_servers: [slack, telegram, google_workspace, primer, paperclip_tasks, ops_mcp]
     enabled_tools:
       # Reads only, on request (D-29); the scout tools stay with the Telegram Scout.
       telegram: [list_allowed_chats, read_chat_history, search_chat_history, get_new_messages]
