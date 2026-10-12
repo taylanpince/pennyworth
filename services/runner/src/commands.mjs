@@ -43,13 +43,32 @@ export function repoAllowed(repo, allowedOrgs) {
 
 /** Find allowlisted repositories mentioned in free text (URLs or org/repo tokens). */
 export function findRepos(text, allowedOrgs) {
+  return mentionedRepos(text).filter((r) => repoAllowed(r, allowedOrgs));
+}
+
+/**
+ * Every org/repo token in free text, in any org. Many aren't repositories at all ("DA/L1"), so
+ * ones outside the allowed orgs only count once GitHub confirms them as public (`publicRepo`).
+ */
+export function mentionedRepos(text) {
   const found = new Map();
   const re = /(?:https?:\/\/github\.com\/|git@github\.com:|\b)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?(?=[\s/#?)\]>,.;:'"`]|$)/g;
   for (const m of String(text ?? "").matchAll(re)) {
+    if (/^\.+$/.test(m[1]) || /^\.+$/.test(m[2])) continue;
     const repo = { org: m[1], name: m[2], slug: `${m[1]}/${m[2]}` };
-    if (repoAllowed(repo, allowedOrgs)) found.set(repo.slug.toLowerCase(), repo);
+    if (!found.has(repo.slug.toLowerCase())) found.set(repo.slug.toLowerCase(), repo);
   }
   return [...found.values()];
+}
+
+/**
+ * Repositories outside the allowed orgs are read-only (D-35): answer and investigate work there,
+ * implement, push and pr don't. Returns why a request can't go ahead, or undefined.
+ */
+export function readOnlyRefusal(slug, allowedOrgs, what) {
+  const repo = normalizeRepo(slug);
+  if (!repo || repoAllowed(repo, allowedOrgs)) return undefined;
+  return `\`${repo.slug}\` is outside your orgs (${allowedOrgs.join(", ")}), so I only read it: I can investigate or answer questions there, but not ${what}. To change it, add \`${repo.org}\` to \`allowed_orgs\` in \`config/runner.yaml\`.`;
 }
 
 /**

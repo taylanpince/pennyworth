@@ -6,7 +6,8 @@ poll_seconds: 20
 # Comments written up to this long before the runner first sees a task still count.
 first_seen_lookback_minutes: 30
 
-# Only repositories in these GitHub orgs can be worked on.
+# Orgs the runner may change: implement, push and pr. Public repositories anywhere else are
+# read-only: investigate and answer only (D-35).
 allowed_orgs: [your-org]
 
 # Runner-owned clones (repos/) and per-task worktrees (tasks/). Never your own checkouts.

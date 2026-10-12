@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { findRepos, normalizeRepo, parseCommand, repoAllowed, resolveEngine, resolveMode, resolveShells } from "../src/commands.mjs";
+import { findRepos, mentionedRepos, readOnlyRefusal, normalizeRepo, parseCommand, repoAllowed, resolveEngine, resolveMode, resolveShells } from "../src/commands.mjs";
 import { buildCommand, inDevshells } from "../src/engines.mjs";
 import { commitMessage, firstPrompt, latestReport, prTitle, stripCommitLine } from "../src/prompt.mjs";
 
@@ -33,6 +33,16 @@ describe("repositories", () => {
   it("allows only configured orgs (case-insensitive)", () => {
     assert.equal(repoAllowed(normalizeRepo("0xpolygon/example-api"), cfg.allowed_orgs), true);
     assert.equal(repoAllowed(normalizeRepo("evilcorp/example-api"), cfg.allowed_orgs), false);
+  });
+
+  it("lists every org/repo token, for repos outside the orgs to be checked on GitHub (D-35)", () => {
+    const found = mentionedRepos("Use this repo: https://github.com/paradigmxyz/reth, see DA/L1 and ../x and 0xPolygon/a.");
+    assert.deepEqual(found.map((r) => r.slug), ["paradigmxyz/reth", "DA/L1", "0xPolygon/a"]);
+  });
+
+  it("repos outside the allowed orgs are read-only", () => {
+    assert.equal(readOnlyRefusal("0xPolygon/example-api", cfg.allowed_orgs, "open a PR"), undefined);
+    assert.match(readOnlyRefusal("paradigmxyz/reth", cfg.allowed_orgs, "open a PR"), /outside your orgs .* not open a PR\. To change it, add `paradigmxyz` to `allowed_orgs`/);
   });
 
   it("finds allowlisted repos mentioned in text", () => {

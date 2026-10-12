@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { RUNNER_MARKER, branchFor, isAgentSubtask, ownRequest, findRepos, isClaudeModel, normalizeRepo, openrouterModels, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
+import { RUNNER_MARKER, branchFor, isAgentSubtask, ownRequest, findRepos, mentionedRepos, readOnlyRefusal, isClaudeModel, normalizeRepo, openrouterModels, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree, startFreshBranch, nextBranchName } from "./git.mjs";
@@ -251,7 +251,7 @@ async function handleRequest(issue, latest) {
   const pending = state.get(`pending:${issue.id}`);
   if (pending) instructions = `${pending}\n\n${instructions}`;
 
-  const candidates = findRepos(`${instructions}\n${full.title}\n${full.description ?? ""}`, cfg.allowed_orgs).map((r) => r.slug);
+  const candidates = await repoCandidates(`${instructions}\n${full.title}\n${full.description ?? ""}`);
   const before = state.task(issue.id);
   const busy = running.has(issue.id) || queue.some((j) => j.issue.id === issue.id);
   const hasWork = await taskHasCommits(before);
@@ -275,6 +275,35 @@ async function handleRequest(issue, latest) {
     return void (await pc.comment(issue.id, `To ${what}, reply with just **${action}**. I only publish on that exact word.`));
   }
   return dispatch({ issue, instructions, read, candidates, full });
+}
+
+/**
+ * Repositories a request can work in: any in the allowed orgs, plus public repositories elsewhere,
+ * which are read-only (D-35). Tokens outside the orgs are checked on GitHub, so "DA/L1" isn't one.
+ */
+async function repoCandidates(text) {
+  const out = findRepos(text, cfg.allowed_orgs).map((r) => r.slug);
+  const outside = mentionedRepos(text).filter((r) => !repoAllowed(r, cfg.allowed_orgs)).slice(0, 10);
+  for (const r of outside) {
+    const slug = await publicRepo(r.slug);
+    if (slug && !out.some((o) => o.toLowerCase() === slug.toLowerCase())) out.push(slug);
+  }
+  return out;
+}
+
+const publicRepos = new Map(); // slug (lowercase) → GitHub's name for a public repo, or null
+/** GitHub's name for a public repository, or undefined (private, missing, or not a repository). */
+async function publicRepo(slug) {
+  const key = slug.toLowerCase();
+  if (!publicRepos.has(key)) {
+    let name = null;
+    try {
+      const { stdout } = await execFileP(await findRealGh(), ["api", `repos/${slug}`, "--jq", "select(.private == false) | .full_name"], { timeout: 20_000 });
+      name = stdout.trim() || null;
+    } catch {}
+    publicRepos.set(key, name);
+  }
+  return publicRepos.get(key) ?? undefined;
 }
 
 async function dispatch(job) {
@@ -381,7 +410,10 @@ async function applySettings(issue, task, settings) {
   const fields = {};
   if (settings.repo) {
     const repo = normalizeRepo(settings.repo);
-    if (!repoAllowed(repo, cfg.allowed_orgs)) throw new UserError(`Repository \`${settings.repo}\` is not allowed (allowed orgs: ${cfg.allowed_orgs.join(", ")}).`);
+    if (!repo) throw new UserError(`\`${settings.repo}\` isn't a GitHub repository I can read.`);
+    if (!repoAllowed(repo, cfg.allowed_orgs) && !(await publicRepo(repo.slug))) {
+      throw new UserError(`\`${repo.slug}\` is outside your orgs (${cfg.allowed_orgs.join(", ")}) and isn't a public GitHub repository, so I can't work in it.`);
+    }
     if (task.repo && task.repo !== repo.slug) throw new UserError(`This task already works on \`${task.repo}\`. Use a separate task for another repository.`);
     fields.repo = repo.slug;
   }
@@ -467,6 +499,8 @@ async function startJob({ issue, instructions, read, candidates }) {
     const repo = normalizeRepo(task.repo);
     const engine = task.engine ?? resolveEngine({}, cfg);
     const mode = task.mode ?? "investigate";
+    const readOnly = mode === "implement" && readOnlyRefusal(task.repo, cfg.allowed_orgs, "change code there");
+    if (readOnly) throw new UserError(readOnly);
 
     const clone = await ensureClone(cfg.workDir, repo);
     const base = task.base ?? (await defaultBranch(clone));
@@ -663,6 +697,10 @@ async function runCommand(issue, task, command) {
   }
   if (!task?.worktree || !task.repo) {
     return void (await pc.comment(issue.id, `There's nothing to ${command === "pr" ? "open a PR for" : command} yet: no work has been done on this task. Tell me what to build and I'll start; ${command === "pr" ? "**pr**" : "**push**"} works once there are commits.`));
+  }
+  if (command === "push" || command === "pr") {
+    const readOnly = readOnlyRefusal(task.repo, cfg.allowed_orgs, command === "pr" ? "open a PR" : "push to it");
+    if (readOnly) return void (await pc.comment(issue.id, readOnly));
   }
   if (running.has(issue.id)) return void (await pc.comment(issue.id, `Can't ${command} while a run is in progress. Comment **stop** first, or wait for it to finish.`));
   const repo = normalizeRepo(task.repo);

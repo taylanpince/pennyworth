@@ -66,7 +66,9 @@ async function main() {
   const worker = async () => {
     for (let c; (c = pending.shift()); ) {
       const instructions = requestFor(c);
+      // Outside the orgs, the runner adds the public repos GitHub confirms (D-35); a case lists them.
       const candidates = findRepos(`${instructions}\n${c.title ?? ""}\n${c.description ?? ""}`, cfg.allowed_orgs).map((r) => r.slug);
+      candidates.push(...(c.public_repos ?? []));
       const ctx = c.context ?? {};
       try {
         // Go-ahead cases (D-24): a comment on a parent task with Engineer sub-tasks waiting.
