@@ -57,6 +57,8 @@ export interface SourceMetadata {
   time_basis?: "filename" | "mtime" | "provider";
   ext?: string;
   drive?: { file_id: string; mime_type?: string; web_link?: string; version?: string };
+  // The user's note on a meeting that was not on the calendar (from their review reply).
+  user_note?: string;
   // Local transcripts after publishing: what organizing the files did.
   organized?: { at?: string; from?: string; to?: string; audio_deleted?: string; skipped?: string };
 }

@@ -2,7 +2,7 @@
 # One-time read-only Telegram consent for the telegram-mcp sidecar (your organization's Telegram
 # MCP, TELEGRAM_MCP_URL; Pennyworth registers as a public OAuth client on the fly).
 # Uses callback http://localhost:3119/callback.
-# Which chats Pennyworth sees is the server's allowlist: change it in the server's chat picker.
+# Which chats Pennyworth sees is the server's allowlist: scripts/telegram-chats.mjs prints a picker link.
 set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo"

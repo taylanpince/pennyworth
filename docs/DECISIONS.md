@@ -342,3 +342,11 @@ Pennyworth reads work email, Slack, calendars and documents. The user cleared ru
   - After a merged PR the work moves to a new local branch, so the next push picks a new public name.
 - **Unchanged:** branches already pushed as `pennyworth/…` (open PRs) keep their name. An empty repository still gets its first push on the base branch.
 - **Also (same change):** Engineer · GLM became **Engineer · OpenRouter** (setup key `engineer-openrouter`; setup renames the existing agent, so assigned tasks keep it). Its `models` list in `config/paperclip.yaml` offers more OpenRouter models, starting with `deepseek/deepseek-v4.1-flash`; see D-20.
+
+## D-33: Meetings that were not on the calendar
+
+- **Problem:** an impromptu call (PEN-855) had a local recording but no calendar event, so the match review task offered only wrong events. The user replied in plain words ("this was an impromptu meeting with … get this on the board"). ops-mcp only understood `pick N` and `ignore`, so the reply was silently skipped.
+- **Decision:** a review reply that says the meeting wasn't on the calendar ("impromptu", "ad hoc", "not on my calendar", "no event", …) publishes the transcript as an unscheduled meeting: provider `none`, event ID `unscheduled:<hash>`, timed by the recording. The reply is kept as the source's `user_note` and shown to the Meeting Librarian as the user's own (trusted) context for who it was with and what the user needs to do. The Librarian names the meeting through `meeting_publish`'s `title`, which applies only to unscheduled meetings and only before their note exists.
+- **No silent replies:** a reply ops-mcp can't read gets one comment saying what it understands.
+- **The user's name:** without attendees, nothing corrected the transcription of the user's name ("Dylan" for Taylan), so the user's actions went to a stranger and no tasks were made. Every work item now carries `user_name`, and the prompt says a name others use to address `[Me]` is the user.
+- **Telegram (same change):** the chat picker link is `request_allowed_chats_change`, which agents never get (D-27). `scripts/telegram-chats.mjs` fetches it with the stored access token and never refreshes it, because the proxy owns the rotating refresh token.

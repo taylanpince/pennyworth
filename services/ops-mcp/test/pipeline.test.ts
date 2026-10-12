@@ -224,6 +224,37 @@ describe("closing resolved reviews", () => {
   });
 });
 
+describe("meetings that were not on the calendar", () => {
+  it("publishes from the user's reply, titled by the Librarian, with the user's actions as tasks", async () => {
+    const env = makeEnv({ routing: "routes: []\n" });
+    writeAt(join(env.transcripts, "2026-10-04_1501.md"), "[Them] Kinexys...\n", "2026-10-04T15:40:00+02:00");
+    env.now.ms = Date.parse("2026-10-04T16:00:00+02:00");
+    const weekly = event({ id: "w", title: "Wallet Weekly", start: "2026-10-04T14:45:00+02:00", end: "2026-10-04T15:15:00+02:00" });
+    const partner = event({ id: "p", title: "Partner Wallet Call", start: "2026-10-04T15:00:00+02:00", end: "2026-10-04T15:30:00+02:00" });
+    const scan = (await env.app.meetings.scan()) as { work: { source_id: string }[] };
+    const sourceId = scan.work[0]!.source_id;
+    const m = (await env.app.meetings.match({ source_id: sourceId, calendar_status: "ok", events: [weekly, partner], hints: { title_guesses: [], people: [] } })) as { review_task: { issue_id: string } };
+
+    // A reply that is not a choice is answered, once.
+    env.paperclip.userComment(m.review_task.issue_id, "hmm, not sure");
+    const unread = (await env.app.meetings.scan()) as { review_problems: { comment: string }[] };
+    expect(unread.review_problems).toEqual([expect.objectContaining({ comment: expect.stringContaining("wasn't on the calendar") })]);
+    expect(((await env.app.meetings.scan()) as { review_problems: unknown[] }).review_problems).toEqual([]);
+
+    const note = "This was an impromptu meeting with Sarthak from JPM. I need to prepare a transaction evidence report.";
+    env.paperclip.userComment(m.review_task.issue_id, note);
+    const after = (await env.app.meetings.scan()) as { work: { source_id: string; status: string; unscheduled?: boolean; user_note?: string }[] };
+    expect(after.work).toEqual([expect.objectContaining({ source_id: sourceId, status: "matched", unscheduled: true, user_note: note })]);
+    expect(env.paperclip.issues.get(m.review_task.issue_id)!.status).toBe("done");
+
+    const extraction = { ...EXTRACTION, actions: [{ owner: "Taylan", action: "Prepare a transaction evidence report on Kinexys Mainnet for JPM", deadline: null }] };
+    const pub = await env.app.meetings.publish(sourceId, extraction, "none", "Kinexys evidence with JPM");
+    expect(pub.status).toBe("processed");
+    expect(pub.canonical_note.path).toMatch(/^Meetings\/2026\/10\/2026-10-04 \d{4} - Kinexys evidence with JPM\.md$/);
+    expect(env.paperclip.byLabel("meeting-action").map((t) => t.input.title)).toEqual([expect.stringContaining("transaction evidence report")]);
+  });
+});
+
 describe("routing", () => {
   it("explicit regex rule wins over topic suggestions", async () => {
     const env = makeEnv({

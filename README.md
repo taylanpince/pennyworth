@@ -256,7 +256,7 @@ scripts/telegram-auth.sh           # once: open the printed URL, sign in, link T
 node scripts/paperclip-setup.mjs   # activates the Telegram scan routine
 ```
 
-The callback is `http://localhost:3119/callback`, so open the URL on the machine running Pennyworth. Pennyworth sees only the chats you picked; add new ones in the server's chat picker.
+The callback is `http://localhost:3119/callback`, so open the URL on the machine running Pennyworth. Pennyworth sees only the chats you picked. To change them, run `node scripts/telegram-chats.mjs`: it prints a short-lived link to the server's chat picker (Okta sign-in, then pick and save). Each chat adds about 15 seconds to a scan, because the server is slow; scans never overlap, so a long list just means fewer scans.
 
 The `telegram-mcp` sidecar exposes only read tools: drafting and changing the chat allowlist are never listed. It scans your chats every 15 minutes (the server takes seconds per call), keeping only cursors and message IDs on disk. It finds mentions of you by handle or name, replies to your messages, DMs and your own messages. The Telegram Scout decides which need a task, using the Slack Scout's rules, and closes a `needs-response` task once you've replied in the chat.
 
