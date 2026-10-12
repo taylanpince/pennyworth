@@ -132,6 +132,13 @@ function IssueBody({ issue, board, busy, update, setStatus, onClose, onMove, rel
           </button>
         )}
       </header>
+      {issue.working && (
+        <div className={`working-bar${issue.working.queued ? " queued" : ""}`}>
+          {issue.working.queued
+            ? `Queued for ${issue.working.agent}: it starts when a slot frees up.`
+            : `${issue.working.agent} is working on this${issue.working.since ? ` (started ${new Date(issue.working.since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})` : ""}.`}
+        </div>
+      )}
 
       <div className="drawer-scroll">
         <Title issue={issue} editable={editable} save={(title) => update({ title })} />

@@ -1,4 +1,4 @@
-import type { Board, Bucket, Cadence, IssueView, Models, RecurringView, Update } from "./types";
+import type { Agents, Board, Bucket, Cadence, IssueView, Models, RecurringView, Update } from "./types";
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -40,6 +40,7 @@ export const api = {
   devices: () => call<Device[]>("GET", "/api/devices"),
   revokeDevice: (id: string) => call("DELETE", `/api/devices/${id}`),
   board: () => call<Board>("GET", "/api/board"),
+  agents: () => call<Agents>("GET", "/api/agents"),
   issue: (ref: string) => call<IssueView>("GET", `/api/issues/${encodeURIComponent(ref)}`),
   update: (ref: string, u: Update) => call<IssueView>("PATCH", `/api/issues/${encodeURIComponent(ref)}`, u),
   comment: (ref: string, body: string) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/comments`, { body }),

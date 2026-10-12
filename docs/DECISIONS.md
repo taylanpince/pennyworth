@@ -350,3 +350,11 @@ Pennyworth reads work email, Slack, calendars and documents. The user cleared ru
 - **No silent replies:** a reply ops-mcp can't read gets one comment saying what it understands.
 - **The user's name:** without attendees, nothing corrected the transcription of the user's name ("Dylan" for Taylan), so the user's actions went to a stranger and no tasks were made. Every work item now carries `user_name`, and the prompt says a name others use to address `[Me]` is the user.
 - **Telegram (same change):** the chat picker link is `request_allowed_chats_change`, which agents never get (D-27). `scripts/telegram-chats.mjs` fetches it with the stored access token and never refreshes it, because the proxy owns the rotating refresh token.
+
+## D-34: The Agents view
+
+- **Problem:** the user couldn't tell from the board whether an agent was working on a task. The green "Working" badge only meant the status was `in_progress`, and the Assistant handles replies inside a "Process task replies" routine run, never on the task itself.
+- **Decision:** a second view of the board, **Agents**: runs in progress, queued Engineer jobs, and runs finished in the last 12 hours. Cards and the task sheet show a live badge for the agent working on them. The status badge now reads "In progress", without the pulse.
+- **Paperclip runs** come from `live-runs` and `heartbeat-runs`. A run works on its own issue, except a routine run (`originKind: routine_execution`), which works on the task identifiers its description names. That way "Process task replies" for PEN-864 lights up PEN-864, and scans light up nothing. Finished scans are hidden unless asked for, because they'd bury the rest.
+- **Runner jobs** never touch Paperclip until they report, so the runner posts its running, queued and recent jobs to the internal API (`/internal/runner/activity`, the D-25 token) every 30 seconds and at each job start and end. It's a timer, not the poll loop, because a poll can take minutes. The board keeps the report in memory, shared by its three listeners, and drops the live part after 5 minutes of silence with a note saying so.
+- **Cost:** the board's 10-second poll adds one `live-runs` request (cached 3 seconds), and issue lookups are cached for a minute. A failure there never fails the board: cards just show no activity.

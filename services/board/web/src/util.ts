@@ -9,6 +9,19 @@ export function ago(iso: string, now = Date.now()): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+/** How long something has been running: "40s", "12m", "1h 5m". */
+export function elapsed(iso: string, now = Date.now()): string {
+  const s = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+/** "Assistant", or "Codex" for "Engineer · Codex (gpt-5.5, high effort)". */
+export function agentShort(agent: string): string {
+  return agent.replace(/^Engineer · /, "").replace(/ \(.*\)$/, "");
+}
+
 export function when(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
@@ -24,7 +37,8 @@ export function shortName(a: Assignee | undefined): string {
 }
 
 export const STATUS_BADGE: Record<string, { text: string; tone: string } | undefined> = {
-  in_progress: { text: "Working", tone: "working" },
+  // Only the status: whether an agent is running right now is the live badge (card.working).
+  in_progress: { text: "In progress", tone: "progress" },
   in_review: { text: "Ready for review", tone: "review" },
   blocked: { text: "Blocked", tone: "blocked" },
   done: { text: "Done", tone: "done" },

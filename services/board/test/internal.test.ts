@@ -39,6 +39,12 @@ describe("internal listener (D-25)", () => {
   const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
     call("POST", path, body, { host: "board:3122", "content-type": "application/json", authorization: `Bearer ${TOKEN}`, ...headers });
 
+  it("takes the runner's activity report, validated", async () => {
+    expect((await post("/internal/runner/activity", { running: [], queued: [], recent: [] })).status).toBe(200);
+    expect((await post("/internal/runner/activity", { running: "nope" })).status).toBe(400);
+    expect((await post("/internal/runner/activity", { running: [], queued: [], recent: [] }, { authorization: "Bearer nope" })).status).toBe(401);
+  });
+
   it("needs the token and an allowed host", async () => {
     expect((await post("/internal/issues/PEN-1/schedule", { clear: true }, { authorization: "Bearer nope" })).status).toBe(401);
     expect((await post("/internal/issues/PEN-1/schedule", { clear: true }, { authorization: "" })).status).toBe(401);

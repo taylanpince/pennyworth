@@ -17,6 +17,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AgentsView } from "./Agents";
 import { PairRequired, api, type Session } from "./api";
 import { CardView, PlusIcon, SortableCard } from "./components";
 import { Drawer } from "./Drawer";
@@ -72,6 +73,16 @@ function useMedia(query: string) {
   return on;
 }
 
+type View = "board" | "agents";
+const VIEW_KEY = "pennyworth.view";
+const savedView = (): View => {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "agents" ? "agents" : "board";
+  } catch {
+    return "board";
+  }
+};
+
 interface Toast {
   id: number;
   text: string;
@@ -91,6 +102,13 @@ export function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [tab, setTab] = useState<Bucket>("today");
+  const [view, setViewState] = useState<View>(savedView);
+  const setView = useCallback((v: View) => {
+    setViewState(v);
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {}
+  }, []);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const mobile = useMedia("(max-width: 860px)");
   const holdUntil = useRef(0); // ignore polls briefly after a local change, so cards don't jump back
@@ -321,11 +339,13 @@ export function App() {
       const p = pos();
       const k = e.key;
       if (k === "/") return e.preventDefault(), searchRef.current?.focus();
-      if (k === "c" || k === "n") return e.preventDefault(), mobile && setTab("triage"), setTimeout(() => addRef.current?.focus(), 0);
+      if (k === "c" || k === "n") return e.preventDefault(), setView("board"), mobile && setTab("triage"), setTimeout(() => addRef.current?.focus(), 0);
       if (k === "b") return go("#/brief");
       if (k === "?") return go("#/help");
       if (k === "d") return setShowDone((s) => !s);
       if (k === "r") return setShowRecurring((s) => !s);
+      if (k === "a") return setView(view === "agents" ? "board" : "agents");
+      if (view === "agents") return;
       if (k === "j" || k === "ArrowDown") {
         e.preventDefault();
         if (e.shiftKey && p) return void reorder(lists[p.b][p.i]!.id, 1);
@@ -403,6 +423,13 @@ export function App() {
           <input ref={searchRef} type="search" placeholder="Search  /" value={query} onChange={(e) => setQuery(e.target.value)} />
         </div>
         <span className="spacer" />
+        {!mobile && (
+          <button className={`btn${view === "agents" ? " on" : ""}`} onClick={() => setView(view === "agents" ? "board" : "agents")} title="Agent sessions (a)">
+            {board.agentsActive > 0 && <span className="live-dot" />}
+            Agents
+            {board.agentsActive > 0 && <span className="btn-count">{board.agentsActive}</span>}
+          </button>
+        )}
         {board.brief && (
           <a className="btn" href="#/brief" title="Today's brief (b)">
             Brief
@@ -432,8 +459,13 @@ export function App() {
 
       {mobile && (
         <nav className="tabs">
+          <button className={view === "agents" ? "on" : ""} onClick={() => setView("agents")}>
+            {board.agentsActive > 0 && <span className="live-dot" />}
+            Agents
+            {board.agentsActive > 0 && <span className="count">{board.agentsActive}</span>}
+          </button>
           {BUCKETS.map((b) => (
-            <button key={b} className={b === tab ? "on" : ""} onClick={() => setTab(b)}>
+            <button key={b} className={view === "board" && b === tab ? "on" : ""} onClick={() => (setTab(b), setView("board"))}>
               {BUCKET_NAMES[b]}
               {counts[b] > 0 && <span className="count">{counts[b]}</span>}
             </button>
@@ -441,7 +473,8 @@ export function App() {
         </nav>
       )}
 
-      <main className="columns">
+      {view === "agents" && <AgentsView query={query} onPairing={() => setNeedsPairing(true)} />}
+      <main className="columns" hidden={view !== "board"}>
         <DndContext sensors={sensors} collisionDetection={collision} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={() => (setActiveId(null), (dragFrom.current = null), void refresh(true))}>
           {visibleBuckets.map((b) => (
             <Column
@@ -660,6 +693,7 @@ function Help() {
     ["b", "Today's brief"],
     ["d", "Show recently done"],
     ["r", "Show recurring tasks"],
+    ["a", "Agents: who is working on what"],
     ["⌘↵", "Send reply / save description"],
     ["Esc", "Close"],
   ];

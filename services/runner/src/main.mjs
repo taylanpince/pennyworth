@@ -25,7 +25,7 @@ const state = new State(cfg.stateDir);
 const logsDir = join(cfg.stateDir, "logs");
 mkdirSync(logsDir, { recursive: true, mode: 0o700 });
 
-const running = new Map(); // issueId → { controller, jobId }
+const running = new Map(); // issueId → { controller, jobId, identifier, startedAt, info }
 const queue = []; // { issue, instructions, read, candidates }
 const log = (msg, extra = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), msg, ...extra }));
 const engineLabel = (e) => {
@@ -68,14 +68,36 @@ async function poll() {
 // ------------------------------------------------------------------ recurring tasks (D-25)
 
 let lastRecurringCheck = 0;
-const board = cfg.recurring?.enabled === false ? undefined : (() => {
+const boardApi = (() => {
   try {
     return new Board(cfg.boardInternalUrl, cfg.boardTokenFile);
   } catch (err) {
-    log("recurring tasks off: no board token", { err: String(err.message ?? err).slice(0, 200) });
+    log("board unreachable: no board token (recurring tasks and the Agents view are off)", { err: String(err.message ?? err).slice(0, 200) });
     return undefined;
   }
 })();
+const board = cfg.recurring?.enabled === false ? undefined : boardApi;
+
+// ------------------------------------------------------------------ activity for the board's Agents view
+
+let activityError = "";
+/** Tell the board what is running, queued and recently finished: every 30 seconds and on every job start and end. */
+function reportActivity() {
+  if (!boardApi) return;
+  const body = {
+    running: [...running.entries()].map(([issueId, r]) => ({ issueId, identifier: r.identifier, startedAt: r.startedAt, ...(r.info ?? {}) })),
+    queued: queue.filter((j) => !running.has(j.issue.id)).map((j) => ({ issueId: j.issue.id, identifier: j.issue.identifier })),
+    recent: state.recentJobs(15).map((j) => ({ issueId: j.issue_id, identifier: j.identifier, engine: j.engine ?? undefined, status: j.status, startedAt: j.started_at, finishedAt: j.finished_at })),
+  };
+  boardApi.post("/internal/runner/activity", body).then(
+    () => (activityError = ""),
+    (err) => {
+      const msg = String(err.message ?? err).slice(0, 200);
+      if (msg !== activityError) log("activity report failed", { err: msg });
+      activityError = msg;
+    },
+  );
+}
 
 /**
  * The board creates the user's task for each due run (top of Today) and hands it here: add the
@@ -399,7 +421,8 @@ class UserError extends Error {}
 
 async function startJob({ issue, instructions, read, candidates }) {
   const controller = new AbortController();
-  running.set(issue.id, { controller });
+  running.set(issue.id, { controller, identifier: issue.identifier, startedAt: new Date().toISOString() });
+  reportActivity();
   let jobId;
   try {
     const full = await pc.issue(issue.id);
@@ -462,7 +485,8 @@ async function startJob({ issue, instructions, read, candidates }) {
 
     const logPath = join(logsDir, `${issue.identifier}-${Date.now()}.log`);
     jobId = state.startJob(issue.id, engineLabel(engine), logPath);
-    running.get(issue.id).jobId = jobId;
+    Object.assign(running.get(issue.id), { jobId, info: { engine: engineLabel(engine), mode, repo: task.repo } });
+    reportActivity();
     // A saved session can only be continued by the engine that created it (Codex, Claude Code and
     // opencode sessions are not interchangeable). After a switch the new engine starts fresh, with the
     // earlier requests on this task and the work already on the branch as context.
@@ -543,6 +567,7 @@ async function startJob({ issue, instructions, read, candidates }) {
   } finally {
     running.delete(issue.id);
     drainQueue();
+    reportActivity();
     void reportToParent(issue).catch((err) => log("parent summary failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }));
   }
 }
@@ -854,3 +879,6 @@ for (const sig of ["SIGTERM", "SIGINT"]) {
   });
 }
 void loop();
+// The board's Agents view: on a timer, because a poll can take minutes (intake, GitHub checks).
+reportActivity();
+setInterval(reportActivity, 30_000);

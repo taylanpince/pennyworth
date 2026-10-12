@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, join, normalize } from "node:path";
 import type { Logger } from "pino";
 import { z } from "zod";
+import { RunnerReportSchema, agentsView, runTasks, workingOn, type RunContext, type RunnerReport } from "./activity.js";
 import { RecurringSchema, RunStateSchema, ScheduleSchema, changeRecurring, claimDue, recurringView, scheduleMove } from "./automation.js";
 import { BadRequest, CreateSchema, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
 import { inNetworks } from "./config.js";
@@ -28,6 +29,8 @@ export interface AppOptions {
   mode?: "local" | "lan" | "internal";
   lan?: { clients: string[]; url: string };
   internalToken?: string;
+  /** Shared by the listeners: the runner reports to the internal one, the board reads it on the others. */
+  activity?: { runner?: RunnerReport };
 }
 
 const SESSION_COOKIE = "pw_session";
@@ -112,9 +115,38 @@ export function createApp(opts: AppOptions): Server {
     return { ctx, issue, assigned };
   }
 
+  // Agent activity (Paperclip runs and the runner's jobs). The runner reports through the internal API.
+  const shared = opts.activity ?? {};
+
+  /** The task a run is attached to, and the user's tasks it works on. */
+  async function runContext(issueId: string | null, prefix: string): Promise<RunContext> {
+    if (!issueId) return { run: null, tasks: [] };
+    const issue = await pc.issueSummary(issueId).catch(() => undefined);
+    if (!issue) return { run: null, tasks: [] };
+    const tasks = runTasks(issue, prefix);
+    for (const t of tasks) t.title ??= (await refCache(t.identifier).catch(() => null))?.title;
+    return { run: { identifier: issue.identifier, title: issue.title }, tasks };
+  }
+
+  async function activity(ctx: { agents: Awaited<ReturnType<typeof pc.agents>>; prefix: string }, withPast: boolean) {
+    const [live, past] = await Promise.all([pc.liveRuns(), withPast ? pc.recentRuns(30) : Promise.resolve([])]);
+    return agentsView({ live, past, runner: shared.runner, agents: ctx.agents, resolve: (id) => runContext(id, ctx.prefix) });
+  }
+
+  /** Who is working on which task. Never fails the board: without it, cards just show no activity. */
+  async function working(ctx: Parameters<typeof activity>[0]) {
+    try {
+      const view = await activity(ctx, false);
+      return { map: workingOn(view.sessions), active: view.sessions.filter((x) => x.state === "working").length };
+    } catch (err) {
+      log.warn({ err: String((err as Error).message ?? err).slice(0, 300) }, "agent activity unavailable");
+      return { map: new Map<string, never>(), active: 0 };
+    }
+  }
+
   async function issueView(ref: string) {
     const { ctx, issue, assigned } = await ownIssue(ref);
-    const comments = await pc.comments(issue.id);
+    const [comments, busy] = await Promise.all([pc.comments(issue.id), working(ctx)]);
     store.markSeen(issue.id);
     const placement = store.placements().get(issue.id);
     const rec = store.recurring(issue.id);
@@ -128,6 +160,7 @@ export function createApp(opts: AppOptions): Server {
       replyTarget: replyTarget(issue, ctx.assignees),
       scheduled: store.schedules().get(issue.id) ?? null,
       recurring: rec ? recurringView(rec, opts.timezone) : null,
+      working: busy.map.get(issue.identifier) ?? null,
       comments: comments.map((c) => commentView(c, ctx.me, ctx.agents)),
     };
   }
@@ -166,6 +199,15 @@ export function createApp(opts: AppOptions): Server {
         const { state } = parse(RunStateSchema, body);
         if (!store.setRunState(m[1]!, m[2]!, state)) throw new HttpError(404, "no such run");
         log.info({ definition: m[1], occurrence: m[2], state }, "recurring run updated");
+        return { ok: true };
+      },
+    },
+    {
+      // The runner's Engineer jobs: running, queued and recently finished (kept in memory only).
+      method: "POST",
+      path: /^\/internal\/runner\/activity$/,
+      handle: async (_m, body) => {
+        shared.runner = { ...parse(RunnerReportSchema, body), at: new Date().toISOString() };
         return { ok: true };
       },
     },
@@ -237,16 +279,22 @@ export function createApp(opts: AppOptions): Server {
         store.placeNew(open.map((i) => ({ id: i.id, createdAt: i.createdAt, status: i.status })));
         const recurring = new Map([...store.allRecurring()].map(([id, r]) => [id, { summary: recurringView(r, opts.timezone).summary, nextRun: r.nextRun, paused: r.paused }]));
         const board = buildBoard({ open, closed, placements: store.placements(), seen: store.allSeen(), schedules: store.schedules(), recurring, installedAt: store.meta("installed_at")!, assignees: ctx.assignees });
+        const busy = await working(ctx);
+        for (const card of [...Object.values(board.buckets).flat(), ...board.recurring]) {
+          const w = busy.map.get(card.identifier);
+          if (w) card.working = w;
+        }
         // Lists truncate long descriptions; the brief is read in full.
         const brief = open.find((i) => i.id === board.brief?.id);
         if (board.brief && brief?.descriptionTruncated) board.brief.description = displayText((await pc.issue(brief.id)).description);
         // When Tomorrow next rolls into Today: the next calendar day, except before days off.
         const today = localDate(opts.timezone);
         const rollsOn = nextWorkday(today, opts.workdays ?? WORKWEEK);
-        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, rollsOn, rollsTomorrow: rollsOn === addDays(today, 1), buckets: board.buckets };
+        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, rollsOn, rollsTomorrow: rollsOn === addDays(today, 1), buckets: board.buckets, agentsActive: busy.active };
       },
     },
     { method: "GET", path: /^\/api\/issues\/([^/]+)$/, handle: async (m) => issueView(decodeURIComponent(m[1]!)) },
+    { method: "GET", path: /^\/api\/agents$/, handle: async () => activity(await context(), true) },
     {
       method: "PATCH",
       path: /^\/api\/issues\/([^/]+)$/,

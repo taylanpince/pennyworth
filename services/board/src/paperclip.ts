@@ -34,6 +34,34 @@ export interface Issue {
   completedAt?: string | null;
   cancelledAt?: string | null;
   createdByUserId?: string | null;
+  /** "routine_execution" for a routine's run task. */
+  originKind?: string | null;
+}
+
+/** An agent run in progress (Paperclip's live-runs). */
+export interface LiveRun {
+  id: string;
+  status: string;
+  agentId: string;
+  agentName?: string;
+  issueId: string | null;
+  startedAt: string | null;
+  createdAt: string;
+  currentStatusMessage?: string | null;
+  currentToolName?: string | null;
+  lastAssistantSnippet?: string | null;
+  outputSilence?: { level?: string } | null;
+}
+
+/** A finished (or failed) agent run, from heartbeat-runs. */
+export interface PastRun {
+  id: string;
+  status: string;
+  agentId: string;
+  issueId: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
 }
 
 export interface Comment {
@@ -131,6 +159,24 @@ export class Paperclip {
     const q = new URLSearchParams({ status, limit, excludeRoutineExecutions: "true" });
     if (updatedSince) q.set("updatedSince", updatedSince);
     return this.request<Issue[]>("GET", `/api/companies/${this.companyId}/issues?${q}`);
+  }
+
+  /** Agent runs in progress. Polled often, so cached briefly. */
+  liveRuns(): Promise<LiveRun[]> {
+    return this.cached("live-runs", 3_000, () => this.request<LiveRun[]>("GET", `/api/companies/${this.companyId}/live-runs`));
+  }
+
+  /** The newest agent runs, finished or not. */
+  recentRuns(limit = 30): Promise<PastRun[]> {
+    return this.cached(`runs:${limit}`, 10_000, async () => {
+      const raw = await this.request<(PastRun & { contextSnapshot?: { issueId?: string } | null })[]>("GET", `/api/companies/${this.companyId}/heartbeat-runs?limit=${limit}`);
+      return raw.map((r) => ({ id: r.id, status: r.status, agentId: r.agentId, issueId: r.contextSnapshot?.issueId ?? null, startedAt: r.startedAt, finishedAt: r.finishedAt, error: r.error ? String(r.error).slice(0, 200) : null }));
+    });
+  }
+
+  /** An issue's title and origin, which rarely change: cached for a minute. */
+  issueSummary(id: string): Promise<Issue> {
+    return this.cached(`issue:${id}`, 60_000, () => this.issue(id));
   }
 
   issue(id: string): Promise<Issue> {

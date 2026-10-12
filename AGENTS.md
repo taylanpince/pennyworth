@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-33) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-34) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -21,7 +21,8 @@ host (NixOS, user taylan)
     ├── primer-mcp           proxy to the org's Primer: read, plus publish documents/versions for the Assistant (D-31)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
                              :3121 on the LAN (pennyworth.local, paired devices from the home subnet only, D-23)
-                             :3122 internal API (bearer token): scheduled moves and recurring tasks for the bridge and the runner (D-25)
+                             :3122 internal API (bearer token): scheduled moves and recurring tasks for the bridge and the runner (D-25),
+                             and the runner's job activity for the Agents view (D-34)
 services/paperclip-tasks-mcp  stdio MCP bridge (mounted into paperclip) for task updates by agents
 ```
 

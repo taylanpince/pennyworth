@@ -169,6 +169,8 @@ Every task Pennyworth creates is assigned to you, and only for *your own* clear 
 
 Drag cards to rank or move them (on a phone, use a card's arrow). Open a card to edit it, change priority, status and labels, reassign it (to an Engineer with model and effort), read the thread and reply, or close it with undo. Task references such as `PEN-12` in text open the task and show its status. **Brief** opens today's Daily Brief; **Done** shows the last 48 hours.
 
+**Agents** (key `a`; on a phone, the first tab) switches to who is working on what: every agent run in progress with the tasks it works on, how long it has been running and its latest message, the Engineer jobs running or queued on this machine, and what finished in the last 12 hours (scans on request). On the board itself, a card an agent is working on carries a pulsing badge with the agent and elapsed time ("Assistant · 3m", "Codex · 12m"), or "Engineer queued". The status *In progress* alone doesn't mean anything is running.
+
 Keyboard: `j`/`k` and `h`/`l` (or arrows) to move, `Enter` to open, `e` done, `1`–`5` to move to Triage…Backlog, `J`/`K` to rank, `c` new task, `/` search, `b` brief, `r` recurring, `?` for the rest.
 
 **On a date, or on repeat:**

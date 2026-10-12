@@ -33,6 +33,51 @@ export interface Card {
   recurring?: { summary: string; nextRun: string | null; paused: boolean };
   /** In Today: workdays carried over unfinished (D-28). */
   carried?: number;
+  /** An agent is working on it now, or the runner has it queued. */
+  working?: Working;
+}
+
+export interface Working {
+  agent: string;
+  since: string | null;
+  queued: boolean;
+}
+
+export interface TaskRef {
+  identifier: string;
+  title?: string;
+}
+
+export interface Session {
+  id: string;
+  source: "agent" | "runner";
+  agent: string;
+  state: "working" | "queued";
+  startedAt: string | null;
+  doing?: string;
+  tool?: string;
+  said?: string;
+  quiet?: boolean;
+  run: TaskRef | null;
+  tasks: TaskRef[];
+}
+
+export interface Finished {
+  id: string;
+  source: "agent" | "runner";
+  agent: string;
+  status: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  detail?: string;
+  run: TaskRef | null;
+  tasks: TaskRef[];
+}
+
+export interface Agents {
+  sessions: Session[];
+  finished: Finished[];
+  runner: { reportedAt: string | null; stale: boolean };
 }
 
 export const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
@@ -65,6 +110,8 @@ export interface Board {
   /** The next workday, when Tomorrow rolls into Today (D-28). */
   rollsOn: string;
   rollsTomorrow: boolean;
+  /** Agent sessions running now. */
+  agentsActive: number;
 }
 
 export interface CommentView {
@@ -74,7 +121,8 @@ export interface CommentView {
   createdAt: string;
 }
 
-export interface IssueView extends Omit<Card, "scheduled" | "recurring"> {
+export interface IssueView extends Omit<Card, "scheduled" | "recurring" | "working"> {
+  working: Working | null;
   description: string;
   bucket: Bucket | null;
   editable: boolean;

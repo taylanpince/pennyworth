@@ -76,6 +76,8 @@ export interface Card {
   carried?: number;
   /** Set on recurring tasks (D-25): the rule in words and the next run. */
   recurring?: { summary: string; nextRun: string | null; paused: boolean };
+  /** An agent is working on it now, or the runner has it queued. */
+  working?: { agent: string; since: string | null; queued: boolean };
 }
 
 export function toCard(issue: Issue, list: Assignee[], seenAt: string): Card {

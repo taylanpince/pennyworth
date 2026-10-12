@@ -1,8 +1,8 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { BUCKETS, BUCKET_NAMES, type Assignee, type Bucket, type Card } from "./types";
-import { SOURCE_NAMES, STATUS_BADGE, ago, shortDate, shortName } from "./util";
+import { BUCKETS, BUCKET_NAMES, type Assignee, type Bucket, type Card, type Working } from "./types";
+import { SOURCE_NAMES, STATUS_BADGE, agentShort, ago, elapsed, shortDate, shortName } from "./util";
 
 export function Avatar({ assignee }: { assignee: Assignee | undefined }) {
   if (!assignee) return null;
@@ -15,11 +15,23 @@ export function Avatar({ assignee }: { assignee: Assignee | undefined }) {
   );
 }
 
-export function Chips({ card }: { card: Pick<Card, "status" | "labels"> }) {
+/** An agent working on the task right now (pulsing), or the runner holding it in its queue. */
+export function WorkingBadge({ working }: { working: Working }) {
+  const who = agentShort(working.agent);
+  const title = working.queued ? `${working.agent}: queued, waiting for a free slot` : `${working.agent} is working on this${working.since ? ` (started ${new Date(working.since).toLocaleTimeString()})` : ""}`;
+  return (
+    <span className={`badge ${working.queued ? "badge-queued" : "badge-live"}`} title={title}>
+      {working.queued ? `${who} queued` : `${who}${working.since ? ` · ${elapsed(working.since)}` : ""}`}
+    </span>
+  );
+}
+
+export function Chips({ card }: { card: Pick<Card, "status" | "labels"> & { working?: Working | null } }) {
   const badge = STATUS_BADGE[card.status];
   return (
     <>
-      {badge && <span className={`badge badge-${badge.tone}`}>{badge.text}</span>}
+      {card.working && <WorkingBadge working={card.working} />}
+      {badge && !(card.working && card.status === "in_progress") && <span className={`badge badge-${badge.tone}`}>{badge.text}</span>}
       {card.labels
         .filter((l) => l.name !== "daily-brief")
         .map((l) => (

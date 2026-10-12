@@ -87,6 +87,13 @@ export class State {
     return this.db.prepare("SELECT * FROM jobs WHERE issue_id = ? ORDER BY id DESC LIMIT 1").get(issueId);
   }
 
+  /** The newest finished jobs, with their task's identifier. */
+  recentJobs(limit) {
+    return this.db
+      .prepare("SELECT jobs.*, tasks.identifier FROM jobs JOIN tasks USING (issue_id) WHERE jobs.finished_at IS NOT NULL ORDER BY jobs.id DESC LIMIT ?")
+      .all(limit);
+  }
+
   /** Jobs left 'running' by a crash or restart are marked interrupted at startup. */
   interruptStale() {
     return this.db.prepare("UPDATE jobs SET status = 'interrupted', finished_at = ? WHERE status = 'running'").run(new Date().toISOString()).changes;
