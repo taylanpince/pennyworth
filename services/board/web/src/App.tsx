@@ -19,7 +19,7 @@ import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSo
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentsView } from "./Agents";
 import { PairRequired, api, type Session } from "./api";
-import { CardView, PlusIcon, SortableCard } from "./components";
+import { CardView, GoogleBanner, PlusIcon, SortableCard } from "./components";
 import { Drawer } from "./Drawer";
 import { Markdown } from "./markdown";
 import { PairScreen, PhonePanel } from "./Pairing";
@@ -456,6 +456,7 @@ export function App() {
       </header>
 
       {error && <div className="offline">Offline: {error}. Retrying…</div>}
+      <GoogleBanner google={board.google} canReconnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
 
       {mobile && (
         <nav className="tabs">

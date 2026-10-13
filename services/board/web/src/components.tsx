@@ -1,7 +1,7 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { BUCKETS, BUCKET_NAMES, type Assignee, type Bucket, type Card, type Working } from "./types";
+import { BUCKETS, BUCKET_NAMES, type Assignee, type Board, type Bucket, type Card, type Working } from "./types";
 import { SOURCE_NAMES, STATUS_BADGE, agentShort, ago, elapsed, shortDate, shortName } from "./util";
 
 export function Avatar({ assignee }: { assignee: Assignee | undefined }) {
@@ -178,3 +178,34 @@ export const PlusIcon = () => (
     <path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
   </svg>
 );
+
+/**
+ * Google accounts whose sign-in Google refused (D-36): what's paused, and a way back. Reconnecting
+ * works only on the laptop's loopback address, where Google can send the sign-in back.
+ */
+export function GoogleBanner({ google, canReconnect }: { google: Board["google"]; canReconnect: boolean }) {
+  if (!google) return null;
+  const expired = google.accounts.filter((a) => a.state === "expired");
+  if (!expired.length && !google.error) return null;
+  return (
+    <div className="alert" role="alert">
+      {google.error && !google.accounts.length && <div>Google isn't connected: {google.error}. Run scripts/google-auth.sh.</div>}
+      {expired.map((a) => (
+        <div key={a.email} className="alert-row">
+          <span>
+            Google sign-in for <b>{a.email}</b> stopped working on {new Date(a.since).toLocaleDateString(undefined, { weekday: "long" })} at{" "}
+            {new Date(a.since).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}.{" "}
+            {a.primary ? "Meeting notes, calendar, email and Drive from it are paused." : "Email and Drive from it are paused."}
+          </span>
+          {canReconnect ? (
+            <a className="btn" href={`/google/connect?account=${encodeURIComponent(a.email)}`}>
+              Reconnect
+            </a>
+          ) : (
+            <span className="alert-hint">Reconnect from the board on your computer.</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}

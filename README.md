@@ -278,10 +278,12 @@ The `primer-mcp` sidecar holds the token pair (Primer rotates the refresh token 
 Pennyworth uses its own read-only sidecar (`services/google-workspace-mcp`) rather than Paperclip's Google connector ([D-9](docs/DECISIONS.md)).
 
 1. In a Google Cloud project under your Workspace account, enable the **Calendar**, **Drive**, **Docs** and **Gmail** APIs.
-2. Configure the OAuth consent screen (*Internal* if your Workspace allows it) and create an OAuth client of type **Desktop app**.
+2. Configure the OAuth consent screen (*Internal* if your Workspace allows it) and create an OAuth client of type **Desktop app**. An *External* consent screen left in **Testing** gives refresh tokens that expire after 7 days, so publish it to **In production**.
 3. Run `scripts/google-auth.sh <client json>` (or no argument, to paste the ID and secret) and approve in the browser. The only scopes are `calendar.events.readonly`, `drive.readonly` and `gmail.readonly`. The refresh token goes to `~/.config/pennyworth/google_oauth.json` (0600) and is mounted into the sidecar only.
 
 **Several accounts:** `scripts/google-auth.sh --email you@work.com --primary` for the account whose Calendar and Meet transcripts Pennyworth should use, then `scripts/google-auth.sh --email you@other.com` for each extra account. Gmail and Drive cover every connected account.
+
+**Expired sign-in:** when Google stops accepting an account's token, the board shows a red banner naming the account and what is paused. **Reconnect** takes you through Google's consent screen and back to the board, with no terminal needed. It works on the computer's own address (`http://127.0.0.1:3120`), not from the phone (D-36). `scripts/healthcheck.sh` checks every account as well.
 
 If Workspace policy blocks consent, nothing else breaks: matching reports "calendar unavailable" and sources stay pending. Don't weaken Workspace settings to work around it, and check your organization's policy before connecting work accounts.
 

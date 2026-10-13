@@ -49,6 +49,7 @@ gen_secret paperclip_auth_secret
 gen_secret paperclip_agent_jwt_secret
 gen_secret ops_mcp_token
 gen_secret google_mcp_token
+gen_secret google_auth_token     # the board's Google sign-in state and reconnect (D-36)
 gen_secret slack_mcp_token
 gen_secret telegram_mcp_token
 gen_secret primer_mcp_token

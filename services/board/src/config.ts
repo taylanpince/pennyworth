@@ -32,6 +32,8 @@ export interface Config {
    * token file exists.
    */
   internal?: { port: number; hosts: string[]; token: string };
+  /** google-workspace-mcp's sign-in endpoints (D-36): off unless the token file exists. */
+  google?: { url: string; token: string };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -51,7 +53,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logLevel: env.LOG_LEVEL ?? "info",
     lan: lanConfig(env),
     internal: internalConfig(env),
+    google: googleConfig(env),
   };
+}
+
+function googleConfig(env: NodeJS.ProcessEnv): Config["google"] {
+  const file = env.GOOGLE_AUTH_TOKEN_FILE ?? "/run/secrets/google_auth_token";
+  if (!existsSync(file)) return undefined;
+  return { url: (env.GOOGLE_WORKSPACE_URL ?? "http://google-workspace-mcp:8081").replace(/\/+$/, ""), token: readFileSync(file, "utf8").trim() };
 }
 
 function internalConfig(env: NodeJS.ProcessEnv): Config["internal"] {

@@ -130,6 +130,12 @@ kbd {
 
 .offline { padding: 6px 16px; background: #fff3bf; color: #5c4400; font-size: 13px; }
 @media (prefers-color-scheme: dark) { .offline { background: #3d3410; color: #f5e3a3; } }
+.alert { padding: 8px 16px; background: #ffe3e3; color: #7a1414; font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+.alert-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.alert-row > span:first-child { flex: 1; min-width: 200px; }
+.alert .btn { background: var(--surface); color: var(--text); text-decoration: none; }
+.alert-hint { opacity: 0.8; }
+@media (prefers-color-scheme: dark) { .alert { background: #3d1518; color: #f5c2c2; } }
 
 /* ------------------------------------------------------------ columns */
 .columns {

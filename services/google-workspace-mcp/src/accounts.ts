@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { GoogleAuthError, GoogleClient, type StoredCredentials } from "./google.js";
+import { type AuthStatus, GoogleAuthError, GoogleClient, type StoredCredentials } from "./google.js";
 import { type DriveFile, type NormalizedEvent, Workspace } from "./workspace.js";
 
 /**
@@ -49,15 +49,31 @@ const notFound = (err: unknown) => /\b(404|403)\b|not found|notFound|insufficien
 export class MultiWorkspace {
   readonly primary: string;
   private readonly ws = new Map<string, Workspace>();
+  private readonly clients = new Map<string, GoogleClient>();
 
-  constructor(path: string, calendarId = "primary") {
+  constructor(path: string, calendarId = "primary", fetchImpl: typeof fetch = fetch) {
     const { primary, accounts } = loadAccounts(path);
     this.primary = primary;
-    for (const [email, creds] of accounts) this.ws.set(email, new Workspace(new GoogleClient(creds), calendarId));
+    for (const [email, creds] of accounts) {
+      const client = new GoogleClient(creds, fetchImpl);
+      this.clients.set(email, client);
+      this.ws.set(email, new Workspace(client, calendarId));
+    }
   }
 
   accounts(): string[] {
     return [...this.ws.keys()];
+  }
+
+  /** Each account's sign-in, as of its last token refresh. */
+  authStatus(): (AuthStatus & { email: string; primary: boolean })[] {
+    return [...this.clients].map(([email, c]) => ({ email, primary: email === this.primary, ...c.authStatus() }));
+  }
+
+  /** Refreshes every account's token now (see GoogleClient.checkAuth). */
+  async checkAuth() {
+    await Promise.all([...this.clients.values()].map((c) => c.checkAuth()));
+    return this.authStatus();
   }
 
   private one(account?: string): [string, Workspace] {

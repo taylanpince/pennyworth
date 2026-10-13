@@ -112,6 +112,16 @@ export interface Board {
   rollsTomorrow: boolean;
   /** Agent sessions running now. */
   agentsActive: number;
+  /** Google sign-in per account (D-36); null when the board can't ask. */
+  google: { accounts: GoogleAccount[]; error?: string } | null;
+}
+
+export interface GoogleAccount {
+  email: string;
+  primary: boolean;
+  state: "unknown" | "ok" | "expired" | "error";
+  since: string;
+  detail?: string;
 }
 
 export interface CommentView {

@@ -117,16 +117,21 @@ services:
     tmpfs:
       - /tmp:size=16m
     environment:
-      GOOGLE_CREDENTIALS_FILE: /run/secrets/google_oauth
+      GOOGLE_CREDENTIALS_FILE: /credentials/google_oauth.json
       MCP_TOKEN_FILE: /run/secrets/google_mcp_token
+      # The board's sign-in endpoints (D-36): state per account, and reconnecting an expired one.
+      GOOGLE_AUTH_TOKEN_FILE: /run/secrets/google_auth_token
       CALENDAR_ID: "${GOOGLE_CALENDAR_ID:-primary}"
       # Set GOOGLE_FIXTURES_DIR=/fixtures in .env to serve fixtures/ instead of Google (testing).
       GOOGLE_FIXTURES_DIR: "${GOOGLE_FIXTURES_DIR:-}"
     volumes:
       - ./fixtures:/fixtures:ro
+      # Writable (not a secret) so a reconnect from the board can store the new refresh token (D-36).
+      # A single-file mount: google-auth.sh writes the same file, and the service reloads on change.
+      - ${PENNYWORTH_SECRETS_DIR}/google_oauth.json:/credentials/google_oauth.json
     secrets:
-      - google_oauth
       - google_mcp_token
+      - google_auth_token
     dns: [1.1.1.1, 8.8.8.8]   # see paperclip
     networks:
       - backplane
@@ -234,6 +239,7 @@ services:
     secrets:
       - paperclip_board_key
       - board_internal_token
+      - google_auth_token   # Google sign-in state and reconnect only (D-36); not the MCP token
     ports:
       - "127.0.0.1:3120:3120"
       # LAN listener; loopback-only unless .env sets BOARD_LAN_BIND=0.0.0.0 (e.g. with BOARD_LAN_PORT=80).
@@ -273,8 +279,8 @@ secrets:
     file: ${PENNYWORTH_SECRETS_DIR}/ops_mcp_token
   paperclip_ops_key:
     file: ${PENNYWORTH_SECRETS_DIR}/paperclip_ops_key
-  google_oauth:
-    file: ${PENNYWORTH_SECRETS_DIR}/google_oauth.json
+  google_auth_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/google_auth_token
   google_mcp_token:
     file: ${PENNYWORTH_SECRETS_DIR}/google_mcp_token
   slack_mcp_token:

@@ -15,7 +15,7 @@ host (NixOS, user taylan)
 └── docker compose (project "pennyworth")
     ├── paperclip            pinned ghcr image, 127.0.0.1:3100, Codex agents inside
     ├── ops-mcp              TypeScript: transcripts, matcher, vault writer, routing, review replies, tasks
-    ├── google-workspace-mcp read-only Calendar/Drive/Docs/Gmail, multi-account
+    ├── google-workspace-mcp read-only Calendar/Drive/Docs/Gmail, multi-account; sign-in state and board reconnect (D-36)
     ├── slack-mcp            read-only proxy to mcp.slack.com (allowlisted read tools)
     ├── telegram-mcp         read-only proxy to the org's Telegram MCP; background mention scan (D-27)
     ├── primer-mcp           proxy to the org's Primer: read, plus publish documents/versions for the Assistant (D-31)
@@ -141,6 +141,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 
 ### Google
 
+- **Refresh tokens die after 7 days while the OAuth consent screen is in Testing** (2026-10-12: both accounts, 17 hours of silent `invalid_grant` before anyone noticed). The board now shows a banner with Reconnect, and the healthcheck checks every account (D-36). The cure is publishing the consent screen to In production.
 - **Re-consent can silently switch accounts.** Re-running `scripts/google-auth.sh` once signed in as a secondary account and switched Calendar away from the work account. Credentials are now multi-account with an explicit primary (`--email … --primary` for the work account). Calendar and meeting docs use the primary; Gmail and Drive span all accounts.
 - **Multi-tab Docs** need the Docs API (`documents.get` with `includeTabsContent`). Drive's text export only returns the first tab; `docs_read` falls back to it.
 - **Meet/Gemini titles carry the organizer's timezone** ("09:30 EDT"). `parseMeetDocTitle` maps the abbreviations; extend `TZ_ABBREVIATIONS` if a new one shows up.
