@@ -56,9 +56,11 @@ gen_secret telegram_auth_token   # the board's Telegram sign-in state and sign-i
 gen_secret primer_mcp_token
 gen_secret glean_mcp_token
 gen_secret glean_auth_token      # the board's Glean sign-in state and sign-in (D-38)
+gen_secret github_mcp_token
 gen_secret board_internal_token   # the board's internal API (D-25)
 placeholder paperclip_ops_key ""
 placeholder google_oauth.json "{}"
+placeholder github_token ""      # the user's gh token: scripts/github-auth.sh (D-39)
 chmod 0600 "$PENNYWORTH_SECRETS_DIR"/*
 mkdir -p "$PENNYWORTH_SECRETS_DIR/slack" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/slack"
 mkdir -p "$PENNYWORTH_SECRETS_DIR/telegram" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/telegram"

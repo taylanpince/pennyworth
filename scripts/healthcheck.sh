@@ -93,6 +93,14 @@ else
   printf '  skip  glean (GLEAN_MCP_URL not set)\n'
 fi
 
+gh_health="$(dc exec -T paperclip node -e "fetch('http://github-mcp:8086/healthz').then(r=>r.text()).then(console.log).catch(e=>{console.log(e.message);process.exit(1)})" 2>/dev/null)"
+if echo "$gh_health" | grep -q '"ok":true'; then
+  ghtoken="$(cat "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/github_mcp_token" 2>/dev/null)"
+  check "github (whoami)" sh -c "docker compose --env-file '$env_file' exec -T paperclip node /tmp/mcp-call.mjs http://github-mcp:8086/mcp github_whoami '{}' '$ghtoken' | grep -q '\"login\"' || { echo 'GitHub rejected the token: run scripts/github-auth.sh'; exit 1; }"
+else
+  printf '  skip  github (not connected: %s)\n' "$(echo "$gh_health" | cut -c1-80)"
+fi
+
 if [ -n "${KNOWLEDGE_BASES:-}" ]; then
   check "ops-mcp knowledge bases" sh -c "echo '$ops_health' | grep -q '\"knowledge_bases\":{\"ok\":true' || { echo 'none mounted: re-run scripts/bootstrap.sh and recreate ops-mcp'; exit 1; }"
 fi

@@ -33,6 +33,7 @@ host (Linux, systemd user services)
     ├── telegram-mcp           your own Telegram session, reads only; new messages arrive live
     ├── primer-mcp             proxy to your organization's Primer: read documents, publish when you ask
     ├── glean-mcp              proxy to your organization's Glean: company-wide search, reads only
+    ├── github-mcp             GitHub issues and pull requests with your gh token: read, comment when you ask
     └── board                  127.0.0.1:3120 task board (optional LAN listener for paired phones)
 services/paperclip-tasks-mcp   stdio bridge, mounted into paperclip, for agents' task updates
 ```
@@ -128,7 +129,7 @@ Then drop a transcript into your transcripts folder, or have a Meet call that pr
 | Slack Scout | every 30 min in work hours | Slack read/search; Paperclip task search/create/update/close |
 | Telegram Scout | every 30 min in work hours | Telegram read (your chats) and mention candidates; Paperclip task search/create/update/close |
 | Inbox Agent | every 30 min in work hours: one task per Gmail thread labelled `pennyworth` (archived or not), closed when the label is removed | Gmail read/search; Paperclip task search/create/update/close |
-| Assistant | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; Glean search; reference docs; Primer read + publish when asked; notes read + meeting-note corrections; cached web search; Paperclip tasks |
+| Assistant | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; Glean search; reference docs; Primer read + publish when asked; GitHub issues/PRs read + comment when asked; notes read + meeting-note corrections; cached web search; Paperclip tasks |
 | Engineer · Codex / · Claude / · OpenRouter | never woken: assignment targets for the runner | none (the runner does the work) |
 
 Each agent sees only the MCP servers and tools listed for it in `config/paperclip.yaml` (`mcp_servers`, `enabled_tools`); everything else is disabled in its Codex arguments. Schedules live there too. Run a routine on demand with **Run now** in Paperclip.
@@ -208,7 +209,7 @@ For anything that isn't code: research, drafts, and acting on your replies.
 - **Reply on any of your tasks.** About 90 seconds after your last comment, the runner hands it to the Assistant, which acts on clear intent: fixes names and details in the task and in the meeting notes Pennyworth wrote, records context, closes the task ("done", "not relevant"), or answers questions. It replies with one line saying what changed.
 - **Work across many repositories:** ask it to open an Engineer sub-task per repository. Reply "go" on the parent to start them all, then **pr** on the parent to open every PR (D-24).
 
-It never sends messages and never edits Slack, Docs or Calendar.
+It never sends messages and never edits Slack, Docs or Calendar. It publishes only to Primer and as GitHub comments, and only when you ask.
 
 ### Glean and reference docs
 
@@ -216,6 +217,12 @@ The Assistant can search your organization's **Glean** (Slack, Drive, Confluence
 
 - **Reference docs:** list folders of `.md` files as `name=/path` in `KNOWLEDGE_BASES` (`.env`), then run `scripts/bootstrap.sh` and `docker compose up -d ops-mcp`. They are mounted read-only. A folder with an agent skill (`.agents/skills/<name>/SKILL.md`, as Claude plugins have) tells the Assistant what it covers and how to read it.
 - **Glean:** set `GLEAN_MCP_URL` in `.env` (Glean's MCP Configurator at app.glean.com/settings/connected-apps, "Custom" host, shows it: `https://<company>-be.glean.com/mcp/<server>`). Then `docker compose up -d glean-mcp` and press **Connect** in the banner on the board (`http://127.0.0.1:3120`). `glean-mcp` exposes only search and read tools. If Glean stops accepting the sign-in, the banner returns with **Reconnect**.
+
+### GitHub issues and pull requests
+
+The Assistant reads GitHub issues and pull requests, including private ones you can see, with their comments and reviews. Ask it to **post** and it comments on the issue as you: "post it" after a draft, or "post an update on the ticket". Comments go only to repositories in `GITHUB_COMMENT_ORGS` (`.env`), and it can't open, close, label, edit or merge anything ([D-39](docs/DECISIONS.md)).
+
+- **Setup:** `scripts/bootstrap.sh`, then `scripts/github-auth.sh` (copies `gh auth token` into the secrets directory), then `docker compose up -d github-mcp`. Re-run `scripts/github-auth.sh` after `gh auth login`.
 
 ## Coding jobs
 
@@ -307,7 +314,7 @@ If Workspace policy blocks consent, nothing else breaks: matching reports "calen
 
 | File | Purpose | In git |
 |---|---|---|
-| `.env` | host paths, user IDs, vault folders, reference doc folders, board LAN settings, Slack client ID, Telegram aliases and excluded chats, Primer and Glean endpoints | no (`.env.example`) |
+| `.env` | host paths, user IDs, vault folders, reference doc folders, board LAN settings, Slack client ID, Telegram aliases and excluded chats, Primer and Glean endpoints, GitHub comment organizations | no (`.env.example`) |
 | `config/system.yaml` | ops-mcp: timezone, your names and emails, transcript roots, cutoff, vault roots, thresholds | no (`system.example.yaml`) |
 | `config/routing.yaml` | meeting → note rules | no (`routing.example.yaml`) |
 | `config/paperclip.yaml` | company, labels, agents, routines and schedules, MCP servers, Codex hardening | no (`paperclip.example.yaml`) |

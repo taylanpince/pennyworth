@@ -21,7 +21,7 @@ services:
     entrypoint:
       - /bin/sh
       - -c
-      # Also exports the bearer tokens Codex sends to ops-mcp, google-workspace-mcp, slack-mcp, telegram-mcp, primer-mcp and glean-mcp
+      # Also exports the bearer tokens Codex sends to ops-mcp, google-workspace-mcp, slack-mcp, telegram-mcp, primer-mcp, glean-mcp and github-mcp
       # (bearer_token_env_var in the shared Codex config). $$ escapes compose interpolation.
       - >-
         export BETTER_AUTH_SECRET="$$(cat /run/secrets/paperclip_auth_secret)"
@@ -32,6 +32,7 @@ services:
         PENNYWORTH_TELEGRAM_MCP_TOKEN="$$(cat /run/secrets/telegram_mcp_token)"
         PENNYWORTH_PRIMER_MCP_TOKEN="$$(cat /run/secrets/primer_mcp_token)"
         PENNYWORTH_GLEAN_MCP_TOKEN="$$(cat /run/secrets/glean_mcp_token)"
+        PENNYWORTH_GITHUB_MCP_TOKEN="$$(cat /run/secrets/github_mcp_token)"
         PENNYWORTH_BOARD_TOKEN="$$(cat /run/secrets/board_internal_token)"
         && exec /usr/bin/tini -- docker-entrypoint.sh "$$@"
       - paperclip
@@ -66,6 +67,7 @@ services:
       - telegram_mcp_token
       - primer_mcp_token
       - glean_mcp_token
+      - github_mcp_token
       # The board's internal API, for the Assistant's task_schedule / task_recurring (D-25).
       - board_internal_token
     pids_limit: 2048
@@ -245,6 +247,28 @@ services:
       - backplane
       - egress
 
+  # GitHub issues and pull requests: read, and comment on them in GITHUB_COMMENT_ORGS (D-39). Holds
+  # the user's gh token; services/github-mcp/src/github.ts allows only those requests.
+  github-mcp:
+    <<: *hardening
+    build: ./services/github-mcp
+    image: pennyworth/github-mcp:local
+    user: "${PUID:-1000}:${PGID:-100}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    environment:
+      GITHUB_TOKEN_FILE: /run/secrets/github_token
+      GITHUB_COMMENT_ORGS: "${GITHUB_COMMENT_ORGS:-}"
+      MCP_TOKEN_FILE: /run/secrets/github_mcp_token
+    secrets:
+      - github_token
+      - github_mcp_token
+    dns: [1.1.1.1, 8.8.8.8]   # see paperclip
+    networks:
+      - backplane
+      - egress
+
   # The task board (D-22): Today/Tomorrow/Later over your Paperclip tasks. Acts as you through the
   # board key, kept server-side; loopback only (put `tailscale serve` in front for the phone).
   board:
@@ -332,6 +356,11 @@ secrets:
     file: ${PENNYWORTH_SECRETS_DIR}/glean_mcp_token
   glean_auth_token:
     file: ${PENNYWORTH_SECRETS_DIR}/glean_auth_token
+  github_mcp_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/github_mcp_token
+  # The user's gh token (scripts/github-auth.sh), for github-mcp only.
+  github_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/github_token
   paperclip_board_key:
     file: ${PENNYWORTH_SECRETS_DIR}/paperclip_board_key
   board_internal_token:

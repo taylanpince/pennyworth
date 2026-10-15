@@ -60,6 +60,11 @@ for c in $containers; do
       [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
         && pass "glean-mcp: only its own token directory mounted" || fail "glean-mcp has unexpected mounts: $mounts"
       ;;
+    *github-mcp*)
+      [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "github-mcp: no published ports" || fail "github-mcp publishes ports"
+      ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -q . \
+        && pass "github-mcp: only its secrets mounted" || fail "github-mcp has unexpected mounts: $mounts"
+      ;;
     *board*)
       # 3120 is the trusted local board; 3121 (LAN, D-23) may be published, but only serves paired devices.
       local_port="$(docker inspect "$c" --format '{{json (index .HostConfig.PortBindings "3120/tcp")}}')"
@@ -116,6 +121,11 @@ pass "primer-mcp exposes reads plus create-document/add-version only; never dele
 glean_tools="$(sed -n 's/^export const READ_TOOLS = \[\(.*\)\];/\1/p' services/glean-mcp/src/policy.ts | tr -d '" ' | tr ',' '\n')"
 bad_glean="$(echo "$glean_tools" | grep -Ev '^(search|read_document|employee_search|meeting_lookup|code_search|chat)$' || true)"
 [ -n "$glean_tools" ] && [ -z "$bad_glean" ] && pass "glean-mcp exposes only search/read tools (services/glean-mcp/src/policy.ts)" || fail "glean-mcp: unexpected tools allowed: $bad_glean"
+# GitHub: the user's gh token can push and delete; the guard allows fixed reads plus issue comments only (D-39).
+gh_routes="$(sed -n '/^export const ROUTES/,/^\];/p' services/github-mcp/src/github.ts | grep '^  { method:')"
+bad_gh="$(echo "$gh_routes" | grep -v '{ method: "GET", path: ' | grep -vxF '  { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}/comments$`) },' || true)"
+[ -n "$gh_routes" ] && [ -z "$bad_gh" ] && grep -q 'guard(method, path)' services/github-mcp/src/github.ts && [ "$(grep -c 'fetchImpl(' services/github-mcp/src/github.ts)" = 1 ] \
+  && pass "github-mcp: every request goes through the guard; the only write is an issue comment (services/github-mcp/src/github.ts)" || fail "github-mcp: unexpected GitHub requests allowed: $bad_gh"
 pass "no email/Slack/Telegram send or calendar write tool is configured for any agent"
 
 echo
