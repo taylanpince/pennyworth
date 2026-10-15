@@ -1,7 +1,8 @@
-// Branch names on GitHub follow the repository's own conventions. Task worktrees start on a local
-// branch (pennyworth/<task>); on the first push it is renamed to a name in the repository's style,
-// because the repos we push to have nothing to do with Pennyworth. A short Codex call picks the name
-// from the contributing guide and recent branch names; code checks it and falls back to <type>/<slug>.
+// Branch names follow the repository's own conventions from the start: the task's worktree is created
+// on a branch named in the repository's style, because the repos we work in have nothing to do with
+// Pennyworth (D-32). A short Codex call picks the name from the contributing guide, recent branch
+// names and the request; code checks it and falls back to <type>/<slug>. Branches from before this
+// (pennyworth/<task>) are renamed on their next run or push, unless already on GitHub.
 import { askCodex } from "./intake.mjs";
 import { leaksInternal } from "./describe.mjs";
 
@@ -61,7 +62,7 @@ ${fence(login ? `RECENT_BRANCHES_BY_${login}` : "RECENT_BRANCHES_BY_USER", examp
 
 ${fence("RECENT_BRANCHES_BY_OTHERS", examples.others.join("\n") || "(none)", 2000)}
 
-${fence("COMMITS", messages.join("\n\n---\n\n"), 3000)}
+${fence("COMMITS", messages.join("\n\n---\n\n") || "(none yet: name it from the request)", 3000)}
 
 ${fence("REQUEST", request, 4000)}`;
 }
@@ -91,11 +92,12 @@ export function fallbackBranchName(subject) {
 }
 
 /**
- * The branch name to publish under. `taken(name)` says whether a name is already in use (locally or
- * on GitHub); a taken name gets -2, -3, … appended. `ask` answers the prompt (a Codex call by default).
+ * The task branch's name. `taken(name)` says whether a name is already in use (locally or on
+ * GitHub); a taken name gets -2, -3, … appended. `ask` answers the prompt (a Codex call by default).
+ * Without commits yet, the fallback comes from `title` (the task's).
  */
-export async function chooseBranchName({ cfg, repo, base, defaultBranch, login, guidance, prs, request, messages, taken, ask = (prompt) => askCodex(cfg, prompt, BRANCH_SCHEMA) }) {
-  const subject = messages.at(-1)?.split("\n")[0] ?? "";
+export async function chooseBranchName({ cfg, repo, base, defaultBranch, login, guidance, prs, request, messages, title = "", taken, ask = (prompt) => askCodex(cfg, prompt, BRANCH_SCHEMA) }) {
+  const subject = messages.at(-1)?.split("\n")[0] || title;
   let name = "";
   let generated = false;
   try {

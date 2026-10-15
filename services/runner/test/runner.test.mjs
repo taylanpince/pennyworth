@@ -705,6 +705,9 @@ describe("branch names in the repository's style", async () => {
     assert.deepEqual(await chooseBranchName({ ...base, taken: async (n) => taken.has(n), ask: async () => { throw new Error("offline"); } }), { name: "fix/typo-2", generated: false });
     assert.deepEqual(await chooseBranchName({ ...base, taken: async () => false, ask: async () => ({ branch: "taylanpince/fix-typo" }) }), { name: "taylanpince/fix-typo", generated: true });
     assert.deepEqual(await chooseBranchName({ ...base, taken: async () => false, ask: async () => ({ branch: "pennyworth/fix-typo" }) }), { name: "fix/typo", generated: false });
+    // A new task has no commits yet: the fallback comes from its title.
+    const fresh = { ...base, messages: [], title: "Upgrade node-gateway for OMS", taken: async () => false, ask: async () => ({ branch: "" }) };
+    assert.deepEqual(await chooseBranchName(fresh), { name: "chore/upgrade-node-gateway-for-oms", generated: false });
   });
 });
 

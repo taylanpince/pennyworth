@@ -59,7 +59,7 @@ export async function refreshCheckout(clone) {
   return clone;
 }
 
-/** One worktree per task on branch pennyworth/<task>, created from origin/<base>. */
+/** One worktree per task on its branch (named in the repository's style), created from origin/<base>. */
 export async function ensureWorktree(workDir, clone, identifier, repo, branch, base) {
   const path = join(workDir, "tasks", `${identifier}-${repo.name}`);
   if (existsSync(join(path, ".git"))) return path;

@@ -5,10 +5,10 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { RUNNER_MARKER, branchFor, isAgentSubtask, ownRequest, findRepos, mentionedRepos, readOnlyRefusal, isClaudeModel, normalizeRepo, openrouterModels, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
+import { RUNNER_MARKER, isAgentSubtask, ownRequest, findRepos, mentionedRepos, readOnlyRefusal, isClaudeModel, normalizeRepo, openrouterModels, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
-import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree, startFreshBranch, nextBranchName } from "./git.mjs";
+import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree, startFreshBranch } from "./git.mjs";
 import { codexModels, readApproval, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
 import { branchGuidance, checkBranchName, chooseBranchName, isLocalBranch } from "./branch.mjs";
@@ -504,8 +504,14 @@ async function startJob({ issue, instructions, read, candidates }) {
 
     const clone = await ensureClone(cfg.workDir, repo);
     const base = task.base ?? (await defaultBranch(clone));
-    let branch = task.branch ?? branchFor(issue.identifier);
+    // The branch is named in the repository's style from the start (D-32); one from before that is
+    // renamed now, so it never shows up in comments.
+    let branch = task.branch ?? (await nameBranch(issue, { clone, repo, base }));
     const worktree = await ensureWorktree(cfg.workDir, clone, issue.identifier, repo, branch, base);
+    if (isLocalBranch(branch)) {
+      task = await renameLocalBranch(issue, { ...task, base, branch, worktree }, clone, repo);
+      branch = task.branch ?? branch;
+    }
     // The task's PR may have been merged or closed since the last run: never keep working on it.
     const prNote = await leaveFinishedPr(issue, { ...task, base, branch, worktree }, clone);
     if (prNote) {
@@ -721,10 +727,8 @@ async function runCommand(issue, task, command) {
   if (command === "pr" && (await remoteIsEmpty(clone))) {
     return void (await pc.comment(issue.id, `The repository is still empty, so there's no branch to open a PR against. Reply **push** to publish this work as \`${task.base}\`.`));
   }
-  // The first push publishes the work under a name in the repository's style, not pennyworth/<task>.
-  if (isLocalBranch(task.branch) && !(await remoteIsEmpty(clone)) && !(await remoteHasBranch(clone, task.branch))) {
-    task = await renameForPublishing(issue, task, clone, repo);
-  }
+  // A branch from before D-32's change is published under a name in the repository's style.
+  if (!(await remoteIsEmpty(clone))) task = await renameLocalBranch(issue, task, clone, repo);
   // "pr" always pushes the task branch first: it may never have been pushed (the first push into an
   // empty repository goes to the base branch instead), and an open PR should get the latest commits.
   const head = await git(task.worktree, "log", "-1", "--format=%H %s");
@@ -797,25 +801,35 @@ async function prRequest(full) {
 }
 
 /**
- * Rename the task's local branch to a name that follows the repository's conventions (its
- * contributing guide, the user's own recent branches, then everyone's), before its first push.
+ * A branch name for the task's work that follows the repository's conventions (its contributing
+ * guide, the user's own recent branches, then everyone's), from the request and any commits so far
+ * (D-32). Before the worktree exists, the guides are read from origin/<base>.
  */
-async function renameForPublishing(issue, task, clone, repo) {
+async function nameBranch(issue, { clone, repo, base, worktree, withCommits = Boolean(worktree) }) {
   const realGh = await findRealGh();
   const ghJson = (args) => execFileP(realGh, args).then(({ stdout }) => JSON.parse(stdout), () => undefined);
   const login = (await ghJson(["api", "user"]))?.login ?? "";
   const prs = (await ghJson(["pr", "list", "--repo", repo.slug, "--state", "all", "--limit", "60", "--json", "headRefName,author"])) ?? [];
   const docs = ["CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md", "AGENTS.md", "CLAUDE.md", ".github/pull_request_template.md"];
-  const guidance = branchGuidance(docs.map((f) => [f, existsSync(join(task.worktree, f)) ? readFileSync(join(task.worktree, f), "utf8") : ""]));
-  const messages = cleanMessages(await git(task.worktree, "log", "--reverse", "--format=%B%x1e", `origin/${task.base}..HEAD`).catch(() => ""));
+  const read = async (f) => (worktree && existsSync(join(worktree, f)) ? readFileSync(join(worktree, f), "utf8") : worktree ? "" : await git(clone, "show", `origin/${base}:${f}`).catch(() => ""));
+  const guidance = branchGuidance(await Promise.all(docs.map(async (f) => [f, await read(f)])));
+  const messages = withCommits ? cleanMessages(await git(worktree, "log", "--reverse", "--format=%B%x1e", `origin/${base}..HEAD`).catch(() => "")) : [];
   const taken = async (name) => Boolean(await git(clone, "branch", "--list", name)) || (await remoteHasBranch(clone, name));
+  const full = await pc.issue(issue.id);
   const { name, generated } = await chooseBranchName({
-    cfg, repo: repo.slug, base: task.base, defaultBranch: await defaultBranch(clone), login, guidance, prs,
-    request: await prRequest(await pc.issue(issue.id)), messages, taken,
+    cfg, repo: repo.slug, base, defaultBranch: await defaultBranch(clone), login, guidance, prs,
+    request: await prRequest(full), messages, title: leaksInternal(full.title) ? "" : full.title, taken,
   });
+  log("branch named", { issue: issue.identifier, branch: name, generated });
+  return name;
+}
+
+/** Rename a task branch from before D-32's change (pennyworth/<task>) that GitHub doesn't have yet. */
+async function renameLocalBranch(issue, task, clone, repo) {
+  if (!isLocalBranch(task.branch) || !task.worktree || (await remoteHasBranch(clone, task.branch))) return task;
+  const name = await nameBranch(issue, { clone, repo, base: task.base, worktree: task.worktree });
   await git(task.worktree, "branch", "-m", name);
   state.updateTask(issue.id, { branch: name });
-  log("branch named for publishing", { issue: issue.identifier, from: task.branch, to: name, generated });
   return state.task(issue.id);
 }
 
@@ -859,7 +873,7 @@ async function leaveFinishedPr(issue, task, clone) {
   if (await git(task.worktree, "status", "--porcelain")) {
     throw new UserError(`PR #${pr.number} was merged, but the worktree has uncommitted changes, so I didn't move them to a new branch. Reply **cleanup** to start over from the latest \`${task.base}\`.`);
   }
-  const next = await nextBranchName(clone, branchFor(issue.identifier));
+  const next = await nameBranch(issue, { clone, repo: normalizeRepo(task.repo), base: task.base, worktree: task.worktree, withCommits: false });
   let carried;
   try {
     carried = await startFreshBranch(clone, task.worktree, { base: task.base, since: pr.headRefOid, branch: next });

@@ -230,7 +230,7 @@ Comment on a task and the work happens in a repository on this machine, the way 
 
 1. **Assign the task to an Engineer.** The Engineer picks the engine: **Engineer · Codex**, **Engineer · Claude** (Claude Code) or **Engineer · OpenRouter** (GLM, DeepSeek, Kimi and other OpenRouter models through opencode). To pick the model and effort too, switch the assignee's **Model lane** to **Override**; the board suggests the models listed under the agent's `models` in `config/paperclip.yaml`, and any other OpenRouter id works when typed in full. Tasks you wrote start right away. Tasks Pennyworth created from Slack, email or meetings wait for your comment, because their text is other people's words.
 2. **Say what you want, in plain words:** which repository (link or org/name), any reference repositories, whether you want an answer, a report/spec or the change itself, and optionally an engine or model ("use Claude", "use DeepSeek"). A short model call reads the request; code checks its answer against the repositories you mentioned and the known models, and asks you if it can't tell. There's no syntax to learn.
-3. **The runner picks it up** within about 20 seconds. It clones the repo into `~/pennyworth/repos`, creates a worktree on a local branch `pennyworth/<task>`, runs the engine inside your devshells under Codex's sandbox (writes only in the worktree and build caches), posts the report on the task and sets it to *in review*. In implement mode it commits with a conventional commit message.
+3. **The runner picks it up** within about 20 seconds. It clones the repo into `~/pennyworth/repos`, creates a worktree on a branch named in the repository's style (its contributing guide, else your own recent branches there, else everyone's: `feat/…`, `<you>/…`), runs the engine inside your devshells under Codex's sandbox (writes only in the worktree and build caches), posts the report on the task and sets it to *in review*. In implement mode it commits with a conventional commit message.
 4. **Follow-ups** continue the same session in the same worktree. If the PR was merged meanwhile, the work moves to a fresh branch from the latest base.
 
 You can also talk about the run itself: "stop that", "how's it going?", "start over", "we're done, clean up".
@@ -239,7 +239,7 @@ Publishing takes the exact word, as a comment on its own:
 
 | Command | What it does |
 |---|---|
-| `push` | publish the branch to GitHub (never forced). The first push renames it in the repository's style: its contributing guide, else your own recent branches there, else everyone's (`feat/…`, `<you>/…`), never `pennyworth/…`. An empty repository gets the work as its first commit on `main` |
+| `push` | publish the branch to GitHub (never forced). An empty repository gets the work as its first commit on `main` |
 | `pr` | push and open a **draft** PR, with a title and description written for the repository's reviewers |
 
 Agents can't push or write to GitHub themselves: `gh` is wrapped read-only, pushes are disabled in the runner's clones, a pre-push hook and an ssh wrapper both refuse them, and after each run the runner checks that nothing appeared on GitHub. Only *your* comments are instructions.

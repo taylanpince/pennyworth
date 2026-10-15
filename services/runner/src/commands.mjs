@@ -190,5 +190,3 @@ export function ownRequest(issue) {
 export function isAgentSubtask(issue) {
   return Boolean(issue?.parentId && issue.createdByAgentId && !issue.createdByUserId);
 }
-
-export const branchFor = (identifier) => `pennyworth/${identifier.toLowerCase()}`;
