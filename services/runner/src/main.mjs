@@ -16,7 +16,7 @@ import { branchGuidance, checkBranchName, chooseBranchName, exampleBranches } fr
 import { cleanMessages, leaksInternal, writePrDescription } from "./describe.mjs";
 import { branchesFooter, commitMessage, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, subtaskSummary, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
 import { startRepoHelper } from "./repohelper.mjs";
-import { branchChanges, carryOver, dirtyCheckouts, ensureRepo, findBranches, keepBranches, messagesSince, moveOffDefault, readManifest, signUnsigned, workspacePath, workspaceRepos } from "./workspace.mjs";
+import { baseRef, branchChanges, carryOver, dirtyCheckouts, ensureRepo, findBranches, keepBranches, messagesSince, moveOffDefault, readManifest, signUnsigned, workspacePath, workspaceRepos } from "./workspace.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import { State } from "./state.mjs";
@@ -749,7 +749,9 @@ async function publishBranch(issue, full, r, command, rows) {
   if (!r.writable) throw new UserError(`not published: \`${r.repo}\` is outside your orgs (${cfg.allowed_orgs.join(", ")}), so it's read-only`);
   const empty = await remoteIsEmpty(r.path);
   if (r.branch === r.defaultBase ? !empty : !checkBranchName(r.branch, { base: r.defaultBase, defaultBranch: r.defaultBase })) throw new UserError(`not a branch name I'd publish`);
-  const leaky = (await messagesSince(r.path, `origin/${r.defaultBase}`, r.branch).catch(() => [])).find((m) => leaksInternal(m));
+  // Only the commits being published: what's already on GitHub (other people's work) isn't ours to judge.
+  const unpublishedMessages = (await git(r.path, "log", "--format=%B%x1e", r.branch, "--not", "--remotes=origin").catch(() => "")).split("\x1e");
+  const leaky = unpublishedMessages.find((m) => leaksInternal(m));
   if (r.unpublished.length && leaky) throw new UserError(`a commit message mentions internal names ("${leaky.split("\n")[0].slice(0, 80)}"). Ask me to reword it`);
   const url = await git(r.path, "remote", "get-url", "origin");
   let pushed = "";
@@ -766,7 +768,8 @@ async function publishBranch(issue, full, r, command, rows) {
   if (r.prUrl) return `${pushed || "Up to date"}. PR: ${r.prUrl}`;
   if (command === "push") return `${pushed} → https://github.com/${r.repo}/compare/${r.base}...${encodeURIComponent(r.branch)}?expand=1`;
   // Written for the repository's reviewers: nothing about Pennyworth, tasks or this machine.
-  const from = r.base === r.defaultBase ? `origin/${r.defaultBase}` : r.base;
+  const from = r.baseRef;
+  if (!from) throw new UserError(`its base \`${r.base}\` isn't on GitHub, so there's nothing to open a PR into`);
   const messages = cleanMessages((await messagesSince(r.path, from, r.branch)).join("\x1e"));
   const stat = await git(r.path, "diff", "--stat", `${from}...${r.branch}`).catch(() => "");
   const diff = await git(r.path, "diff", `${from}...${r.branch}`).catch(() => "");
@@ -960,7 +963,7 @@ async function tidyBranches(issue, workspace, { commitDirty, message }) {
         const moved = await moveOffDefault(r.path, base, await nameBranch(issue, { path: r.path, slug: r.slug, base, messages: onBase }));
         if (moved) notes.push(`Commits made on \`${base}\` in ${r.slug} were moved to \`${moved}\`.`);
       }
-      for (const b of await findBranches(r.path, { base, slug: r.slug })) {
+      for (const b of await findBranches(r.path, { base, slug: r.slug, known: state.branches(issue.id).filter((k) => k.repo === r.slug).map((k) => k.branch) })) {
         if (b.branch === base || checkBranchName(b.branch, { base, defaultBranch: base }) || (await git(r.path, "ls-remote", "--heads", "origin", b.branch).catch(() => ""))) continue;
         const name = await nameBranch(issue, { path: r.path, slug: r.slug, base, messages: await messagesSince(r.path, `origin/${base}`, b.branch) });
         await git(r.path, "branch", "-m", b.branch, name);
@@ -994,15 +997,16 @@ async function branchRows(issue, workspace) {
   const repos = await workspaceRepos(workspace);
   for (const r of repos) {
     const base = await defaultBranch(r.path);
-    const found = await findBranches(r.path, { base, manifest, slug: r.slug });
+    const found = await findBranches(r.path, { base, manifest, slug: r.slug, known: state.branches(issue.id).filter((k) => k.repo === r.slug).map((k) => k.branch) });
     for (const b of found) state.saveBranch(issue.id, { repo: r.slug, branch: b.branch, base: b.base, purpose: b.purpose });
     for (const k of state.branches(issue.id).filter((k) => k.repo === r.slug && !found.some((b) => b.branch === k.branch))) {
       if (!k.pushed && !k.pr_url) state.deleteBranch(issue.id, k.repo, k.branch);
     }
+    const taskBranches = state.branches(issue.id).filter((k) => k.repo === r.slug).map((k) => k.branch);
     for (const b of state.branches(issue.id).filter((k) => k.repo === r.slug)) {
       if (!(await git(r.path, "rev-parse", "--verify", "--quiet", `refs/heads/${b.branch}`).catch(() => ""))) continue;
-      const c = await branchChanges(r.path, { branch: b.branch, base: b.base, defaultBase: base });
-      rows.push({ repo: r.slug, path: r.path, branch: b.branch, base: b.base, defaultBase: base, purpose: b.purpose, unpublished: c.unpublished, stat: c.stat, onGitHub: c.onGitHub, pushed: b.pushed, prUrl: b.pr_url ?? undefined, merged: b.merged, writable: writable(r.slug), readOnly: !writable(r.slug) });
+      const c = await branchChanges(r.path, { branch: b.branch, base: b.base, taskBranches });
+      rows.push({ repo: r.slug, path: r.path, branch: b.branch, base: b.base, baseRef: await baseRef(r.path, { branch: b.branch, base: b.base, taskBranches }), defaultBase: base, purpose: b.purpose, unpublished: c.unpublished, stat: c.stat, onGitHub: c.onGitHub, pushed: b.pushed, prUrl: b.pr_url ?? undefined, merged: b.merged, writable: writable(r.slug), readOnly: !writable(r.slug) });
     }
   }
   return rows;
@@ -1073,7 +1077,7 @@ async function leaveFinishedPrs(issue, workspace) {
 async function taskHasCommits(task) {
   if (task?.worktree && task.base) return Boolean((await changesSummary(task.worktree, task.base).catch(() => ({}))).commits);
   if (!task?.workspace || !existsSync(task.workspace)) return false;
-  for (const r of await workspaceRepos(task.workspace)) if ((await findBranches(r.path, { base: await defaultBranch(r.path) }).catch(() => [])).length) return true;
+  for (const r of await workspaceRepos(task.workspace)) if ((await findBranches(r.path, { base: await defaultBranch(r.path), known: state.branches(task.issue_id).filter((k) => k.repo === r.slug).map((k) => k.branch) }).catch(() => [])).length) return true;
   return false;
 }
 

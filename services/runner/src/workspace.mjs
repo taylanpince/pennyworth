@@ -72,44 +72,74 @@ export function readManifest(workspace) {
 /** The pushed tip of a branch per the last fetch, or "". */
 const remoteTip = (path, branch) => git(path, "rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`).catch(() => "");
 
+const count = async (path, tip, not) => Number(await git(path, "rev-list", "--count", tip, "--not", not).catch(() => "1000000"));
+
 /**
- * The task's branches in one clone: every local branch other than the default one with commits the
- * default branch doesn't have. Each gets its base: the branch the manifest names, else the nearest
- * other task branch it is stacked on, else the default branch.
+ * The task's branches in one clone, each with its base: the branch it was made from. That's the
+ * closest of the task's other branches it is stacked on and the branches on GitHub (the default one,
+ * or another long-lived one such as `v2`): the one leaving the fewest commits of its own. The agent's
+ * manifest wins when it names one of those. A local branch with no commits beyond its base (the
+ * default branch, a plain checkout of `v2`) isn't a task branch.
  */
-export async function findBranches(path, { base, manifest = [], slug }) {
+export async function findBranches(path, { base, manifest = [], slug, known = [] }) {
   const onBase = await hasRef(path, `origin/${base}`);
   const heads = (await git(path, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads")).split("\n").filter(Boolean).map((l) => l.split(" "));
+  // Branches on GitHub that could be a base: the default one first, then the most recently updated.
+  const remotes = (await git(path, "for-each-ref", "--sort=-committerdate", "--count=60", "--format=%(refname:lstrip=3)", "refs/remotes/origin")).split("\n").filter((r) => r && r !== "HEAD");
+  const bases = [...new Set([...(onBase ? [base] : []), ...remotes])];
   const found = [];
   for (const [branch, tip] of heads) {
     if (branch === base) continue;
-    const ahead = Number(await git(path, "rev-list", "--count", tip, ...(onBase ? ["--not", `origin/${base}`] : [])));
-    if (ahead) found.push({ branch, tip, ahead });
+    // A checkout of a branch on GitHub with nothing new (a local `v2`) is only the task's if the task
+    // made it (pushed, maybe with a PR).
+    if (!known.includes(branch) && (await hasRef(path, `origin/${branch}`)) && !(await count(path, tip, `origin/${branch}`))) continue;
+    let best;
+    for (const r of bases) {
+      if (r === branch) continue; // its own pushed copy is not its base
+      const n = await count(path, tip, `origin/${r}`);
+      if (!best || n < best.n) best = { base: r, n };
+    }
+    const own = best ? best.n : Number(await git(path, "rev-list", "--count", tip));
+    if (own) found.push({ branch, tip, own, remoteBase: best?.base ?? base, counts: new Map([[best?.base ?? base, own]]) });
   }
   // A repository that is still empty on GitHub: its default branch is published as the first commits.
   const baseTip = heads.find(([b]) => b === base)?.[1];
-  if (!onBase && baseTip) found.unshift({ branch: base, tip: baseTip, ahead: Number(await git(path, "rev-list", "--count", baseTip)) });
+  if (!onBase && baseTip) found.unshift({ branch: base, tip: baseTip, own: Number(await git(path, "rev-list", "--count", baseTip)), remoteBase: base, counts: new Map() });
   for (const b of found) {
     const named = manifest.find((m) => m.branch === b.branch && (!m.repo || !slug || String(m.repo).toLowerCase() === slug.toLowerCase()));
-    const parents = [];
+    let pick = { base: b.remoteBase, n: b.own };
     for (const o of found) {
-      if (o.branch === b.branch || o.tip === b.tip) continue;
-      if (await git(path, "merge-base", "--is-ancestor", o.tip, b.tip).then(() => true, () => false)) parents.push(o);
+      if (o.branch === b.branch || o.tip === b.tip || o.branch === base) continue;
+      if (!(await git(path, "merge-base", "--is-ancestor", o.tip, b.tip).then(() => true, () => false))) continue;
+      const n = await count(path, b.tip, o.tip);
+      b.counts.set(o.branch, n);
+      if (n < pick.n) pick = { base: o.branch, n };
     }
-    const stacked = parents.sort((x, y) => y.ahead - x.ahead)[0]?.branch;
-    const wanted = named?.base && (named.base === base || found.some((o) => o.branch === named.base)) ? named.base : undefined;
-    b.base = wanted ?? stacked ?? base;
+    // The manifest's base, if it is one of the candidates and as close as the best one.
+    if (named?.base && named.base !== b.branch && (bases.includes(named.base) || found.some((o) => o.branch === named.base))) {
+      const n = b.counts.get(named.base) ?? (found.some((o) => o.branch === named.base) ? await count(path, b.tip, named.base) : await count(path, b.tip, `origin/${named.base}`));
+      if (n <= pick.n) pick = { base: named.base, n };
+    }
+    b.base = pick.base;
     b.purpose = typeof named?.purpose === "string" ? named.purpose.slice(0, 300) : "";
   }
   return found.map(({ branch, base: b, purpose, tip }) => ({ branch, base: b, purpose, tip }));
 }
 
+/**
+ * What a branch's base is in git: the task branch of that name when there is one (stacked), else the
+ * branch on GitHub (`origin/<base>`), else nothing (an empty repository).
+ */
+export async function baseRef(path, { branch, base, taskBranches = [] }) {
+  if (base !== branch && taskBranches.includes(base) && (await hasRef(path, `refs/heads/${base}`))) return base;
+  return (await hasRef(path, `origin/${base}`)) ? `origin/${base}` : "";
+}
+
 /** Commits on `branch` that aren't on GitHub yet (oldest first), and the diffstat against its base. */
-export async function branchChanges(path, { branch, base, defaultBase }) {
-  const onDefault = await hasRef(path, `origin/${defaultBase}`);
-  const stop = base === defaultBase ? (onDefault ? [`origin/${defaultBase}`] : []) : [base];
+export async function branchChanges(path, { branch, base, taskBranches = [] }) {
+  const from = (await baseRef(path, { branch, base, taskBranches })) || EMPTY_TREE;
+  const stop = from === EMPTY_TREE ? [] : [from];
   const unpublished = (await git(path, "log", "--reverse", "--format=%h %s", branch, "--not", "--remotes=origin", ...stop)).split("\n").filter(Boolean);
-  const from = base === defaultBase ? (onDefault ? `origin/${defaultBase}` : EMPTY_TREE) : base;
   const stat = await git(path, "diff", "--shortstat", from === EMPTY_TREE ? EMPTY_TREE : `${from}...${branch}`, ...(from === EMPTY_TREE ? [branch] : [])).catch(() => "");
   const tip = await git(path, "rev-parse", branch);
   const pushed = await remoteTip(path, branch);

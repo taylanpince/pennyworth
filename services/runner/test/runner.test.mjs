@@ -846,15 +846,37 @@ describe("task workspaces (D-41)", async () => {
     await git(path, "branch", "empty", "main"); // nothing new: not a task branch
     const found = await findBranches(path, { base: "main", slug: "acme/api" });
     assert.deepEqual(found.map((b) => [b.branch, b.base]), [["feat/a", "main"], ["feat/a-more", "feat/a"], ["fix/b", "main"]]);
-    const more = await branchChanges(path, { branch: "feat/a-more", base: "feat/a", defaultBase: "main" });
+    const more = await branchChanges(path, { branch: "feat/a-more", base: "feat/a", taskBranches: ["feat/a", "feat/a-more", "fix/b"] });
     assert.equal(more.unpublished.length, 1);
     assert.match(more.unpublished[0], /feat: a more/);
     assert.equal(more.onGitHub, false);
-    // The manifest can say a branch is based on main after all.
+    // The manifest gives purposes, but can't put a stacked branch on main: its PR would carry the
+    // parent's commits too. The closest base wins; the manifest only decides between equals.
     mkdirSync(join(ws, ".pennyworth"));
     writeFileSync(join(ws, ".pennyworth", "branches.json"), JSON.stringify([{ repo: "acme/api", branch: "feat/a-more", base: "main", purpose: "both" }]));
     const again = await findBranches(path, { base: "main", slug: "acme/api", manifest: readManifest(ws) });
-    assert.deepEqual(again.find((b) => b.branch === "feat/a-more"), { branch: "feat/a-more", base: "main", purpose: "both", tip: again.find((b) => b.branch === "feat/a-more").tip });
+    assert.deepEqual(again.find((b) => b.branch === "feat/a-more"), { branch: "feat/a-more", base: "feat/a", purpose: "both", tip: again.find((b) => b.branch === "feat/a-more").tip });
+  });
+
+  it("bases a branch made from a long-lived line (v2) on it, not on the default branch (PEN-1375)", async () => {
+    const { path, commit, seed } = await setup();
+    // GitHub has a v2 line with its own history, including someone's commit that mentions Codex.
+    execFileSync("git", ["-C", seed, "switch", "-q", "-c", "v2"]);
+    for (const [m, f] of [["ci: v2 release flow", "ci.txt"], ["fix(release): address Codex review", "r.txt"]]) {
+      writeFileSync(join(seed, f), m);
+      execFileSync("git", ["-C", seed, "add", f]);
+      execFileSync("git", ["-C", seed, ...id, "commit", "-q", "-m", m]);
+    }
+    execFileSync("git", ["-C", seed, "push", "-q", "origin", "v2"]);
+    await git(path, "fetch", "-q", "origin");
+    await git(path, "switch", "-q", "-c", "fix/v2-thing", "origin/v2");
+    await commit(path, "fix: v2 thing", "t.txt");
+    await git(path, "switch", "-q", "v2"); // a plain local checkout of v2 isn't a task branch
+    const found = await findBranches(path, { base: "main", slug: "acme/api" });
+    assert.deepEqual(found.map((b) => [b.branch, b.base]), [["fix/v2-thing", "v2"]]);
+    const c = await branchChanges(path, { branch: "fix/v2-thing", base: "v2", taskBranches: ["fix/v2-thing"] });
+    assert.deepEqual(c.unpublished.map((l) => l.replace(/^\w+ /, "")), ["fix: v2 thing"]);
+    assert.match(c.stat, /^1 file changed/);
   });
 
   it("signs the agent's unsigned commits, keeping trees and moving branches and worktrees", async () => {
