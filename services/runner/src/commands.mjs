@@ -52,7 +52,9 @@ export function findRepos(text, allowedOrgs) {
  */
 export function mentionedRepos(text) {
   const found = new Map();
-  const re = /(?:https?:\/\/github\.com\/|git@github\.com:|\b)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?(?=[\s/#?)\]>,.;:'"`]|$)/g;
+  // Dots belong to names (0xsequence/sequence.js); one only ends a name at the end of a sentence
+  // ("see org/repo."). A match never starts inside another token (".js/pull" in a URL).
+  const re = /(?:https?:\/\/github\.com\/|git@github\.com:|(?<![\w.\/@:-]))([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?(?=[\s/#?)\]>,;:'"`]|\.(?:[\s)\]>,;:'"`]|$)|$)/g;
   for (const m of String(text ?? "").matchAll(re)) {
     if (/^\.+$/.test(m[1]) || /^\.+$/.test(m[2])) continue;
     const repo = { org: m[1], name: m[2], slug: `${m[1]}/${m[2]}` };

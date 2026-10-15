@@ -24,6 +24,14 @@ describe("exact commands", () => {
 });
 
 describe("repositories", () => {
+  it("keeps dots in repository names; only a sentence's final dot ends one (PEN-1375)", () => {
+    const slugs = (t) => mentionedRepos(t).map((r) => r.slug);
+    assert.deepEqual(slugs("Tests on 0xsequence/sequence.js fail. Sample PR: https://github.com/0xsequence/sequence.js/pull/1030"), ["0xsequence/sequence.js"]);
+    assert.deepEqual(slugs("(0xsequence/sequence.js)"), ["0xsequence/sequence.js"]);
+    assert.deepEqual(slugs("see 0xPolygon/agglayer. Then 0xsequence/sequence.js."), ["0xPolygon/agglayer", "0xsequence/sequence.js"]);
+    assert.deepEqual(slugs("git@github.com:agglayer/agglayer.git"), ["agglayer/agglayer"]);
+  });
+
   it("normalizes slugs, URLs and ssh remotes", () => {
     assert.equal(normalizeRepo("https://github.com/0xPolygon/example-api/pull/12").slug, "0xPolygon/example-api");
     assert.equal(normalizeRepo("git@github.com:agglayer/agglayer.git").slug, "agglayer/agglayer");
