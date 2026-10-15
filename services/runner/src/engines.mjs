@@ -36,15 +36,34 @@ function codexSandbox(cfg, worktree, stateRoots, argv) {
 // are off entirely.
 const CLAUDE_TOOLS = "Bash,Read,Edit,Write,NotebookEdit,Task,TaskStop,WebFetch,WebSearch";
 
+/**
+ * Primer, read-only, for every engine (D-40): primer-mcp's /mcp/read on loopback. The bearer token
+ * goes in through the environment (PRIMER_MCP_TOKEN), never on the command line. Skipped until
+ * Primer is set up.
+ */
+function primer(cfg) {
+  if (!cfg.primerMcpUrl || !cfg.primerTokenFile || !existsSync(cfg.primerTokenFile)) return undefined;
+  return { url: cfg.primerMcpUrl, token: readFileSync(cfg.primerTokenFile, "utf8").trim() };
+}
+
 /** Command line for one engine run. Codex sandboxes its own tool calls; opencode and Claude Code run inside `codex sandbox`. */
 export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile }) {
+  const p = primer(cfg);
+  const primerEnv = p ? { PRIMER_MCP_TOKEN: p.token } : {};
   if (engine.kind === "codex") {
     const base = sessionId ? ["codex", "exec", "resume", sessionId] : ["codex", "exec"];
     const args = [...base, "--json", "-o", lastMessageFile, ...sandboxConfig(cfg, worktree)];
+    if (p) {
+      args.push(
+        "-c", `mcp_servers.primer.url=${JSON.stringify(p.url)}`,
+        "-c", 'mcp_servers.primer.bearer_token_env_var="PRIMER_MCP_TOKEN"',
+        "-c", 'mcp_servers.primer.default_tools_approval_mode="approve"',
+      );
+    }
     if (engine.model) args.push("-m", engine.model);
     if (engine.effort) args.push("-c", `model_reasoning_effort="${engine.effort}"`);
     args.push("-");
-    return { argv: args, env: {} };
+    return { argv: args, env: primerEnv };
   }
   if (engine.kind === "openrouter") {
     const key = readFileSync(cfg.openrouterKeyFile, "utf8").trim();
@@ -55,6 +74,7 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
     return {
       argv: codexSandbox(cfg, worktree, stateRoots, opencode),
       env: {
+        ...primerEnv,
         OPENROUTER_API_KEY: key,
         // Non-interactive: opencode must not stop to ask for permission, because an unanswered prompt
         // is auto-rejected and ends the run. Reading outside the worktree (reference repos) is
@@ -63,6 +83,7 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
           permission: { edit: "allow", bash: "allow", webfetch: "allow", external_directory: "allow", doom_loop: "allow" },
           autoupdate: false,
           share: "disabled",
+          ...(p ? { mcp: { primer: { type: "remote", url: p.url, headers: { Authorization: "Bearer {env:PRIMER_MCP_TOKEN}" }, oauth: false, enabled: true } } } : {}),
         }),
       },
       promptAsArg: true,
@@ -74,12 +95,13 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
     mkdirSync(cfg.claudeConfigDir, { recursive: true, mode: 0o700 });
     // Headless, no prompts (the codex sandbox is the write boundary), and nothing from your own
     // Claude setup: a runner-owned config dir, no settings files (yours or the repo's: no hooks),
-    // no MCP servers and no claude.ai connectors.
+    // no MCP servers but Primer's read-only endpoint, and no claude.ai connectors.
+    const mcpServers = p ? { primer: { type: "http", url: p.url, headers: { Authorization: "Bearer ${PRIMER_MCP_TOKEN}" } } } : {};
     const claude = [
       "claude", "-p", "--output-format", "stream-json", "--verbose",
       "--permission-mode", "bypassPermissions",
       "--setting-sources", "",
-      "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+      "--strict-mcp-config", "--mcp-config", JSON.stringify({ mcpServers }),
       "--tools", CLAUDE_TOOLS,
     ];
     if (engine.model) claude.push("--model", engine.model);
@@ -88,6 +110,7 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
     return {
       argv: codexSandbox(cfg, worktree, [cfg.claudeConfigDir], claude),
       env: {
+        ...primerEnv,
         CLAUDE_CODE_OAUTH_TOKEN: token,
         CLAUDE_CONFIG_DIR: cfg.claudeConfigDir,
         ENABLE_CLAUDEAI_MCP_SERVERS: "false",

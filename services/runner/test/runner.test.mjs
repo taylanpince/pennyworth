@@ -90,6 +90,26 @@ describe("engines, modes and shells", () => {
     assert.throws(() => buildCommand({ cfg: { ...c, claudeTokenFile: join(dir, "missing") }, engine: { kind: "claude" }, worktree: "/w" }), /claude setup-token/);
   });
 
+  it("gives every engine Primer's read-only endpoint, with the token only in the environment", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pw-primer-"));
+    for (const [f, v] of [["claude", "tok"], ["or", "ork"], ["primer", "ptok\n"]]) writeFileSync(join(dir, f), v);
+    const url = "http://127.0.0.1:3123/mcp/read";
+    const c = { ...cfg, claudeTokenFile: join(dir, "claude"), claudeConfigDir: join(dir, "home"), openrouterKeyFile: join(dir, "or"), primerMcpUrl: url, primerTokenFile: join(dir, "primer"), sandbox: { extra_writable_roots: [] } };
+    for (const kind of ["codex", "claude", "openrouter"]) {
+      const { argv, env } = buildCommand({ cfg: c, engine: { kind, model: "m" }, worktree: "/w", lastMessageFile: "/x" });
+      assert.equal(env.PRIMER_MCP_TOKEN, "ptok", kind);
+      assert.ok(!argv.some((a) => a.includes("ptok")), `${kind}: token on the command line`);
+      const where = kind === "openrouter" ? env.OPENCODE_CONFIG_CONTENT : argv.join(" ");
+      assert.ok(where.includes(url), kind);
+    }
+    const claude = buildCommand({ cfg: c, engine: { kind: "claude" }, worktree: "/w" }).argv;
+    assert.deepEqual(Object.keys(JSON.parse(claude[claude.indexOf("--mcp-config") + 1]).mcpServers), ["primer"]);
+    // Not set up yet: no Primer, and the job still runs.
+    const none = buildCommand({ cfg: { ...c, primerTokenFile: join(dir, "missing") }, engine: { kind: "claude" }, worktree: "/w" });
+    assert.equal(none.argv[none.argv.indexOf("--mcp-config") + 1], '{"mcpServers":{}}');
+    assert.equal(none.env.PRIMER_MCP_TOKEN, undefined);
+  });
+
   it("modes default to investigate", () => {
     assert.equal(resolveMode({}), "investigate");
     assert.equal(resolveMode({ mode: "fix" }), "implement");

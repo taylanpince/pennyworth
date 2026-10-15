@@ -39,7 +39,7 @@ export function firstPrompt({ user, task, repo, worktree, branch, base, mode, sh
 ## Workspace
 
 - Repository: ${repo.slug} (GitHub). Working copy: ${worktree} (a git worktree on branch ${branch}, based on origin/${base}; all remote branches are fetched).
-${references.map((r) => `- Reference: ${r.slug}, checked out read-only at ${r.path} (current default branch). Read it for context; don't modify it.\n`).join("")}- Tools: git, gh (read-only), and the ${shells.join(", ")} devshell(s). Your usual MCP servers are available.
+${references.map((r) => `- Reference: ${r.slug}, checked out read-only at ${r.path} (current default branch). Read it for context; don't modify it.\n`).join("")}- Tools: git, gh (read-only), and the ${shells.join(", ")} devshell(s). Primer documents (links to the organization's Primer host, which redirect to a login in a browser or WebFetch) are readable with the primer MCP tools: \`primer_resolve_url\` for a link, then \`primer_get_document\`.
 - Mode: **${mode}**. ${
     mode === "implement"
       ? "Make the requested change, keep it focused, add or update tests where sensible, and run the relevant tests."

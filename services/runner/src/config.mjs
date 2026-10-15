@@ -42,6 +42,9 @@ export function loadConfig() {
     openrouterKeyFile: expand(cfg.engines?.openrouter?.key_file ?? join(secrets, "openrouter_key")),
     claudeTokenFile: expand(cfg.engines?.claude?.token_file ?? join(secrets, "claude_oauth_token")),
     claudeConfigDir: expand(cfg.engines?.claude?.config_dir ?? join(cfg.state_dir ?? "~/.local/state/pennyworth-runner", "claude")),
+    // Primer for every Engineer job, read-only (D-40): primer-mcp's loopback port.
+    primerMcpUrl: env.PRIMER_RUNNER_URL ?? cfg.primer?.url ?? "http://127.0.0.1:3123/mcp/read",
+    primerTokenFile: join(secrets, "primer_mcp_token"),
     workDir: expand(cfg.work_dir ?? "~/pennyworth"),
     stateDir: expand(cfg.state_dir ?? "~/.local/state/pennyworth-runner"),
     devshells: { ...cfg.devshells, flake: expand(cfg.devshells.flake) },

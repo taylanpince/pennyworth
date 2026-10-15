@@ -77,6 +77,8 @@ p_health="$(dc exec -T paperclip node -e "fetch('http://primer-mcp:8084/healthz'
 if echo "$p_health" | grep -q '"ok":true'; then
   ptoken="$(cat "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/primer_mcp_token" 2>/dev/null)"
   check "primer (whoami)" sh -c "docker compose --env-file '$env_file' exec -T paperclip node /tmp/mcp-call.mjs http://primer-mcp:8084/mcp primer_whoami '{}' '$ptoken' >/dev/null"
+  # The Engineer jobs' read-only endpoint on loopback (D-40).
+  check "primer (runner, read-only)" sh -c "curl -fsS -X POST http://127.0.0.1:3123/mcp/read -H 'Authorization: Bearer $ptoken' -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}' | grep -q primer_get_document"
 else
   printf '  skip  primer (not connected: %s)\n' "$(echo "$p_health" | cut -c1-80)"
 fi

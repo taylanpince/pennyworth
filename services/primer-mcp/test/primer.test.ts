@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { allowedTools, DEFAULT_ALLOWLIST, isAllowed, PUBLISH_TOOLS, READ_TOOLS } from "../src/policy.js";
+import { allowedTools, DEFAULT_ALLOWLIST, isAllowed, PUBLISH_TOOLS, READ_TOOLS, readOnly } from "../src/policy.js";
 import { parseTokenResponse, TokenStore } from "../src/tokens.js";
 
 const tool = (name: string) => ({ name, inputSchema: { type: "object" as const }, annotations: { readOnlyHint: false, openWorldHint: true } });
@@ -19,6 +19,13 @@ describe("primer-mcp policy", () => {
       expect(t.annotations?.openWorldHint).toBe(false);
       expect(t.annotations?.destructiveHint).toBe(false);
     }
+  });
+
+  it("the read-only endpoint drops publishing", () => {
+    const ro = readOnly(new Set(DEFAULT_ALLOWLIST));
+    expect([...ro]).toEqual(READ_TOOLS);
+    for (const n of PUBLISH_TOOLS) expect(isAllowed(n, ro)).toBe(false);
+    expect(allowedTools(upstreamNames.map(tool), ro).every((t) => t.annotations?.readOnlyHint)).toBe(true);
   });
 
   it("never allows deleting, sharing or page events, even if allowlisted", () => {

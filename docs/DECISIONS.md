@@ -411,3 +411,11 @@ Pennyworth reads work email, Slack, calendars and documents. The user cleared ru
   - **What:** no private sources (email, DMs, Telegram, private Slack) unless the user asked for that content. Comments can't be edited or deleted from Pennyworth; issues can't be opened, closed, labelled or assigned, and pull requests can't be reviewed or merged.
 - **Record:** github-mcp logs each comment (repository, number, comment ID; no content), and the Assistant comments the link on the task. Recurring runs (D-25) never post.
 - **Token:** `scripts/github-auth.sh` copies `gh auth token` into `$PENNYWORTH_SECRETS_DIR/github_token`, rewritten in place; github-mcp reads it on every call, so re-running the script after `gh auth login` needs no restart. `scripts/healthcheck.sh` checks it with `github_whoami`.
+
+## D-40: Primer for the Engineer, read-only
+
+- **Problem:** PEN-1337 linked the spec for the change in Primer. The Claude Code job couldn't read it: Engineer jobs had no MCP servers, and WebFetch on a Primer link lands on the Okta login. The report then repeated the organization's Claude instructions about connecting Glean, which don't apply here.
+- **Decision:** every Engineer job, on every engine (Codex, Claude Code, OpenRouter/opencode), gets one MCP server: primer-mcp's `/mcp/read`, published on `127.0.0.1:3123` only. It is the same proxy and token as the Assistant's, with the allowlist cut down to `READ_TOOLS`: publishing is neither listed nor callable there.
+- **Why not a pre-fetch in the runner:** simpler, and the job decides which documents and versions it needs.
+- **Wiring:** `services/runner/src/engines.mjs` adds the server per engine (`-c mcp_servers.primer.*` for Codex, `--mcp-config` for Claude Code, `mcp` in `OPENCODE_CONFIG_CONTENT`). The bearer token (`primer_mcp_token`) goes in as `PRIMER_MCP_TOKEN` in the environment, never on the command line. If the token file is missing, jobs run without Primer. `scripts/healthcheck.sh` checks the endpoint.
+- **Boundary:** this is no new access in practice. The jobs already run as the user and can read `~/.config/pennyworth`; the read-only endpoint keeps the tools the job sees to reads. No other MCP server goes to Engineer jobs.

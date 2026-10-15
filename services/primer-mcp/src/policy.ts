@@ -19,6 +19,11 @@ export const PUBLISH_TOOLS = ["primer_create_document", "primer_add_version"];
 /** Tools exposed by default. Anything not listed is hidden and refused. */
 export const DEFAULT_ALLOWLIST = [...READ_TOOLS, ...PUBLISH_TOOLS];
 
+/** The allowlist without publishing: what /mcp/read serves to the runner's Engineer jobs (D-40). */
+export function readOnly(allowlist: Set<string>): Set<string> {
+  return new Set([...allowlist].filter((n) => READ_TOOLS.includes(n)));
+}
+
 // Defense in depth: even if an operator adds one of these to the allowlist, it is never exposed.
 // Events reach other people's open pages; sharing and deletion are the user's to do.
 const NEVER = /(delete|remove|share|visibility|collaborator|permission|invite|send_events|token)/i;

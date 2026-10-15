@@ -217,6 +217,9 @@ services:
     secrets:
       - primer_mcp_token
     dns: [1.1.1.1, 8.8.8.8]   # see paperclip
+    ports:
+      # Loopback only, for the runner's Engineer jobs on the host: /mcp/read, bearer token (D-40).
+      - "127.0.0.1:3123:8084"
     networks:
       - backplane
       - egress

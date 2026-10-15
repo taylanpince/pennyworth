@@ -18,7 +18,8 @@ host (NixOS, user taylan)
     ├── google-workspace-mcp read-only Calendar/Drive/Docs/Gmail, multi-account; sign-in state and board reconnect (D-36)
     ├── slack-mcp            read-only proxy to mcp.slack.com (allowlisted read tools)
     ├── telegram-mcp         the user's own Telegram session, reads only by a request guard; live updates + sweep; board sign-in (D-37)
-    ├── primer-mcp           proxy to the org's Primer: read, plus publish documents/versions for the Assistant (D-31)
+    ├── primer-mcp           proxy to the org's Primer: read, plus publish documents/versions for the Assistant (D-31);
+    │                        reads only on 127.0.0.1:3123/mcp/read for the runner's Engineer jobs (D-40)
     ├── glean-mcp            proxy to the org's Glean: read-only search for the Assistant; board sign-in (D-38)
     ├── github-mcp           GitHub issues/PRs with the user's gh token: read, comment in GITHUB_COMMENT_ORGS when asked (D-39)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
@@ -158,6 +159,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Repositories outside `allowed_orgs` are read-only (D-35).** Public ones are candidates once `gh` confirms them (bare `a/b` tokens such as "DA/L1" aren't repos); implement, push and pr there are refused in code with a message saying why. Before this, they were silently dropped from the intake's candidates, and it asked "which repository?" forever (PEN-875).
 - **Sessions are engine-specific.** A Codex thread ID can't be resumed by opencode (`ses_…` IDs) or Claude Code; switching engines starts fresh with the task's earlier requests as context.
 - **Claude Code must not inherit the user's Claude setup.** By default `claude -p` loads every MCP server, plugin, hook and claude.ai connector (Slack send, Calendar writes, GitHub MCP pushes…). The runner uses its own `CLAUDE_CONFIG_DIR`, a `setup-token` OAuth token, `--setting-sources ""`, `--strict-mcp-config` with no servers, `ENABLE_CLAUDEAI_MCP_SERVERS=false` and a `--tools` allowlist. Don't point it at `~/.claude`: writable hooks or settings there would run unsandboxed in the user's own sessions.
+- **Primer is the one MCP server every engine gets (D-40),** read-only through primer-mcp's loopback `/mcp/read`. Primer links redirect to Okta for WebFetch, so without it a job can't read a linked spec. The bearer token goes in as `PRIMER_MCP_TOKEN` in the environment, never on the command line. Don't add other servers to Engineer jobs.
 - **`claude --mcp-config` is variadic** and swallows a trailing prompt argument; the runner sends the prompt on stdin.
 
 ### Telegram

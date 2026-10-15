@@ -51,7 +51,11 @@ for c in $containers; do
         && pass "telegram-mcp: session and api.json are 0600" || fail "telegram-mcp: session or api.json is readable by others"
       ;;
     *primer-mcp*)
-      [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "primer-mcp: no published ports" || fail "primer-mcp publishes ports"
+      # Loopback only, for the runner's Engineer jobs (D-40); bearer token required.
+      [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = '{"8084/tcp":[{"HostIp":"127.0.0.1","HostPort":"3123"}]}' ] \
+        && pass "primer-mcp: published on 127.0.0.1:3123 only" || fail "primer-mcp ports are not loopback 3123 only"
+      [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3123/mcp/read)" = "401" ] \
+        && pass "primer-mcp: loopback endpoint requires the token" || fail "primer-mcp: loopback endpoint answers without the token"
       [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
         && pass "primer-mcp: only its own token directory mounted" || fail "primer-mcp has unexpected mounts: $mounts"
       ;;

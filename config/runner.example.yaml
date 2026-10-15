@@ -29,6 +29,10 @@ engines:
     # Runner-owned Claude Code home: none of your plugins, hooks, MCP servers or claude.ai connectors.
     config_dir: ~/.local/state/pennyworth-runner/claude
 
+# Primer for every engine, read-only (D-40). Token: $PENNYWORTH_SECRETS_DIR/primer_mcp_token.
+primer:
+  url: http://127.0.0.1:3123/mcp/read
+
 # Reads plain-language requests (target repo, reference repos, mode, model) with a short Codex call.
 intake:
   model: ""                           # empty = your Codex default

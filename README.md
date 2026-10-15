@@ -244,7 +244,7 @@ Publishing takes the exact word, as a comment on its own:
 
 Agents can't push or write to GitHub themselves: `gh` is wrapped read-only, pushes are disabled in the runner's clones, a pre-push hook and an ssh wrapper both refuse them, and after each run the runner checks that nothing appeared on GitHub. Only *your* comments are instructions.
 
-Engine credentials live in `~/.config/pennyworth/` (0600): `openrouter_key` for OpenRouter, and `claude_oauth_token` from `claude setup-token` for Claude Code. Claude Code runs in a runner-owned home with no settings, MCP servers, plugins or connectors, a fixed tool allowlist, and `codex sandbox` around the whole process.
+Engine credentials live in `~/.config/pennyworth/` (0600): `openrouter_key` for OpenRouter, and `claude_oauth_token` from `claude setup-token` for Claude Code. Claude Code runs in a runner-owned home with no settings, plugins or connectors, no MCP servers but read-only Primer, a fixed tool allowlist, and `codex sandbox` around the whole process.
 
 ## Slack
 
@@ -295,6 +295,8 @@ node scripts/paperclip-setup.mjs   # gives the Assistant the primer server
 ```
 
 The `primer-mcp` sidecar holds the token pair (Primer rotates the refresh token on every use) and exposes only reads plus `primer_create_document` and `primer_add_version`. Deleting, sharing, changing visibility and page events are never listed ([D-31](docs/DECISIONS.md)). New documents are visible to your whole organization, as with any Primer document. Change that in Primer if you need to.
+
+Engineer jobs read Primer too, every engine, through the same sidecar's read-only endpoint on `127.0.0.1:3123` ([D-40](docs/DECISIONS.md)). They can't publish. Nothing to set up beyond the sign-in above; restart the runner after it.
 
 ## Google
 
