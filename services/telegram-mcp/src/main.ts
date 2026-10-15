@@ -132,8 +132,8 @@ async function sweep() {
   const started = Date.now();
   try {
     const live = s.status().live_since_scan;
-    const raw = reader?.rawUpdates ?? 0;
-    if (reader) reader.rawUpdates = 0;
+    const raw = Object.fromEntries(reader?.rawUpdates ?? []);
+    reader?.rawUpdates.clear();
     await s.sweep();
     const st = s.status();
     log.info({ ms: Date.now() - started, chats: s.chats().length, raw_updates: raw, live_messages: live, caught_up: st.caught_up_last_scan, errors: st.errors.length }, "Telegram sweep finished");

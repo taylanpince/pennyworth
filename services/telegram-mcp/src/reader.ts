@@ -26,8 +26,8 @@ export function newClient(session: string, api: ApiCredentials, allowed: (classN
     langCode: "en",
     systemLangCode: "en",
   });
-  // GramJS logs at info by default, request by request.
-  client.setLogLevel(LogLevel.ERROR);
+  // GramJS logs at info by default, request by request. TELEGRAM_LIBRARY_LOG=debug for diagnosis only.
+  client.setLogLevel(process.env.TELEGRAM_LIBRARY_LOG === "debug" ? LogLevel.DEBUG : LogLevel.ERROR);
   return guard(client, allowed, onRefused);
 }
 
@@ -86,7 +86,7 @@ export class TelegramReader implements Source {
   private account?: Account;
   private peers = new Map<string, Api.TypeInputPeer>();
   /** Every update Telegram pushed, before any filtering: tells "nothing pushed" from "pushed but dropped". */
-  rawUpdates = 0;
+  rawUpdates = new Map<string, number>(); // by update class name, no content
 
   constructor(readonly client: TelegramClient) {}
 
@@ -185,7 +185,12 @@ export class TelegramReader implements Source {
   }
 
   onMessage(handler: (m: Message) => void): void {
-    this.client.addEventHandler(() => void this.rawUpdates++);
+    this.client.addEventHandler((u: { className?: string; updates?: { className?: string }[]; update?: { className?: string } }) => {
+      // Containers (Updates, UpdateShort) count by what they carry.
+      // GramJS's own connection-state events (after every ping) have no class name: not Telegram's.
+      const names = u.updates?.map((x) => x.className) ?? (u.update ? [u.update.className] : [u.className]);
+      for (const n of names) if (n) this.rawUpdates.set(n, (this.rawUpdates.get(n) ?? 0) + 1);
+    });
     this.client.addEventHandler((e: NewMessageEvent) => {
       const m = toMessage(e.message);
       if (m) handler(m);
