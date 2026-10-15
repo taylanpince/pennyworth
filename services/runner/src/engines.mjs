@@ -148,6 +148,11 @@ export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, log
     ...jobEnv,
   };
   delete agentEnv.SSH_AUTH_SOCK;
+  // Never a prompt on the user's desktop: without credentials, git over https and ssh would fall back
+  // to the session's askpass dialog (seahorse) and pop it up for every private Go module or repo.
+  delete agentEnv.SSH_ASKPASS;
+  agentEnv.SSH_ASKPASS_REQUIRE = "never";
+  agentEnv.GIT_ASKPASS = "false";
   if (engine.kind === "claude") delete agentEnv.ANTHROPIC_API_KEY; // the subscription token, never an API key
 
   return new Promise((resolve) => {

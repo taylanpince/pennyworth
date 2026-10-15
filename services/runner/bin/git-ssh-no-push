@@ -6,4 +6,5 @@ for a in "$@"; do
     *git-receive-pack*) echo "push blocked: Pennyworth agents cannot push. Comment \"push\" on the task to publish the branch." >&2; exit 1 ;;
   esac
 done
-exec ssh "$@"
+# BatchMode: never ask for a passphrase or password (no askpass dialogs on the desktop).
+exec ssh -o BatchMode=yes "$@"
