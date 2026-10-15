@@ -10,6 +10,7 @@ import { BadRequest, CreateSchema, UpdateSchema, assignees, buildBoard, commentV
 import { inNetworks } from "./config.js";
 import { GoogleAuthFailed, loopbackPort, type GoogleAuth } from "./google.js";
 import { Paperclip, PaperclipError, type Issue } from "./paperclip.js";
+import { TelegramAuthFailed, type TelegramAuth } from "./telegram.js";
 import { addDays, nextWorkday, type Weekday } from "./recurrence.js";
 import { BUCKETS, isBucket, localDate, type Store } from "./store.js";
 
@@ -34,6 +35,8 @@ export interface AppOptions {
   activity?: { runner?: RunnerReport };
   /** Google sign-in state and re-consent (D-36); no banner and no reconnect without it. */
   google?: GoogleAuth;
+  /** Telegram sign-in state and sign-in (D-37); no banner and no sign-in without it. */
+  telegram?: TelegramAuth;
 }
 
 const SESSION_COOKIE = "pw_session";
@@ -249,6 +252,29 @@ export function createApp(opts: AppOptions): Server {
         return { ok: true };
       },
     },
+    // Signing in to Telegram (D-37): phone, code, then 2FA password. On the laptop only, like Google's
+    // Reconnect: what's typed here signs in to the account, so never from a phone on the LAN.
+    ...(["start", "code", "password"] as const).map((step) => ({
+      method: "POST",
+      path: new RegExp(`^/api/telegram/${step}$`),
+      localOnly: true,
+      handle: async (_m: RegExpMatchArray, body: unknown, req: IncomingMessage) => {
+        if (!opts.telegram) throw new HttpError(404, "Telegram sign-in isn't set up on the board (no telegram_auth_token)");
+        if (!loopbackPort(req.headers.host)) throw new HttpError(403, "sign in to Telegram from the board on your computer (http://127.0.0.1:3120)");
+        try {
+          if (step === "start") return await opts.telegram.start(parse(z.object({ phone: z.string().min(6).max(30) }).strict(), body).phone);
+          if (step === "code") {
+            const a = parse(z.object({ login_id: z.string().max(64), code: z.string().min(4).max(10) }).strict(), body);
+            return await opts.telegram.code(a.login_id, a.code);
+          }
+          const a = parse(z.object({ login_id: z.string().max(64), password: z.string().min(1).max(256) }).strict(), body);
+          return await opts.telegram.password(a.login_id, a.password);
+        } catch (err) {
+          if (err instanceof TelegramAuthFailed) throw new HttpError(400, err.message);
+          throw err;
+        }
+      },
+    })),
     {
       method: "POST",
       path: /^\/api\/pair$/,
@@ -282,7 +308,7 @@ export function createApp(opts: AppOptions): Server {
         store.placeNew(open.map((i) => ({ id: i.id, createdAt: i.createdAt, status: i.status })));
         const recurring = new Map([...store.allRecurring()].map(([id, r]) => [id, { summary: recurringView(r, opts.timezone).summary, nextRun: r.nextRun, paused: r.paused }]));
         const board = buildBoard({ open, closed, placements: store.placements(), seen: store.allSeen(), schedules: store.schedules(), recurring, installedAt: store.meta("installed_at")!, assignees: ctx.assignees });
-        const [busy, google] = await Promise.all([working(ctx), opts.google?.status()]);
+        const [busy, google, telegram] = await Promise.all([working(ctx), opts.google?.status(), opts.telegram?.status()]);
         for (const card of [...Object.values(board.buckets).flat(), ...board.recurring]) {
           const w = busy.map.get(card.identifier);
           if (w) card.working = w;
@@ -293,7 +319,7 @@ export function createApp(opts: AppOptions): Server {
         // When Tomorrow next rolls into Today: the next calendar day, except before days off.
         const today = localDate(opts.timezone);
         const rollsOn = nextWorkday(today, opts.workdays ?? WORKWEEK);
-        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, rollsOn, rollsTomorrow: rollsOn === addDays(today, 1), buckets: board.buckets, agentsActive: busy.active, google: google ?? null };
+        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, rollsOn, rollsTomorrow: rollsOn === addDays(today, 1), buckets: board.buckets, agentsActive: busy.active, google: google ?? null, telegram: telegram ?? null };
       },
     },
     { method: "GET", path: /^\/api\/issues\/([^/]+)$/, handle: async (m) => issueView(decodeURIComponent(m[1]!)) },

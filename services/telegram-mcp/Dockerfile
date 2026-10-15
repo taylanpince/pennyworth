@@ -14,8 +14,8 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
 RUN mkdir -p /state && chown 1000:100 /state
-# Holds the Slack user token (rotating) in /state, mounted from the secrets dir.
+# Holds the Telegram session and the scout's cursors in /state, mounted from the secrets dir.
 USER 1000:1000
-EXPOSE 8082
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["node", "-e", "fetch('http://127.0.0.1:8082/healthz').then(r=>process.exit(r.status<600?0:1)).catch(()=>process.exit(1))"]
+EXPOSE 8083
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["node", "-e", "fetch('http://127.0.0.1:8083/healthz').then(r=>process.exit(r.status<600?0:1)).catch(()=>process.exit(1))"]
 CMD ["node", "dist/src/main.js"]

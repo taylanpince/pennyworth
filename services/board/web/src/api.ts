@@ -1,4 +1,4 @@
-import type { Agents, Board, Bucket, Cadence, IssueView, Models, RecurringView, Update } from "./types";
+import type { Agents, Board, Bucket, Cadence, IssueView, Models, RecurringView, TelegramStep, Update } from "./types";
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -53,4 +53,7 @@ export const api = {
   recurring: (ref: string, body: { action: "set"; cadence: Cadence; time: string; repos: string[] } | { action: "pause" | "resume" | "stop" | "run_now" }) =>
     call<{ recurring: RecurringView | null }>("POST", `/api/issues/${encodeURIComponent(ref)}/recurring`, body),
   models: (assignee: string) => call<Models>("GET", `/api/models/${assignee}`),
+  telegramStart: (phone: string) => call<TelegramStep>("POST", "/api/telegram/start", { phone }),
+  telegramCode: (login_id: string, code: string) => call<TelegramStep>("POST", "/api/telegram/code", { login_id, code }),
+  telegramPassword: (login_id: string, password: string) => call<TelegramStep>("POST", "/api/telegram/password", { login_id, password }),
 };

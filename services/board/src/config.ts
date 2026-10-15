@@ -34,6 +34,8 @@ export interface Config {
   internal?: { port: number; hosts: string[]; token: string };
   /** google-workspace-mcp's sign-in endpoints (D-36): off unless the token file exists. */
   google?: { url: string; token: string };
+  /** telegram-mcp's sign-in endpoints (D-37): off unless the token file exists. */
+  telegram?: { url: string; token: string };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -54,6 +56,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     lan: lanConfig(env),
     internal: internalConfig(env),
     google: googleConfig(env),
+    telegram: telegramConfig(env),
   };
 }
 
@@ -61,6 +64,12 @@ function googleConfig(env: NodeJS.ProcessEnv): Config["google"] {
   const file = env.GOOGLE_AUTH_TOKEN_FILE ?? "/run/secrets/google_auth_token";
   if (!existsSync(file)) return undefined;
   return { url: (env.GOOGLE_WORKSPACE_URL ?? "http://google-workspace-mcp:8081").replace(/\/+$/, ""), token: readFileSync(file, "utf8").trim() };
+}
+
+function telegramConfig(env: NodeJS.ProcessEnv): Config["telegram"] {
+  const file = env.TELEGRAM_AUTH_TOKEN_FILE ?? "/run/secrets/telegram_auth_token";
+  if (!existsSync(file)) return undefined;
+  return { url: (env.TELEGRAM_SERVICE_URL ?? "http://telegram-mcp:8083").replace(/\/+$/, ""), token: readFileSync(file, "utf8").trim() };
 }
 
 function internalConfig(env: NodeJS.ProcessEnv): Config["internal"] {

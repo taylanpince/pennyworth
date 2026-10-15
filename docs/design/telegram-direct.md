@@ -61,8 +61,8 @@ The session string grants full control of the account. Its scope can't be narrow
    - Signing in uses a **separate client** (`login.ts`) with its own allowlist: `auth.SendCode`, `auth.SignIn`, `account.GetPassword`, `auth.CheckPassword`, `users.GetUsers`, plus connection setup. It exists only for the minutes of a sign-in from the board (see 7), and the reading client never gets `auth.*`.
 2. **No raw API surface.** MCP tools are fixed functions with zod-validated arguments: a chat ref, message IDs, a query and limits. No tool takes a method name, a TL object or a free-form peer string that would trigger a username lookup (`contacts.ResolveUsername` isn't allowed anyway).
 3. **Credentials.**
-   - `api_id`/`api_hash` (the user's own, from my.telegram.org) are `$PENNYWORTH_SECRETS_DIR/telegram_api.json` (0600), a **read-only compose secret** in telegram-mcp only.
-   - The session string is `$PENNYWORTH_SECRETS_DIR/telegram/session` (0600). The `telegram/` directory stays the service's only writable mount (session plus `scout.json`), because a sign-in from the board writes the session. This is the same trade as `google_oauth.json` in D-36.
+   - `api_id`/`api_hash` (the user's own, from my.telegram.org) are `$PENNYWORTH_SECRETS_DIR/telegram/api.json` (0600). A compose secret would make `docker compose up` fail for anyone without Telegram set up.
+   - The session string is `$PENNYWORTH_SECRETS_DIR/telegram/session` (0600). The `telegram/` directory stays the service's only writable mount (api.json, session and `scout.json`), because a sign-in from the board writes the session. This is the same trade as `google_oauth.json` in D-36.
    - A sign-in that comes back as a different Telegram account than the one on file is refused. Starting over with another account means deleting the session file by hand.
    - The old OAuth `token.json` is deleted at cutover.
    - No extra encryption at rest: the key would sit on the same disk. The meaningful layer is the host's disk encryption plus the 0700/0600 permissions, the same as every other secret here.
@@ -99,12 +99,12 @@ The user's main chat list, without archived or muted chats (the user's choice: a
 | Broadcast channels | no (nobody can mention you there) | yes |
 | Bots, Saved Messages, service messages | no | no |
 
-`config/telegram.yaml` (personal, gitignored; `config/telegram.example.yaml` in git):
+In `.env` (a mounted `config/telegram.yaml` would turn into a directory when missing):
 
-```yaml
-exclude: []          # chat IDs or exact titles never scanned or read (e.g. family chats)
-include_muted: false
-include_archived: false
+```sh
+TELEGRAM_EXCLUDE="tg:-1001234;Family"   # chat refs or exact titles never scanned or read, ";"-separated
+TELEGRAM_INCLUDE_MUTED=false
+TELEGRAM_INCLUDE_ARCHIVED=false
 ```
 
 Archived and muted chats are out of scope for every tool, like excluded ones. Broadcast channels are the only chats tools can read but the scan skips. A chat that is unmuted or unarchived comes into scope at the next sweep, starting at its current top message.
@@ -160,7 +160,7 @@ The names, arguments and result shapes stay the same, so `config/paperclip.yaml`
 
 ## What changes elsewhere
 
-- **compose.yaml:** the telegram-mcp block adds the `telegram_api` and `telegram_auth_token` secrets (the board gets `telegram_auth_token` too), keeps `telegram/` as its one writable mount, and drops `TELEGRAM_MCP_URL`, `NAMES` and `HANDLES`. The HEALTHCHECK port in the Dockerfile is fixed (it says 8082, a copy from slack-mcp).
+- **compose.yaml:** the telegram-mcp block adds the `telegram_auth_token` secret (the board gets it too), keeps `telegram/` as its one writable mount, and drops `TELEGRAM_MCP_URL`, `NAMES` and `HANDLES`. The HEALTHCHECK port in the Dockerfile is fixed (it says 8082, a copy from slack-mcp).
 - **Removed:** `tokens.ts`, `auth.ts`, the upstream client in `main.ts`, `policy.ts` (replaced by `guard.ts` plus the fixed tool list), `scripts/telegram-auth.sh`, `scripts/telegram-chats.mjs`.
 - **Added:** the board's Telegram banner and sign-in form (`services/board/src/telegram.ts`, `TelegramBanner`), mirroring D-36. `scripts/bootstrap.sh` generates `telegram_auth_token`. The first sign-in uses the same form ("Connect"), so no login script is needed.
 - **Prompts:**
@@ -171,12 +171,12 @@ The names, arguments and result shapes stay the same, so `config/paperclip.yaml`
   - README's Telegram section is rewritten.
   - AGENTS.md: the Telegram gotchas (slow upstream, changing refs) become the new ones: the request guard, never mark read, the session is the whole account.
   - D-37 is added; D-27 and D-33 get "superseded in part by D-37".
-  - `.env.example` and `config/telegram.example.yaml`.
+  - `.env.example`.
 - **healthcheck:** the session is valid, `getMe` works, and the last sweep is under 10 minutes old.
 
 ## Cutover
 
-1. The user creates an app at my.telegram.org and saves `telegram_api.json`. Build, then sign in from the board.
+1. The user creates an app at my.telegram.org and saves `telegram/api.json`. Build, then sign in from the board.
 2. **No backfill on the first start** (`TELEGRAM_LOOKBACK_HOURS=0` for that start): every cursor starts at the current top message.
    - New refs mean new markers, so a backfill could recreate tasks for messages the old scout already handled.
    - Anything that arrived before the switch was already scanned by the old proxy.

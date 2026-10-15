@@ -1,6 +1,7 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { api } from "./api";
 import { BUCKETS, BUCKET_NAMES, type Assignee, type Board, type Bucket, type Card, type Working } from "./types";
 import { SOURCE_NAMES, STATUS_BADGE, agentShort, ago, elapsed, shortDate, shortName } from "./util";
 
@@ -206,6 +207,98 @@ export function GoogleBanner({ google, canReconnect }: { google: Board["google"]
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Telegram sign-in (D-37): a banner when Pennyworth isn't signed in yet or Telegram ended its session,
+ * with a small form (phone, the code Telegram sends, then the 2FA password if the account has one).
+ * Only on the laptop's loopback address, like Google's Reconnect.
+ */
+export function TelegramBanner({ telegram, canSignIn }: { telegram: Board["telegram"]; canSignIn: boolean }) {
+  const [form, setForm] = useState<{ step: "phone" | "code" | "password"; loginId?: string; viaApp?: boolean } | null>(null);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  if (!telegram?.configured || done || (telegram.state !== "missing" && telegram.state !== "ended")) {
+    return done ? (
+      <div className="alert ok" role="status">
+        <div className="alert-row">
+          <span>Telegram is connected as {done}. New mentions and DMs show up within minutes.</span>
+          <button className="btn" onClick={() => setDone(null)}>
+            OK
+          </button>
+        </div>
+      </div>
+    ) : null;
+  }
+  const ended = telegram.state === "ended";
+  const since = new Date(telegram.since);
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!form || !value.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r =
+        form.step === "phone" ? await api.telegramStart(value.trim()) : form.step === "code" ? await api.telegramCode(form.loginId!, value.trim()) : await api.telegramPassword(form.loginId!, value);
+      setValue("");
+      if (r.step === "done") {
+        setForm(null);
+        setDone(r.account.username ? `@${r.account.username}` : r.account.name);
+      } else setForm({ step: r.step, loginId: r.login_id, viaApp: r.step === "code" ? r.via_app : form.viaApp });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const prompts = {
+    phone: { label: "Phone number of your Telegram account", type: "tel", placeholder: "+34 600 000 000", auto: "tel" },
+    code: { label: form?.viaApp ? "The code Telegram just sent to your Telegram app" : "The code Telegram just sent you", type: "text", placeholder: "12345", auto: "one-time-code" },
+    password: { label: "Your Telegram 2FA password", type: "password", placeholder: "", auto: "current-password" },
+  };
+  const p = form && prompts[form.step];
+  return (
+    <div className="alert" role="alert">
+      <div className="alert-row">
+        <span>
+          {ended ? (
+            <>
+              Telegram ended Pennyworth's session on {since.toLocaleDateString(undefined, { weekday: "long" })} at{" "}
+              {since.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}. Telegram mentions, DMs and reads are paused.
+            </>
+          ) : (
+            <>Telegram isn't connected yet. Sign in once to get mentions and DMs as tasks.</>
+          )}
+        </span>
+        {!canSignIn ? (
+          <span className="alert-hint">Sign in from the board on your computer.</span>
+        ) : (
+          !form && (
+            <button className="btn" onClick={() => setForm({ step: "phone" })}>
+              {ended ? "Reconnect" : "Connect"}
+            </button>
+          )
+        )}
+      </div>
+      {form && p && (
+        <form className="alert-row" onSubmit={submit}>
+          <label className="alert-field">
+            <span>{p.label}</span>
+            <input autoFocus type={p.type} inputMode={form.step === "code" ? "numeric" : undefined} autoComplete={p.auto} placeholder={p.placeholder} value={value} onChange={(e) => setValue(e.target.value)} disabled={busy} />
+          </label>
+          <button className="btn primary" type="submit" disabled={busy || !value.trim()}>
+            {busy ? "…" : form.step === "password" ? "Sign in" : "Next"}
+          </button>
+          <button className="btn" type="button" onClick={() => (setForm(null), setValue(""), setError(null))} disabled={busy}>
+            Cancel
+          </button>
+          {error && <span className="alert-error">{error}</span>}
+        </form>
+      )}
     </div>
   );
 }

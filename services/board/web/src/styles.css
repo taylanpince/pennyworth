@@ -136,6 +136,11 @@ kbd {
 .alert .btn { background: var(--surface); color: var(--text); text-decoration: none; }
 .alert-hint { opacity: 0.8; }
 @media (prefers-color-scheme: dark) { .alert { background: #3d1518; color: #f5c2c2; } }
+.alert.ok { background: #d3f9d8; color: #1b4d24; }
+@media (prefers-color-scheme: dark) { .alert.ok { background: #13361b; color: #b2f2bb; } }
+.alert-field { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 200px; max-width: 360px; }
+.alert-field input { font: inherit; padding: 5px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text); }
+.alert-error { font-weight: 600; }
 
 /* ------------------------------------------------------------ columns */
 .columns {

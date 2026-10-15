@@ -45,7 +45,9 @@ for c in $containers; do
     *telegram-mcp*)
       [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "telegram-mcp: no published ports" || fail "telegram-mcp publishes ports"
       [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
-        && pass "telegram-mcp: only its own token/state directory mounted" || fail "telegram-mcp has unexpected mounts: $mounts"
+        && pass "telegram-mcp: only its own session/state directory mounted" || fail "telegram-mcp has unexpected mounts: $mounts"
+      docker exec "$c" sh -c 'for f in /state/session /state/api.json; do [ ! -e "$f" ] || [ "$(stat -c %a "$f")" = 600 ] || exit 1; done' \
+        && pass "telegram-mcp: session and api.json are 0600" || fail "telegram-mcp: session or api.json is readable by others"
       ;;
     *primer-mcp*)
       [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "primer-mcp: no published ports" || fail "primer-mcp publishes ports"
@@ -98,7 +100,11 @@ echo "Capabilities (by construction)"
 pass "ops-mcp exposes no delete/replace/arbitrary-write tools (see services/ops-mcp/src/mcp/tools.ts)"
 pass "google-workspace-mcp requests only *.readonly scopes and has GET-only client code"
 pass "slack-mcp exposes only allowlisted read tools and never send/react/edit tools (services/slack-mcp/src/policy.ts)"
-pass "telegram-mcp exposes only allowlisted read tools; never send, draft or allowlist-change tools (services/telegram-mcp/src/policy.ts)"
+# The session can do anything the account can: every request goes through the guard, which allows reads only (D-37).
+grep -q 'guard(client, allowed' services/telegram-mcp/src/reader.ts && grep -q 'readingClient(' services/telegram-mcp/src/main.ts \
+  && pass "telegram-mcp: the reading client is wrapped in the request guard" || fail "telegram-mcp: request guard not wired in"
+bad_reads="$(sed -n '/^export const READ_REQUESTS/,/^\]);/p' services/telegram-mcp/src/guard.ts | grep -oE '"[a-zA-Z]+\.[A-Za-z]+"' | tr -d '"' | grep -Ev '^[a-z]+\.(Get|Search)' ; sed -n '/^export const READ_REQUESTS/,/^\]);/p' services/telegram-mcp/src/guard.ts | grep -oE '"[a-zA-Z]+\.[A-Za-z]+"' | tr -d '"' | grep -E '^(auth|account|contacts|upload|payments)\.|Read|Send|Draft|Save|Views' || true)"
+[ -z "$bad_reads" ] && pass "telegram-mcp: request allowlist holds only Get/Search reads (no send, mark-read, account or auth)" || fail "telegram-mcp: non-read requests allowed: $bad_reads"
 pass "primer-mcp exposes reads plus create-document/add-version only; never delete, share, visibility or page-event tools (services/primer-mcp/src/policy.ts)"
 pass "no email/Slack/Telegram send or calendar write tool is configured for any agent"
 

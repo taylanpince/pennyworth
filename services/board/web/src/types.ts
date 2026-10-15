@@ -114,7 +114,20 @@ export interface Board {
   agentsActive: number;
   /** Google sign-in per account (D-36); null when the board can't ask. */
   google: { accounts: GoogleAccount[]; error?: string } | null;
+  /** Telegram sign-in (D-37); null when the board can't ask. */
+  telegram: TelegramStatus | null;
 }
+
+export interface TelegramStatus {
+  state: "missing" | "ok" | "ended" | "error";
+  /** Whether telegram/api.json exists: without it Telegram is simply not set up, and there's no banner. */
+  configured: boolean;
+  since: string;
+  detail?: string;
+  account?: { name: string; username: string | null };
+}
+
+export type TelegramStep = { step: "code" | "password"; login_id: string; via_app?: boolean } | { step: "done"; account: { name: string; username: string | null } };
 
 export interface GoogleAccount {
   email: string;

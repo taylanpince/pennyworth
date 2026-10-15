@@ -17,7 +17,7 @@ host (NixOS, user taylan)
     ├── ops-mcp              TypeScript: transcripts, matcher, vault writer, routing, review replies, tasks
     ├── google-workspace-mcp read-only Calendar/Drive/Docs/Gmail, multi-account; sign-in state and board reconnect (D-36)
     ├── slack-mcp            read-only proxy to mcp.slack.com (allowlisted read tools)
-    ├── telegram-mcp         read-only proxy to the org's Telegram MCP; background mention scan (D-27)
+    ├── telegram-mcp         the user's own Telegram session, reads only by a request guard; live updates + sweep; board sign-in (D-37)
     ├── primer-mcp           proxy to the org's Primer: read, plus publish documents/versions for the Assistant (D-31)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
                              :3121 on the LAN (pennyworth.local, paired devices from the home subnet only, D-23)
@@ -33,7 +33,7 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`:
 | Meeting Librarian | meeting memory |
 | Chief of Staff | daily brief |
 | Slack Scout | Slack items for the user |
-| Telegram Scout | Telegram mentions, replies and DMs for the user, from the proxy's prepared candidates |
+| Telegram Scout | Telegram mentions, replies and DMs for the user, from the candidates telegram-mcp picks |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
 | Assistant | research and drafts (Slack, Telegram, Google, Primer, notes, cached web), publishing to Primer when asked, acting on the user's replies (including scheduling a task or making it recurring), and running recurring tasks |
 | Engineer · Codex / · Claude / · OpenRouter | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20) |
@@ -158,11 +158,12 @@ scripts/verify-security.sh                         # also scans for secrets; run
 
 ### Telegram
 
-- **The upstream server is slow:** 5 to 30 seconds per call, and concurrent calls queue. Never put a Telegram scan on an agent's tool path; the proxy scans in the background and `telegram_mentions` only returns what's prepared (D-27). Probing it by hand while the proxy scans makes both slower.
-- **`chat_ref`s change** whenever the user edits the allowlist ("old refs stop working", and they then answer "access denied"). Cursors are dropped for refs that vanish, and follow-ups find a chat by title.
-- **Message IDs have gaps:** small groups and DMs share the account's ID counter. Read "the messages before" with `read_chat_history`, never by ID range. `read_chat_history` returns newest first, up to 50; `get_new_messages` returns oldest first, up to 100.
-- **Who is who:** messages carry only `display_name` (e.g. "Name | Company"), no sender IDs. Your own messages match `TELEGRAM_ME_NAMES` as a prefix.
-- **Content arrives wrapped** in `<untrusted-telegram-content>` tags, and people paste API keys into these chats. The scout prompt forbids copying credentials into tasks.
+- **The session is the whole account (D-37).** It could send, delete or log other devices out; only `services/telegram-mcp/src/guard.ts` stops that. Every GramJS request goes through `client.invoke`, which the guard replaces with a check against `READ_REQUESTS` (Get*/Search* reads only). Never call the GramJS sender directly, never add a request to that list without checking what it does, and never give the reading client `auth.*` (sign-in has its own short-lived client in `login.ts`). A refused request logs `refused a Telegram request that isn't a read` with its class name: that is a bug to fix in our code, not a list to extend.
+- **Reading must never mark anything read.** `messages.ReadHistory`, `channels.ReadHistory`, `messages.ReadMentions` and `account.UpdateStatus` are refused on purpose: the user's unread badges, mention counters and "online" status are theirs. GramJS helpers such as `markAsRead` exist; don't use them.
+- **Chat refs are `tg:<marked peer id>`** and stable. Tasks made before D-37 carry the organization MCP's old refs; follow-ups find those chats by title.
+- **Telegram's `mentioned` flag** covers @mentions, name links and replies to the user's messages. The scout checks the replied-to message to tell "reply" from "mention"; aliases (`TELEGRAM_ME_ALIASES`) catch plain-text names.
+- **Message IDs have gaps:** small groups and DMs share the account's ID counter. Read "the messages before" with `read_chat_history`, never by ID range. `read_chat_history` returns newest first, up to 50; `get_new_messages` returns the earliest after an ID, oldest first, up to 100.
+- **Content is wrapped** in `<untrusted-telegram-content>` tags by telegram-mcp, and people paste API keys into these chats. The scout prompt forbids copying credentials into tasks. Message text is never written to disk or logged.
 
 ### Slack
 

@@ -1,45 +1,22 @@
-// Deterministic part of the Telegram Scout: walks the allowlisted chats from a per-chat cursor
-// and picks the messages that may need the user (mentions by handle or name, replies to the
-// user's messages, DMs, and the user's own messages for commitments). The agent only judges.
-//
-// The upstream server is slow (seconds to tens of seconds per call), so scanning runs in the
-// background (refresh) and the agent's tool returns what is ready (candidates). The state file
-// holds cursors and message IDs only; message text lives in memory and is re-read after a restart.
+// Deterministic part of the Telegram Scout (D-37): picks the messages that may need the user
+// (mentions, replies to the user's messages, DMs, and the user's own messages for commitments) as
+// they arrive, and catches up from per-chat cursors with a sweep of the dialog list. The agent only
+// judges. The state file holds cursors and message IDs only; message text is read when asked for.
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-
-export interface Message {
-  chat_ref: string;
-  message_id: number;
-  timestamp: string | null;
-  text: string;
-  reply_to_message_id: number | null;
-  display_name: string | null;
-}
-
-export interface Chat {
-  chat_ref: string;
-  title: string;
-  type: string;
-}
-
-/** Calls an upstream Telegram MCP tool and returns its structured `result`. */
-export type Upstream = (tool: string, args: Record<string, unknown>) => Promise<unknown>;
-
-export interface Me {
-  /** Display-name prefixes of the user's own messages ("Dana Whitfield" matches "Dana Whitfield | Globex"). */
-  names: string[];
-  /** Telegram usernames without "@". */
-  handles: string[];
-  /** Words people use for the user in text ("dana"), matched as whole words. */
-  aliases: string[];
-}
+import type { Chat, Message, Source } from "./source.js";
 
 export type Kind = "mention" | "reply" | "dm" | "own";
 
+export interface Scope {
+  /** Chat refs (`tg:…`) or exact titles never scanned or read. */
+  exclude: string[];
+  include_muted: boolean;
+  include_archived: boolean;
+}
+
 interface ChatState {
-  cursor: number; // highest message ID scanned
-  floor: number; // lowest message ID scanned: below it, authorship is unknown
+  cursor: number; // highest message ID handled
   mine: number[]; // the user's message IDs seen (bounded)
 }
 
@@ -51,22 +28,29 @@ interface Pending {
 }
 
 export interface State {
+  version: 2;
   chats: Record<string, ChatState>;
   pending: Pending[];
 }
 
 const MINE_KEEP = 500;
 const MAX_HANDOUTS = 3; // a candidate the agent never acknowledges is dropped after this many runs
-const PAGE = 100; // get_new_messages page size (server cap)
-const MAX_PAGES = 10;
+const PAGE = 100;
+const MAX_PAGES = 10; // per chat per catch-up
 const CONTEXT_BEFORE = 5;
 const AFTER_KEEP = 30;
-const WINDOW_PAGES = 3; // pages read per chat to give its candidates context
-const MAX_LOOKUPS = 10; // single-message lookups (replied-to messages) per refresh
+const NEW_CHAT_MESSAGES = 50; // a chat that appears while running: its recent messages are scanned
+const PARALLEL_CHATS = 4;
 
-export function loadState(path: string): State {
-  if (!existsSync(path)) return { chats: {}, pending: [] };
-  return JSON.parse(readFileSync(path, "utf8")) as State;
+/**
+ * The state file. A version 1 file (the organization's MCP, D-27) has refs that no longer exist, so
+ * it is dropped, and the first sweep starts every chat at its current top message (no backfill).
+ */
+export function loadState(path: string): { state: State; fresh: boolean; migrated: boolean } {
+  if (!existsSync(path)) return { state: { version: 2, chats: {}, pending: [] }, fresh: true, migrated: false };
+  const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<State>;
+  if (raw.version !== 2) return { state: { version: 2, chats: {}, pending: [] }, fresh: false, migrated: true };
+  return { state: { version: 2, chats: raw.chats ?? {}, pending: raw.pending ?? [] }, fresh: false, migrated: false };
 }
 
 export function saveState(path: string, state: State): void {
@@ -78,264 +62,345 @@ export function saveState(path: string, state: State): void {
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-export function isMine(m: Pick<Message, "display_name">, me: Me): boolean {
-  const name = (m.display_name ?? "").trim().toLowerCase();
-  return me.names.some((n) => {
-    const p = n.trim().toLowerCase();
-    return p !== "" && (name === p || name.startsWith(`${p} `));
-  });
-}
-
-/** Mentions by @handle or by alias as a whole word, case-insensitive. */
-export function mentionsMe(text: string, me: Me): boolean {
-  const handles = me.handles.filter(Boolean).map((h) => `@${escape(h.replace(/^@/, ""))}(?![\\p{L}\\p{N}_])`);
-  const aliases = me.aliases.filter(Boolean).map((a) => `(?<![\\p{L}\\p{N}_@])${escape(a)}(?![\\p{L}\\p{N}_])`);
-  const parts = [...handles, ...aliases];
+/** Plain-text mentions by name ("taylan, can you…"), which Telegram doesn't flag. Whole words, case-insensitive. */
+export function mentionsAlias(text: string, aliases: string[]): boolean {
+  const parts = aliases.filter(Boolean).map((a) => `(?<![\\p{L}\\p{N}_@])${escape(a)}(?![\\p{L}\\p{N}_])`);
   return parts.length > 0 && new RegExp(parts.join("|"), "iu").test(text);
 }
 
-const isDm = (chat: Chat) => !["chat", "channel"].includes(chat.type);
-const asList = <T>(r: unknown) => (Array.isArray(r) ? (r as T[]) : []);
+/** Chats any tool may see: not excluded, and not muted or archived unless the scope says so. */
+export function inScope(chat: Chat, scope: Scope): boolean {
+  const title = chat.title.trim().toLowerCase();
+  if (scope.exclude.some((x) => x === chat.chat_ref || x.trim().toLowerCase() === title)) return false;
+  if (chat.muted && !scope.include_muted) return false;
+  if (chat.archived && !scope.include_archived) return false;
+  return true;
+}
+
+/** Chats the scan reads: broadcast channels can be read on request, but nobody mentions you there. */
+export const scanned = (chat: Chat) => chat.type !== "channel";
+
+/** Message text for agents: untrusted, and unable to close its own wrapper. */
+export const untrusted = (text: string) => `<untrusted-telegram-content>${text.replace(/untrusted-telegram-content/gi, "untrusted_telegram_content")}</untrusted-telegram-content>`;
+
 const key = (chat_ref: string, message_id: number) => `${chat_ref}:${message_id}`;
 const byId = (a: Message, b: Message) => a.message_id - b.message_id;
+const norm = (s: string) => s.trim().toLowerCase();
+
+export interface ScoutOptions {
+  aliases: string[];
+  scope: Scope;
+  statePath: string;
+  /** How far back a fresh install looks on its first sweep. */
+  lookbackHours?: number;
+  now?: () => number;
+  saveDelayMs?: number;
+}
 
 export class Scout {
   private state: State;
-  private views = new Map<string, ReturnType<Scout["view"]>>();
-  private chatList: Chat[] = [];
-  private refreshing?: Promise<void>;
-  private lastRefresh?: { at: number; errors: string[] };
+  private fresh: boolean;
+  private chatMap = new Map<string, Chat>(); // in scope
+  private known = new Set<string>(); // every dialog seen in the last sweep, in scope or not
+  private swept = false;
+  private queue: Promise<unknown> = Promise.resolve();
+  private lastSweep?: { at: number; errors: string[] };
+  private saveTimer?: NodeJS.Timeout;
+  private topicTitles = new Map<string, string>();
+  private readonly now: () => number;
 
   constructor(
-    private readonly upstream: Upstream,
-    private readonly me: Me,
-    private readonly statePath: string,
-    private readonly lookbackHours = 24,
-    private readonly now: () => number = Date.now,
+    private readonly source: Source,
+    private readonly opts: ScoutOptions,
   ) {
-    this.state = loadState(statePath);
+    const loaded = loadState(opts.statePath);
+    this.state = loaded.state;
+    this.fresh = loaded.fresh;
+    this.now = opts.now ?? Date.now;
   }
 
-  private save() {
-    saveState(this.statePath, this.state);
+  /** Runs `fn` after everything queued before it: events and sweeps never interleave. */
+  private serial<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(fn, fn);
+    this.queue = run.catch(() => undefined);
+    return run;
   }
 
-  /** Scan for new messages and prepare candidates. Concurrent callers share one refresh. */
-  refresh(): Promise<void> {
-    this.refreshing ??= this.doRefresh().finally(() => (this.refreshing = undefined));
-    return this.refreshing;
+  private save(now = false) {
+    if (now || !this.opts.saveDelayMs) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = undefined;
+      saveState(this.opts.statePath, this.state);
+      return;
+    }
+    this.saveTimer ??= setTimeout(() => {
+      this.saveTimer = undefined;
+      saveState(this.opts.statePath, this.state);
+    }, this.opts.saveDelayMs).unref();
   }
 
-  private async doRefresh(): Promise<void> {
+  flush() {
+    if (this.saveTimer) this.save(true);
+  }
+
+  /** In-scope chats, as of the last sweep. */
+  chats(): Chat[] {
+    return [...this.chatMap.values()];
+  }
+
+  /** A chat in scope by ref, or by title when the ref is unknown (old tasks, renamed groups). */
+  findChat(chat_ref?: string, title?: string): Chat | undefined {
+    if (chat_ref && this.chatMap.has(chat_ref)) return this.chatMap.get(chat_ref);
+    if (!title) return undefined;
+    const t = norm(title);
+    return this.chats().find((c) => norm(c.title) === t);
+  }
+
+  status() {
+    return { last_scan_at: this.lastSweep ? new Date(this.lastSweep.at).toISOString() : null, errors: this.lastSweep?.errors ?? [] };
+  }
+
+  /** Reloads the dialog list and catches every scanned chat up from its cursor. */
+  sweep(): Promise<void> {
+    return this.serial(() => this.doSweep());
+  }
+
+  /** A new message pushed by Telegram. */
+  handle(m: Message): Promise<void> {
+    return this.serial(async () => {
+      let chat = this.chatMap.get(m.chat_ref);
+      if (!chat && !this.known.has(m.chat_ref)) {
+        // A chat that didn't exist at the last sweep (a new DM, a new group): load it now.
+        await this.loadDialogs();
+        chat = this.chatMap.get(m.chat_ref);
+        if (chat && scanned(chat) && !this.state.chats[chat.chat_ref]) this.state.chats[chat.chat_ref] = { cursor: m.message_id - 1, mine: [] };
+      }
+      if (!chat || !scanned(chat)) return;
+      const cs = this.state.chats[chat.chat_ref];
+      if (!cs) return; // came into scope since the last sweep; the next sweep starts it
+      if (m.message_id <= cs.cursor) return;
+      await this.classify(chat, [m]);
+      this.save();
+    });
+  }
+
+  private async loadDialogs(): Promise<Chat[]> {
+    const all = await this.source.dialogs({ archived: this.opts.scope.include_archived });
+    this.known = new Set(all.map((c) => c.chat_ref));
+    this.chatMap = new Map(all.filter((c) => inScope(c, this.opts.scope)).map((c) => [c.chat_ref, c]));
+    return all;
+  }
+
+  private async doSweep(): Promise<void> {
     const errors: string[] = [];
-    const chats = asList<Chat>(await this.upstream("list_allowed_chats", {}));
-    this.chatList = chats;
-    const live = new Set(chats.map((c) => c.chat_ref));
-    // Refs change when the user edits the allowlist; old ones stop working.
-    for (const ref of Object.keys(this.state.chats)) if (!live.has(ref)) delete this.state.chats[ref];
-    this.state.pending = this.state.pending.filter((p) => live.has(p.chat_ref));
-
-    const lookups = { left: MAX_LOOKUPS };
-    const active = new Set<string>();
-    for (const chat of chats) {
-      try {
-        const msgs = await this.newMessages(chat);
-        if (msgs.length) active.add(chat.chat_ref);
-        await this.classify(chat, msgs, lookups);
-      } catch (err) {
-        errors.push(`${chat.title}: ${String((err as Error).message).slice(0, 200)}`);
-      }
+    const before = new Set(this.known);
+    const first = !this.swept;
+    await this.loadDialogs();
+    // Chats that left the scope (muted, archived, excluded, left) are forgotten; coming back starts at the top.
+    for (const ref of Object.keys(this.state.chats)) {
+      const c = this.chatMap.get(ref);
+      if (!c || !scanned(c)) delete this.state.chats[ref];
     }
-    this.save();
+    this.state.pending = this.state.pending.filter((p) => this.chatMap.has(p.chat_ref));
 
-    // Context for candidates in chats with new messages (what came after may have changed),
-    // and for candidates not prepared yet (new, or after a restart).
-    for (const chat of chats) {
-      const pending = this.state.pending.filter((p) => p.chat_ref === chat.chat_ref);
-      if (!pending.length || (!active.has(chat.chat_ref) && pending.every((p) => this.views.has(key(p.chat_ref, p.message_id))))) continue;
-      try {
-        await this.prepare(chat, pending, lookups);
-      } catch (err) {
-        errors.push(`${chat.title} (context): ${String((err as Error).message).slice(0, 200)}`);
-      }
+    const work: (() => Promise<void>)[] = [];
+    const titles: string[] = [];
+    for (const chat of this.chats().filter(scanned)) {
+      const cs = this.state.chats[chat.chat_ref];
+      if (!cs) {
+        // A fresh install looks back; a chat that appeared since the last sweep (a new DM) is read
+        // from its recent messages; anything else (the switch from D-27, unmuted) starts at the top.
+        if (first && this.fresh && (this.opts.lookbackHours ?? 0) > 0) work.push(() => this.startRecent(chat, (this.opts.lookbackHours ?? 0) * 3_600_000));
+        else if (!first && !before.has(chat.chat_ref)) work.push(() => this.startRecent(chat, 24 * 3_600_000));
+        else {
+          this.state.chats[chat.chat_ref] = { cursor: chat.top_message, mine: [] };
+          continue;
+        }
+      } else if (chat.top_message > cs.cursor) work.push(() => this.catchUp(chat));
+      else continue;
+      titles[work.length - 1] = chat.title;
     }
-    const keep = new Set(this.state.pending.map((p) => key(p.chat_ref, p.message_id)));
-    for (const k of this.views.keys()) if (!keep.has(k)) this.views.delete(k);
-    this.lastRefresh = { at: this.now(), errors };
+    await pool(work, PARALLEL_CHATS, (err, i) => errors.push(`${titles[i] ?? i}: ${String((err as Error).message).slice(0, 200)}`));
+    this.swept = true;
+    this.fresh = false;
+    this.save(true);
+    this.lastSweep = { at: this.now(), errors };
   }
 
-  /** New messages since the chat's cursor, oldest first. A chat seen for the first time starts lookbackHours back. */
-  private async newMessages(chat: Chat): Promise<Message[]> {
-    const cs = this.state.chats[chat.chat_ref];
-    if (!cs) {
-      const recent = asList<Message>(await this.upstream("read_chat_history", { chat_ref: chat.chat_ref, limit: 50 })).sort(byId);
-      const since = this.now() - this.lookbackHours * 3_600_000;
-      this.state.chats[chat.chat_ref] = {
-        cursor: recent.at(-1)?.message_id ?? 0,
-        floor: recent[0]?.message_id ?? 0,
-        mine: recent.filter((m) => isMine(m, this.me)).map((m) => m.message_id),
-      };
-      return recent.filter((m) => m.timestamp && Date.parse(m.timestamp) >= since);
-    }
-    const out: Message[] = [];
+  /** A chat seen for the first time: its recent messages, then live. */
+  private async startRecent(chat: Chat, windowMs: number) {
+    const recent = await this.source.before(chat.chat_ref, undefined, NEW_CHAT_MESSAGES);
+    const since = this.now() - windowMs;
+    this.state.chats[chat.chat_ref] = { cursor: 0, mine: recent.filter((m) => m.out).map((m) => m.message_id) };
+    await this.classify(
+      chat,
+      recent.filter((m) => m.timestamp && Date.parse(m.timestamp) >= since),
+    );
+    const cs = this.state.chats[chat.chat_ref]!;
+    cs.cursor = Math.max(cs.cursor, chat.top_message, ...recent.map((m) => m.message_id));
+  }
+
+  private async catchUp(chat: Chat) {
+    const cs = this.state.chats[chat.chat_ref]!;
     for (let page = 0; page < MAX_PAGES; page++) {
-      const msgs = asList<Message>(await this.upstream("get_new_messages", { chat_ref: chat.chat_ref, after_message_id: cs.cursor, limit: PAGE }));
-      out.push(...msgs);
-      if (msgs.length) cs.cursor = Math.max(cs.cursor, ...msgs.map((m) => m.message_id));
-      if (msgs.length < PAGE) break;
+      const msgs = await this.source.after(chat.chat_ref, cs.cursor, PAGE);
+      await this.classify(chat, msgs);
+      if (msgs.length < PAGE) return;
     }
-    return out.sort(byId);
+    // Too far behind: skip ahead rather than spend the sweep on one chat.
+    cs.cursor = Math.max(cs.cursor, chat.top_message);
   }
 
-  private async classify(chat: Chat, msgs: Message[], lookups: { left: number }) {
+  /** Adds candidates for new messages and advances the chat's cursor past them. */
+  private async classify(chat: Chat, msgs: Message[]) {
     const cs = this.state.chats[chat.chat_ref]!;
     const mine = new Set(cs.mine);
-    for (const m of msgs) if (isMine(m, this.me)) mine.add(m.message_id);
-    for (const m of msgs) {
+    const fresh = msgs.filter((m) => m.message_id > cs.cursor).sort(byId);
+    for (const m of fresh) if (m.out) mine.add(m.message_id);
+    for (const m of fresh) {
       const kinds: Kind[] = [];
-      if (isMine(m, this.me)) kinds.push("own");
-      else {
-        if (isDm(chat)) kinds.push("dm");
-        if (mentionsMe(m.text, this.me)) kinds.push("mention");
+      if (m.out) kinds.push("own");
+      else if (!m.sender_is_bot) {
+        if (chat.type === "dm") kinds.push("dm");
+        // Telegram flags both mentions and replies to the user's messages; the replied-to message tells them apart.
+        let replyToMine = false;
         const to = m.reply_to_message_id;
-        if (to && (mine.has(to) || (to < cs.floor && (await this.lookup(chat, to, lookups)).mine))) {
-          mine.add(to);
-          kinds.push("reply");
+        if (m.mentioned && to) {
+          if (mine.has(to)) replyToMine = true;
+          else {
+            const [target] = await this.source.byIds(chat.chat_ref, [to]).catch(() => [] as Message[]);
+            replyToMine = Boolean(target?.out);
+            if (replyToMine) mine.add(to);
+          }
         }
+        if (replyToMine) kinds.push("reply");
+        if ((m.mentioned && !replyToMine) || mentionsAlias(m.text, this.opts.aliases)) kinds.push("mention");
       }
       if (kinds.length && !this.state.pending.some((p) => p.chat_ref === chat.chat_ref && p.message_id === m.message_id)) {
         this.state.pending.push({ chat_ref: chat.chat_ref, message_id: m.message_id, kinds, handed_out: 0 });
       }
+      cs.cursor = Math.max(cs.cursor, m.message_id);
     }
     cs.mine = [...mine].sort((a, b) => a - b).slice(-MINE_KEEP);
   }
 
-  private async lookup(chat: Chat, id: number, lookups: { left: number }): Promise<{ msg?: Message; mine: boolean }> {
-    if (lookups.left <= 0) return { mine: false };
-    lookups.left--;
-    const [m] = asList<Message>(await this.upstream("read_chat_history", { chat_ref: chat.chat_ref, before_message_id: id + 1, limit: 1 }));
-    return m?.message_id === id ? { msg: m, mine: isMine(m, this.me) } : { mine: false };
-  }
-
-  /**
-   * Gives every candidate in a chat its context with as few reads as possible: one window of
-   * messages from just before the oldest unprepared candidate, repeated for any past its end.
-   */
-  private async prepare(chat: Chat, pending: Pending[], lookups: { left: number }) {
-    let todo = [...pending].sort((a, b) => a.message_id - b.message_id);
-    let pages = 0;
-    while (todo.length && pages < MAX_PAGES) {
-      // Message IDs are not contiguous (small groups and DMs share the account's counter),
-      // so the messages before come from a history read, not from an ID range.
-      const first = todo[0]!.message_id;
-      const window = asList<Message>(await this.upstream("read_chat_history", { chat_ref: chat.chat_ref, before_message_id: first, limit: CONTEXT_BEFORE })).sort(byId);
-      let complete = false;
-      for (let page = 0; page < WINDOW_PAGES && pages < MAX_PAGES; page++, pages++) {
-        const after = page ? window.at(-1)!.message_id : first - 1;
-        const msgs = asList<Message>(await this.upstream("get_new_messages", { chat_ref: chat.chat_ref, after_message_id: after, limit: PAGE })).sort(byId);
-        window.push(...msgs);
-        if (msgs.length < PAGE) {
-          complete = true;
-          break;
-        }
-      }
-      const last = window.at(-1)?.message_id ?? Infinity;
-      for (const p of todo) {
-        const i = window.findIndex((m) => m.message_id === p.message_id);
-        if (i < 0) {
-          // Missing inside the window, or in a window that reached the end of the chat: deleted.
-          // Past an incomplete window: the next window.
-          if (p.message_id < last || complete) this.state.pending = this.state.pending.filter((x) => x !== p);
-          continue;
-        }
-        const msg = window[i]!;
-        const to = msg.reply_to_message_id;
-        const replyTo = to ? (window.find((m) => m.message_id === to) ?? (await this.lookup(chat, to, lookups)).msg) : undefined;
-        this.views.set(key(p.chat_ref, p.message_id), this.view(chat, p, msg, replyTo, window.slice(Math.max(0, i - CONTEXT_BEFORE), i), window.slice(i + 1), complete));
-      }
-      todo = complete ? [] : todo.filter((p) => p.message_id > last);
+  private async topicTitle(chat: Chat, topic: number | null): Promise<string | null> {
+    if (!topic) return null;
+    const k = key(chat.chat_ref, topic);
+    if (!this.topicTitles.has(k)) {
+      const titles = await this.source.topics(chat.chat_ref, [topic]).catch(() => new Map<number, string>());
+      this.topicTitles.set(k, titles.get(topic) ?? "");
     }
+    return this.topicTitles.get(k) || null;
   }
 
-  private view(chat: Chat, p: Pending, msg: Message, replyTo: Message | undefined, before: Message[], after: Message[], complete: boolean) {
-    const v = (m: Message) => ({ message_id: m.message_id, timestamp: m.timestamp, from: m.display_name, from_user: isMine(m, this.me), reply_to_message_id: m.reply_to_message_id, text: m.text });
+  private viewOf = (m: Message) => ({
+    message_id: m.message_id,
+    timestamp: m.timestamp,
+    from: m.display_name,
+    from_username: m.username,
+    from_user: m.out,
+    reply_to_message_id: m.reply_to_message_id,
+    text: untrusted(m.text),
+  });
+
+  /** A candidate with its context, read now: the messages before, the one it replies to, and what came after. */
+  private async view(chat: Chat, p: Pending) {
+    const [msg] = await this.source.byIds(chat.chat_ref, [p.message_id]);
+    if (!msg) return undefined; // deleted
+    const before = await this.source.before(chat.chat_ref, p.message_id, CONTEXT_BEFORE);
+    const after = await this.source.after(chat.chat_ref, p.message_id, AFTER_KEEP + 1);
+    const to = msg.reply_to_message_id;
+    const replyTo = to ? (before.find((m) => m.message_id === to) ?? (await this.source.byIds(chat.chat_ref, [to]))[0]) : undefined;
     return {
       chat_ref: chat.chat_ref,
       chat_title: chat.title,
       chat_type: chat.type,
+      topic: await this.topicTitle(chat, msg.topic_id),
       kinds: p.kinds,
-      ...v(msg),
-      reply_to: replyTo ? v(replyTo) : null,
-      context_before: before.map(v),
-      after: after.slice(0, AFTER_KEEP).map(v),
-      after_truncated: after.length > AFTER_KEEP || !complete,
-      user_replied_directly: after.some((m) => isMine(m, this.me) && m.reply_to_message_id === p.message_id),
-      user_posted_after: after.some((m) => isMine(m, this.me)),
+      ...this.viewOf(msg),
+      reply_to: replyTo ? this.viewOf(replyTo) : null,
+      context_before: before.map(this.viewOf),
+      after: after.slice(0, AFTER_KEEP).map(this.viewOf),
+      after_truncated: after.length > AFTER_KEEP,
+      user_replied_directly: after.some((m) => m.out && m.reply_to_message_id === p.message_id),
+      user_posted_after: after.some((m) => m.out),
     };
   }
 
-  /**
-   * Candidates ready for the agent. Before the first refresh after a start, waits for it
-   * (bounded), so the agent never sees an empty list just because the proxy restarted.
-   */
-  async candidates(opts: { max: number; waitMs?: number }) {
-    if (!this.lastRefresh) {
-      const wait = new Promise((r) => setTimeout(r, opts.waitMs ?? 240_000).unref());
-      await Promise.race([this.refresh().catch(() => undefined), wait]);
-    }
-    const ready = this.state.pending.filter((p) => this.views.has(key(p.chat_ref, p.message_id)));
-    const waiting = this.state.pending.length - ready.length;
-    ready.sort((a, b) => a.chat_ref.localeCompare(b.chat_ref) || a.message_id - b.message_id);
-    const batch = ready.slice(0, opts.max);
-    const candidates = batch.map((p) => ({ ...this.views.get(key(p.chat_ref, p.message_id))!, message_id: p.message_id }));
-    // Handed out one last time on the MAX_HANDOUTS-th call, then forgotten.
-    for (const p of batch) p.handed_out++;
-    this.state.pending = this.state.pending.filter((p) => p.handed_out < MAX_HANDOUTS);
-    this.save();
-    return {
-      candidates,
-      more_ready: ready.length - batch.length,
-      waiting_for_context: waiting,
-      last_scan_at: this.lastRefresh ? new Date(this.lastRefresh.at).toISOString() : null,
-      errors: this.lastRefresh?.errors ?? ["the first scan since the proxy started has not finished yet"],
-    };
+  /** Candidates with their context, oldest chat-first. Each comes back until acknowledged, at most MAX_HANDOUTS times. */
+  async candidates(opts: { max: number }) {
+    if (!this.swept) await this.sweep().catch(() => undefined);
+    const all = [...this.state.pending].sort((a, b) => a.chat_ref.localeCompare(b.chat_ref) || a.message_id - b.message_id);
+    const batch = all.slice(0, opts.max);
+    const errors = [...(this.lastSweep?.errors ?? (this.swept ? [] : ["the first scan since the service started has not finished yet"]))];
+    const views = new Map<string, Awaited<ReturnType<Scout["view"]>>>();
+    const gone = new Set<Pending>();
+    const byChat = new Map<string, Pending[]>();
+    for (const p of batch) byChat.set(p.chat_ref, [...(byChat.get(p.chat_ref) ?? []), p]);
+    await pool(
+      [...byChat].map(([ref, ps]) => async () => {
+        const chat = this.chatMap.get(ref);
+        for (const p of ps) {
+          if (!chat) {
+            gone.add(p);
+            continue;
+          }
+          const v = await this.view(chat, p);
+          if (v) views.set(key(ref, p.message_id), v);
+          else gone.add(p);
+        }
+      }),
+      PARALLEL_CHATS,
+      (err) => errors.push(`context: ${String((err as Error).message).slice(0, 200)}`),
+    );
+    const candidates = batch.flatMap((p) => {
+      const v = views.get(key(p.chat_ref, p.message_id));
+      return v ? [v] : [];
+    });
+    // Handed out one last time on the MAX_HANDOUTS-th call, then forgotten. Deleted messages go at once.
+    for (const p of batch) if (views.has(key(p.chat_ref, p.message_id))) p.handed_out++;
+    this.state.pending = this.state.pending.filter((p) => !gone.has(p) && p.handed_out < MAX_HANDOUTS);
+    this.save(true);
+    return { candidates, more_ready: all.length - batch.length, ...this.status(), errors };
   }
 
   /** Remove handled candidates so they are not handed out again. */
   ack(items: { chat_ref: string; message_id: number }[]) {
     const before = this.state.pending.length;
     this.state.pending = this.state.pending.filter((p) => !items.some((i) => i.chat_ref === p.chat_ref && i.message_id === p.message_id));
-    for (const i of items) this.views.delete(key(i.chat_ref, i.message_id));
-    this.save();
+    this.save(true);
     return { acknowledged: before - this.state.pending.length, still_pending: this.state.pending.length };
   }
 
   /**
-   * What happened in a chat after a message, for closing tasks: whether the user replied to it
-   * or posted since. The chat is found by ref, or by title when the ref has changed.
+   * What happened in a chat after a message, for closing tasks: whether the user replied to it or
+   * posted since. The chat is found by ref, or by title (tasks made before D-37 carry old refs).
    */
   async followups(items: { chat_ref?: string; chat_title?: string; message_id: number }[]) {
-    if (!items.length) return { results: [] };
-    const chats = this.chatList.length ? this.chatList : asList<Chat>(await this.upstream("list_allowed_chats", {}));
+    if (!this.swept) await this.sweep().catch(() => undefined);
     const results = [];
     for (const i of items) {
-      const chat = chats.find((c) => c.chat_ref === i.chat_ref) ?? chats.find((c) => i.chat_title && c.title.trim().toLowerCase() === i.chat_title.trim().toLowerCase());
+      const chat = this.findChat(i.chat_ref, i.chat_title);
       if (!chat) {
-        results.push({ ...i, found: false, reason: "chat not on the allowlist (or renamed)" });
+        results.push({ ...i, found: false, reason: "chat not found (left, renamed, muted, archived or excluded)" });
         continue;
       }
       try {
-        const after = asList<Message>(await this.upstream("get_new_messages", { chat_ref: chat.chat_ref, after_message_id: i.message_id, limit: 50 }));
-        const mine = after.filter((m) => isMine(m, this.me));
+        const after = await this.source.after(chat.chat_ref, i.message_id, 50);
+        const mine = after.filter((m) => m.out);
         results.push({
           ...i,
           found: true,
           chat_ref: chat.chat_ref,
           chat_title: chat.title,
           user_replied_directly: mine.some((m) => m.reply_to_message_id === i.message_id),
-          user_messages_after: mine.map((m) => ({ message_id: m.message_id, timestamp: m.timestamp, reply_to_message_id: m.reply_to_message_id, text: m.text })),
+          user_messages_after: mine.map((m) => ({ message_id: m.message_id, timestamp: m.timestamp, reply_to_message_id: m.reply_to_message_id, text: untrusted(m.text) })),
           later_messages: after.length,
-          later_from_others: after.filter((m) => !isMine(m, this.me)).slice(0, 15).map((m) => ({ message_id: m.message_id, timestamp: m.timestamp, from: m.display_name, reply_to_message_id: m.reply_to_message_id, text: m.text })),
+          later_from_others: after
+            .filter((m) => !m.out)
+            .slice(0, 15)
+            .map((m) => ({ message_id: m.message_id, timestamp: m.timestamp, from: m.display_name, reply_to_message_id: m.reply_to_message_id, text: untrusted(m.text) })),
         });
       } catch (err) {
         results.push({ ...i, found: false, reason: String((err as Error).message).slice(0, 200) });
@@ -343,4 +408,16 @@ export class Scout {
     }
     return { results };
   }
+}
+
+/** Runs tasks at most `n` at a time; a failing task is reported and the rest carry on. */
+async function pool(tasks: (() => Promise<void>)[], n: number, onError: (err: unknown, i: number) => void) {
+  let next = 0;
+  const worker = async () => {
+    while (next < tasks.length) {
+      const i = next++;
+      await tasks[i]!().catch((err) => onError(err, i));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(n, tasks.length) }, worker));
 }

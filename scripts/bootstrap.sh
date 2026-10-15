@@ -52,6 +52,7 @@ gen_secret google_mcp_token
 gen_secret google_auth_token     # the board's Google sign-in state and reconnect (D-36)
 gen_secret slack_mcp_token
 gen_secret telegram_mcp_token
+gen_secret telegram_auth_token   # the board's Telegram sign-in state and sign-in (D-37)
 gen_secret primer_mcp_token
 gen_secret board_internal_token   # the board's internal API (D-25)
 placeholder paperclip_ops_key ""

@@ -64,7 +64,11 @@ fi
 t_health="$(dc exec -T paperclip node -e "fetch('http://telegram-mcp:8083/healthz').then(r=>r.text()).then(console.log).catch(e=>{console.log(e.message);process.exit(1)})" 2>/dev/null)"
 if echo "$t_health" | grep -q '"ok":true'; then
   ttoken="$(cat "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/telegram_mcp_token" 2>/dev/null)"
-  check "telegram read (allowed chats)" sh -c "docker compose --env-file '$env_file' exec -T paperclip node /tmp/mcp-call.mjs http://telegram-mcp:8083/mcp list_allowed_chats '{}' '$ttoken' >/dev/null"
+  check "telegram read (chats)" sh -c "docker compose --env-file '$env_file' exec -T paperclip node /tmp/mcp-call.mjs http://telegram-mcp:8083/mcp list_allowed_chats '{}' '$ttoken' >/dev/null"
+  # The sweep catches up every few minutes; an old one means the session is stuck (D-37).
+  check "telegram sweep (last 10 minutes)" sh -c "echo '$t_health' | node -e \"let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const h=JSON.parse(s);const age=Date.now()-Date.parse(h.last_scan_at);if(!(age<600000)){console.log('last sweep '+h.last_scan_at);process.exit(1)}})\""
+elif echo "$t_health" | grep -q '"state":"ended"'; then
+  check "telegram session" sh -c "echo 'Telegram ended the session: reconnect from the board (http://127.0.0.1:3120)'; exit 1"
 else
   printf '  skip  telegram (not connected: %s)\n' "$(echo "$t_health" | cut -c1-80)"
 fi

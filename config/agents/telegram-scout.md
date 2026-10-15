@@ -22,8 +22,8 @@ You find Telegram messages that genuinely need the user and turn them into Paper
 
 ## How candidates are found
 
-Code, not you, picks the candidates. It finds every new message in the user's allowed chats that:
-- mentions the user by @handle or by name (`kinds` has `mention`);
+Code, not you, picks the candidates. It finds every new message in the user's chats (DMs and groups) that:
+- mentions the user by @handle, name link or name (`kinds` has `mention`);
 - replies to one of the user's messages (`reply`);
 - is in a direct message chat (`dm`);
 - or was written by the user (`own`), for their own commitments.
@@ -34,7 +34,7 @@ Each candidate comes with:
 - `after`: what came after it;
 - `user_replied_directly` and `user_posted_after`.
 
-`from_user: true` marks the user's own messages. Telegram has no thread links: a chat is identified by its `chat_ref` and `chat_title`, and a message by its `message_id`.
+`from_user: true` marks the user's own messages. Telegram has no thread links: a chat is identified by its `chat_ref` and `chat_title`, and a message by its `message_id`. In groups with topics, `topic` names the topic.
 
 ## Each run
 
@@ -96,7 +96,7 @@ Each candidate comes with:
      Grant access, or reply in the chat with who will.
      ```
 
-     The `Chat:` line must be the exact `chat_title`: it finds the chat again when the user changes their allowlist.
+     The `Chat:` line must be the exact `chat_title`: it finds the chat again for tasks with old refs.
 
    If `task_create` returns `deduplicated: true`, the task already exists. Add a `task_comment` only when there's genuinely new information, such as a new deadline or a follow-up ping.
 

@@ -10,7 +10,7 @@ It is built on [Paperclip](https://github.com/paperclipai/paperclip) (agents, ta
 
 - **Meetings:** transcripts (local files, or Google Meet transcripts and Gemini notes in Drive) are matched to Calendar events. Pennyworth writes a canonical meeting note, appends a dated entry to the right project note, and creates tasks for your own action items.
 - **Slack:** messages waiting on your reply, and things you promised, become tasks. They close themselves once you answer, or once you review the PR you were asked about.
-- **Telegram:** mentions and replies to you in your client chats, and things you promised there, become tasks, through your organization's Telegram MCP (optional).
+- **Telegram:** mentions and replies to you in your chats, DMs, and things you promised there, become tasks, through your own Telegram session, read-only (optional).
 - **Email:** threads you label `pennyworth` in Gmail become tasks, and close when you remove the label.
 - **Daily brief:** every weekday morning, a ranked view of your day: priorities, meetings, what's stale.
 - **Assistant:** research and drafts (agendas, summaries) from Slack, Drive, Docs, Calendar and your notes, posted as task comments for you to review. It also acts on your replies to any task.
@@ -30,7 +30,7 @@ host (Linux, systemd user services)
     ├── ops-mcp                no Internet route; SQLite state; the only Obsidian writer
     ├── google-workspace-mcp   Calendar, Drive, Docs, Gmail: read-only scopes, GET requests only
     ├── slack-mcp              read-only proxy to Slack's official MCP server
-    ├── telegram-mcp           read-only proxy to a Telegram MCP; scans your chats for mentions in the background
+    ├── telegram-mcp           your own Telegram session, reads only; new messages arrive live
     ├── primer-mcp             proxy to your organization's Primer: read documents, publish when you ask
     └── board                  127.0.0.1:3120 task board (optional LAN listener for paired phones)
 services/paperclip-tasks-mcp   stdio bridge, mounted into paperclip, for agents' task updates
@@ -125,7 +125,7 @@ Then drop a transcript into your transcripts folder, or have a Meet call that pr
 | Meeting Librarian | file watcher + every 15 min in work hours | ops-mcp; Calendar/Drive read; its own tasks |
 | Chief of Staff | weekdays 08:30 → "Daily Brief — date" | Calendar read; Paperclip task list/create/update |
 | Slack Scout | every 30 min in work hours | Slack read/search; Paperclip task search/create/update/close |
-| Telegram Scout | every 30 min in work hours | Telegram read (allowed chats) and prepared mention candidates; Paperclip task search/create/update/close |
+| Telegram Scout | every 30 min in work hours | Telegram read (your chats) and mention candidates; Paperclip task search/create/update/close |
 | Inbox Agent | every 30 min in work hours: one task per Gmail thread labelled `pennyworth` (archived or not), closed when the label is removed | Gmail read/search; Paperclip task search/create/update/close |
 | Assistant | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; Primer read + publish when asked; notes read + meeting-note corrections; cached web search; Paperclip tasks |
 | Engineer · Codex / · Claude / · OpenRouter | never woken: assignment targets for the runner | none (the runner does the work) |
@@ -251,16 +251,24 @@ To hand Pennyworth a Slack message yourself, react to it with your task emoji (�
 
 ## Telegram
 
-Optional. Pennyworth reads Telegram through your organization's Telegram MCP server, one that holds your own Telegram session and an allowlist of chats you pick, and supports OAuth with dynamic client registration ([D-27](docs/DECISIONS.md)). Set its endpoint as `TELEGRAM_MCP_URL` and who you are (`TELEGRAM_ME_NAMES`, `TELEGRAM_ME_HANDLES`, `TELEGRAM_ME_ALIASES`) in `.env`, then:
+Optional. Pennyworth reads Telegram as you, through a session of your own account that can only read ([D-37](docs/DECISIONS.md)). To set it up:
 
-```sh
-scripts/telegram-auth.sh           # once: open the printed URL, sign in, link Telegram, pick your chats
-node scripts/paperclip-setup.mjs   # activates the Telegram scan routine
-```
+1. Create an app at [my.telegram.org](https://my.telegram.org) (API development tools; any name), and save its credentials:
 
-The callback is `http://localhost:3119/callback`, so open the URL on the machine running Pennyworth. Pennyworth sees only the chats you picked. To change them, run `node scripts/telegram-chats.mjs`: it prints a short-lived link to the server's chat picker (Okta sign-in, then pick and save). Each chat adds about 15 seconds to a scan, because the server is slow; scans never overlap, so a long list just means fewer scans.
+   ```sh
+   printf '{"api_id": 1234567, "api_hash": "0123456789abcdef0123456789abcdef"}' > ~/.config/pennyworth/telegram/api.json
+   chmod 600 ~/.config/pennyworth/telegram/api.json
+   ```
 
-The `telegram-mcp` sidecar exposes only read tools: drafting and changing the chat allowlist are never listed. It scans your chats every 15 minutes (the server takes seconds per call), keeping only cursors and message IDs on disk. It finds mentions of you by handle or name, replies to your messages, DMs and your own messages. The Telegram Scout decides which need a task, using the Slack Scout's rules, and closes a `needs-response` task once you've replied in the chat.
+2. Set `TELEGRAM_ME_ALIASES` in `.env` (words people call you, for mentions by plain name), then `docker compose up -d --build telegram-mcp board`.
+3. Open the board on the computer (`http://127.0.0.1:3120`), click **Connect** in the Telegram banner, and enter your phone number, the code Telegram sends to your app, and your 2FA password if you have one.
+4. `node scripts/paperclip-setup.mjs` activates the Telegram scan routine.
+
+Pennyworth then sees your main chat list: DMs, groups and channels. Muted and archived chats are left out (`TELEGRAM_INCLUDE_MUTED`, `TELEGRAM_INCLUDE_ARCHIVED`), and so are chats you list in `TELEGRAM_EXCLUDE`. Channels can be read when you ask, but aren't scanned. New messages arrive live, and a sweep every 5 minutes catches up on anything missed. It finds mentions of you (Telegram's own flag, plus your aliases), replies to your messages, DMs and your own messages. The Telegram Scout decides which need a task, using the Slack Scout's rules, and closes a `needs-response` task once you've replied in the chat.
+
+**What it can't do:** `telegram-mcp` refuses every Telegram request except a fixed list of reads, below all of its own code. It never sends, drafts, edits, reacts, joins, downloads files, changes your account, shows you as online, or marks anything read: your unread counts stay yours. Only cursors and message IDs are kept on disk.
+
+**The session** shows as "Pennyworth" under Telegram → Settings → Devices; ending it there cuts Pennyworth off at once, and the board shows a banner with **Reconnect**. Signing in works only on the computer's own address, not from the phone.
 
 ## Primer
 
@@ -291,7 +299,7 @@ If Workspace policy blocks consent, nothing else breaks: matching reports "calen
 
 | File | Purpose | In git |
 |---|---|---|
-| `.env` | host paths, user IDs, vault folders, board LAN settings, Slack client ID, Telegram endpoint and your names there, Primer endpoint | no (`.env.example`) |
+| `.env` | host paths, user IDs, vault folders, board LAN settings, Slack client ID, Telegram aliases and excluded chats, Primer endpoint | no (`.env.example`) |
 | `config/system.yaml` | ops-mcp: timezone, your names and emails, transcript roots, cutoff, vault roots, thresholds | no (`system.example.yaml`) |
 | `config/routing.yaml` | meeting → note rules | no (`routing.example.yaml`) |
 | `config/paperclip.yaml` | company, labels, agents, routines and schedules, MCP servers, Codex hardening | no (`paperclip.example.yaml`) |
