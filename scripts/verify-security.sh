@@ -35,6 +35,7 @@ for c in $containers; do
     *ops-mcp*)
       # Writable on purpose (D-26): ops-mcp renames published transcripts and deletes their audio.
       echo "$mounts" | tr ';' '\n' | grep -q '|/sources/transcripts|' && pass "ops-mcp: transcripts mounted (writable for organizing, D-26)" || fail "ops-mcp: transcripts not mounted"
+      ! echo "$mounts" | tr ';' '\n' | grep -q '|/knowledge/[^|]*|true$' && pass "ops-mcp: knowledge bases mounted read-only" || fail "ops-mcp: a knowledge base is mounted writable"
       [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "ops-mcp: no published ports" || fail "ops-mcp publishes ports"
       if docker exec "$c" node -e "fetch('https://api.openai.com',{signal:AbortSignal.timeout(4000)}).then(()=>process.exit(0)).catch(()=>process.exit(1))" 2>/dev/null; then
         fail "ops-mcp has Internet egress"
@@ -53,6 +54,11 @@ for c in $containers; do
       [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "primer-mcp: no published ports" || fail "primer-mcp publishes ports"
       [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
         && pass "primer-mcp: only its own token directory mounted" || fail "primer-mcp has unexpected mounts: $mounts"
+      ;;
+    *glean-mcp*)
+      [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "glean-mcp: no published ports" || fail "glean-mcp publishes ports"
+      [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
+        && pass "glean-mcp: only its own token directory mounted" || fail "glean-mcp has unexpected mounts: $mounts"
       ;;
     *board*)
       # 3120 is the trusted local board; 3121 (LAN, D-23) may be published, but only serves paired devices.
@@ -106,6 +112,10 @@ grep -q 'guard(client, allowed' services/telegram-mcp/src/reader.ts && grep -q '
 bad_reads="$(sed -n '/^export const READ_REQUESTS/,/^\]);/p' services/telegram-mcp/src/guard.ts | grep -oE '"[a-zA-Z]+\.[A-Za-z]+"' | tr -d '"' | grep -Ev '^[a-z]+\.(Get|Search)' ; sed -n '/^export const READ_REQUESTS/,/^\]);/p' services/telegram-mcp/src/guard.ts | grep -oE '"[a-zA-Z]+\.[A-Za-z]+"' | tr -d '"' | grep -E '^(auth|account|contacts|upload|payments)\.|Read|Send|Draft|Save|Views' || true)"
 [ -z "$bad_reads" ] && pass "telegram-mcp: request allowlist holds only Get/Search reads (no send, mark-read, account or auth)" || fail "telegram-mcp: non-read requests allowed: $bad_reads"
 pass "primer-mcp exposes reads plus create-document/add-version only; never delete, share, visibility or page-event tools (services/primer-mcp/src/policy.ts)"
+# Glean: reads only, and the name guard refuses write-like tools even if allowlisted (D-38).
+glean_tools="$(sed -n 's/^export const READ_TOOLS = \[\(.*\)\];/\1/p' services/glean-mcp/src/policy.ts | tr -d '" ' | tr ',' '\n')"
+bad_glean="$(echo "$glean_tools" | grep -Ev '^(search|read_document|employee_search|meeting_lookup|code_search|chat)$' || true)"
+[ -n "$glean_tools" ] && [ -z "$bad_glean" ] && pass "glean-mcp exposes only search/read tools (services/glean-mcp/src/policy.ts)" || fail "glean-mcp: unexpected tools allowed: $bad_glean"
 pass "no email/Slack/Telegram send or calendar write tool is configured for any agent"
 
 echo

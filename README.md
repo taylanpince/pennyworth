@@ -27,11 +27,12 @@ host (Linux, systemd user services)
 ├── transcript watcher (systemd --user .path) ── signed webhook ──► "Meeting scan"
 └── docker compose (all containers: non-root, cap_drop ALL, no-new-privileges)
     ├── paperclip              127.0.0.1:3100 only; Codex agents (read-only sandbox, no shell)
-    ├── ops-mcp                no Internet route; SQLite state; the only Obsidian writer
+    ├── ops-mcp                no Internet route; SQLite state; the only Obsidian writer; reference docs (read-only)
     ├── google-workspace-mcp   Calendar, Drive, Docs, Gmail: read-only scopes, GET requests only
     ├── slack-mcp              read-only proxy to Slack's official MCP server
     ├── telegram-mcp           your own Telegram session, reads only; new messages arrive live
     ├── primer-mcp             proxy to your organization's Primer: read documents, publish when you ask
+    ├── glean-mcp              proxy to your organization's Glean: company-wide search, reads only
     └── board                  127.0.0.1:3120 task board (optional LAN listener for paired phones)
 services/paperclip-tasks-mcp   stdio bridge, mounted into paperclip, for agents' task updates
 ```
@@ -127,7 +128,7 @@ Then drop a transcript into your transcripts folder, or have a Meet call that pr
 | Slack Scout | every 30 min in work hours | Slack read/search; Paperclip task search/create/update/close |
 | Telegram Scout | every 30 min in work hours | Telegram read (your chats) and mention candidates; Paperclip task search/create/update/close |
 | Inbox Agent | every 30 min in work hours: one task per Gmail thread labelled `pennyworth` (archived or not), closed when the label is removed | Gmail read/search; Paperclip task search/create/update/close |
-| Assistant | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; Primer read + publish when asked; notes read + meeting-note corrections; cached web search; Paperclip tasks |
+| Assistant | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; Glean search; reference docs; Primer read + publish when asked; notes read + meeting-note corrections; cached web search; Paperclip tasks |
 | Engineer · Codex / · Claude / · OpenRouter | never woken: assignment targets for the runner | none (the runner does the work) |
 
 Each agent sees only the MCP servers and tools listed for it in `config/paperclip.yaml` (`mcp_servers`, `enabled_tools`); everything else is disabled in its Codex arguments. Schedules live there too. Run a routine on demand with **Run now** in Paperclip.
@@ -203,11 +204,18 @@ todo --all                           # include reviews and briefs
 
 For anything that isn't code: research, drafts, and acting on your replies.
 
-- **Assign a task to the Assistant**, e.g. "Update the agenda for today's partner call from #ext-… and the previous agendas doc". It reads Slack, your allowed Telegram chats, Google Docs (all tabs), Drive, Calendar, your notes and public web pages (from a search cache, never live). It posts the deliverable as a comment for you to review and paste, then assigns the task back to you.
+- **Assign a task to the Assistant**, e.g. "Update the agenda for today's partner call from #ext-… and the previous agendas doc". It reads Slack, your allowed Telegram chats, Glean, Google Docs (all tabs), Drive, Calendar, your notes, your reference docs and public web pages (from a search cache, never live). It posts the deliverable as a comment for you to review and paste, then assigns the task back to you.
 - **Reply on any of your tasks.** About 90 seconds after your last comment, the runner hands it to the Assistant, which acts on clear intent: fixes names and details in the task and in the meeting notes Pennyworth wrote, records context, closes the task ("done", "not relevant"), or answers questions. It replies with one line saying what changed.
 - **Work across many repositories:** ask it to open an Engineer sub-task per repository. Reply "go" on the parent to start them all, then **pr** on the parent to open every PR (D-24).
 
 It never sends messages and never edits Slack, Docs or Calendar.
+
+### Glean and reference docs
+
+The Assistant can search your organization's **Glean** (Slack, Drive, Confluence, Jira, GitHub, people and meetings, limited to what you can see) and read **reference documentation** folders, such as the `aggbrain` and `wallet-brain` doc repositories. Both are always available. It picks the docs by topic, and "check aggbrain" in a task or comment makes it start there ([D-38](docs/DECISIONS.md)).
+
+- **Reference docs:** list folders of `.md` files as `name=/path` in `KNOWLEDGE_BASES` (`.env`), then run `scripts/bootstrap.sh` and `docker compose up -d ops-mcp`. They are mounted read-only. A folder with an agent skill (`.agents/skills/<name>/SKILL.md`, as Claude plugins have) tells the Assistant what it covers and how to read it.
+- **Glean:** set `GLEAN_MCP_URL` in `.env` (Glean's MCP Configurator at app.glean.com/settings/connected-apps, "Custom" host, shows it: `https://<company>-be.glean.com/mcp/<server>`). Then `docker compose up -d glean-mcp` and press **Connect** in the banner on the board (`http://127.0.0.1:3120`). `glean-mcp` exposes only search and read tools. If Glean stops accepting the sign-in, the banner returns with **Reconnect**.
 
 ## Coding jobs
 
@@ -299,7 +307,7 @@ If Workspace policy blocks consent, nothing else breaks: matching reports "calen
 
 | File | Purpose | In git |
 |---|---|---|
-| `.env` | host paths, user IDs, vault folders, board LAN settings, Slack client ID, Telegram aliases and excluded chats, Primer endpoint | no (`.env.example`) |
+| `.env` | host paths, user IDs, vault folders, reference doc folders, board LAN settings, Slack client ID, Telegram aliases and excluded chats, Primer and Glean endpoints | no (`.env.example`) |
 | `config/system.yaml` | ops-mcp: timezone, your names and emails, transcript roots, cutoff, vault roots, thresholds | no (`system.example.yaml`) |
 | `config/routing.yaml` | meeting → note rules | no (`routing.example.yaml`) |
 | `config/paperclip.yaml` | company, labels, agents, routines and schedules, MCP servers, Codex hardening | no (`paperclip.example.yaml`) |

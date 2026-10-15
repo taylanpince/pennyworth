@@ -122,6 +122,13 @@ export const ConfigSchema = z.object({
   meeting_matching: MatchingSchema.prefault({}),
   routing: RoutingSchema,
   paperclip: PaperclipSchema,
+  // Read-only reference docs (one folder per base under root, mounted from KNOWLEDGE_BASES).
+  knowledge: z
+    .object({
+      root: z.string().default("/knowledge"),
+      max_search_results: z.number().int().positive().default(15),
+    })
+    .prefault({}),
   server: z
     .object({
       host: z.string().default("0.0.0.0"),

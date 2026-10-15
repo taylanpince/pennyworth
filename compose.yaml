@@ -21,7 +21,7 @@ services:
     entrypoint:
       - /bin/sh
       - -c
-      # Also exports the bearer tokens Codex sends to ops-mcp, google-workspace-mcp, slack-mcp, telegram-mcp and primer-mcp
+      # Also exports the bearer tokens Codex sends to ops-mcp, google-workspace-mcp, slack-mcp, telegram-mcp, primer-mcp and glean-mcp
       # (bearer_token_env_var in the shared Codex config). $$ escapes compose interpolation.
       - >-
         export BETTER_AUTH_SECRET="$$(cat /run/secrets/paperclip_auth_secret)"
@@ -31,6 +31,7 @@ services:
         PENNYWORTH_SLACK_MCP_TOKEN="$$(cat /run/secrets/slack_mcp_token)"
         PENNYWORTH_TELEGRAM_MCP_TOKEN="$$(cat /run/secrets/telegram_mcp_token)"
         PENNYWORTH_PRIMER_MCP_TOKEN="$$(cat /run/secrets/primer_mcp_token)"
+        PENNYWORTH_GLEAN_MCP_TOKEN="$$(cat /run/secrets/glean_mcp_token)"
         PENNYWORTH_BOARD_TOKEN="$$(cat /run/secrets/board_internal_token)"
         && exec /usr/bin/tini -- docker-entrypoint.sh "$$@"
       - paperclip
@@ -64,6 +65,7 @@ services:
       - slack_mcp_token
       - telegram_mcp_token
       - primer_mcp_token
+      - glean_mcp_token
       # The board's internal API, for the Assistant's task_schedule / task_recurring (D-25).
       - board_internal_token
     pids_limit: 2048
@@ -217,6 +219,32 @@ services:
       - backplane
       - egress
 
+  # Glean, the organization's company-wide search: reads only (D-38). Signed in from the board.
+  glean-mcp:
+    <<: *hardening
+    build: ./services/glean-mcp
+    image: pennyworth/glean-mcp:local
+    user: "${PUID:-1000}:${PGID:-100}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    environment:
+      GLEAN_MCP_URL: "${GLEAN_MCP_URL:-}"
+      GLEAN_STATE_DIR: /state
+      MCP_TOKEN_FILE: /run/secrets/glean_mcp_token
+      # The board's sign-in endpoints: state, and starting or finishing a sign-in.
+      GLEAN_AUTH_TOKEN_FILE: /run/secrets/glean_auth_token
+    volumes:
+      # Read-write: the registered client and the token pair, refreshed here.
+      - ${PENNYWORTH_SECRETS_DIR}/glean:/state
+    secrets:
+      - glean_mcp_token
+      - glean_auth_token
+    dns: [1.1.1.1, 8.8.8.8]   # see paperclip
+    networks:
+      - backplane
+      - egress
+
   # The task board (D-22): Today/Tomorrow/Later over your Paperclip tasks. Acts as you through the
   # board key, kept server-side; loopback only (put `tailscale serve` in front for the phone).
   board:
@@ -248,6 +276,7 @@ services:
       - board_internal_token
       - google_auth_token   # Google sign-in state and reconnect only (D-36); not the MCP token
       - telegram_auth_token # Telegram sign-in state and sign-in only (D-37); not the MCP token
+      - glean_auth_token    # Glean sign-in state and sign-in only (D-38); not the MCP token
     ports:
       - "127.0.0.1:3120:3120"
       # LAN listener; loopback-only unless .env sets BOARD_LAN_BIND=0.0.0.0 (e.g. with BOARD_LAN_PORT=80).
@@ -299,6 +328,10 @@ secrets:
     file: ${PENNYWORTH_SECRETS_DIR}/telegram_auth_token
   primer_mcp_token:
     file: ${PENNYWORTH_SECRETS_DIR}/primer_mcp_token
+  glean_mcp_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/glean_mcp_token
+  glean_auth_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/glean_auth_token
   paperclip_board_key:
     file: ${PENNYWORTH_SECRETS_DIR}/paperclip_board_key
   board_internal_token:

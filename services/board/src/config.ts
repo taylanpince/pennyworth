@@ -36,6 +36,8 @@ export interface Config {
   google?: { url: string; token: string };
   /** telegram-mcp's sign-in endpoints (D-37): off unless the token file exists. */
   telegram?: { url: string; token: string };
+  /** glean-mcp's sign-in endpoints (D-38): off unless the token file exists. */
+  glean?: { url: string; token: string };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -57,6 +59,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     internal: internalConfig(env),
     google: googleConfig(env),
     telegram: telegramConfig(env),
+    glean: gleanConfig(env),
   };
 }
 
@@ -70,6 +73,12 @@ function telegramConfig(env: NodeJS.ProcessEnv): Config["telegram"] {
   const file = env.TELEGRAM_AUTH_TOKEN_FILE ?? "/run/secrets/telegram_auth_token";
   if (!existsSync(file)) return undefined;
   return { url: (env.TELEGRAM_SERVICE_URL ?? "http://telegram-mcp:8083").replace(/\/+$/, ""), token: readFileSync(file, "utf8").trim() };
+}
+
+function gleanConfig(env: NodeJS.ProcessEnv): Config["glean"] {
+  const file = env.GLEAN_AUTH_TOKEN_FILE ?? "/run/secrets/glean_auth_token";
+  if (!existsSync(file)) return undefined;
+  return { url: (env.GLEAN_SERVICE_URL ?? "http://glean-mcp:8085").replace(/\/+$/, ""), token: readFileSync(file, "utf8").trim() };
 }
 
 function internalConfig(env: NodeJS.ProcessEnv): Config["internal"] {

@@ -4,12 +4,14 @@ import type { MeetingService } from "../meetings/service.js";
 import { CalendarEventSchema, MatchHintsSchema } from "../matching/types.js";
 import { ExtractionSchema } from "../render/extraction.js";
 import { UserFacingError } from "../util/errors.js";
+import type { KnowledgeBases } from "../knowledge/knowledge.js";
 import type { Logger } from "../util/log.js";
 import type { Vault } from "../vault/vault.js";
 
 export interface ToolDeps {
   meetings: MeetingService;
   vault: Vault;
+  knowledge: KnowledgeBases;
   log: Logger;
 }
 
@@ -32,7 +34,7 @@ function fail(err: unknown, log: Logger, tool: string) {
 
 export function buildServer(deps: ToolDeps): McpServer {
   const server = new McpServer({ name: "ops-mcp", version: "0.1.0" }, { instructions: SERVER_INSTRUCTIONS });
-  const { meetings, vault, log } = deps;
+  const { meetings, vault, knowledge, log } = deps;
 
   const wrap =
     <A,>(tool: string, fn: (args: A) => Promise<Json> | Json) =>
@@ -209,6 +211,51 @@ export function buildServer(deps: ToolDeps): McpServer {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     wrap("obsidian_read_document_map", (a: { path: string }) => vault.documentMap(a.path) as unknown as Json),
+  );
+
+  // Reference documentation (read-only), e.g. the wallet-brain and aggbrain doc repositories.
+  server.registerTool(
+    "knowledge_list",
+    {
+      title: "List knowledge bases",
+      description: "The reference documentation bases available, what each covers, and how to read it (its guide).",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    wrap("knowledge_list", () => knowledge.list() as unknown as Json),
+  );
+
+  server.registerTool(
+    "knowledge_index",
+    {
+      title: "Index of a knowledge base",
+      description: "A knowledge base's README and every document's path, title, status and summary. Scan summaries to pick what to read.",
+      inputSchema: { base: z.string().min(1).max(64) },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    wrap("knowledge_index", (a: { base: string }) => knowledge.index(a.base) as unknown as Json),
+  );
+
+  server.registerTool(
+    "knowledge_search",
+    {
+      title: "Search knowledge bases",
+      description: "Case-insensitive search for documents containing every word of the query, ranked by matches. Omit base to search all bases.",
+      inputSchema: { query: z.string().min(2).max(200), base: z.string().min(1).max(64).optional(), limit: z.number().int().min(1).max(50).optional() },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    wrap("knowledge_search", (a: { query: string; base?: string; limit?: number }) => knowledge.search(a.query, a.base, a.limit)),
+  );
+
+  server.registerTool(
+    "knowledge_read",
+    {
+      title: "Read a knowledge document",
+      description: "Read a .md document (path relative to the base, as knowledge_index or knowledge_search return it).",
+      inputSchema: { base: z.string().min(1).max(64), path: z.string().min(1).max(512) },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    wrap("knowledge_read", (a: { base: string; path: string }) => knowledge.read(a.base, a.path)),
   );
 
   return server;

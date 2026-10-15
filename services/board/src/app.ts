@@ -8,6 +8,7 @@ import { RunnerReportSchema, agentsView, runTasks, workingOn, type RunContext, t
 import { RecurringSchema, RunStateSchema, ScheduleSchema, changeRecurring, claimDue, recurringView, scheduleMove } from "./automation.js";
 import { BadRequest, CreateSchema, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
 import { inNetworks } from "./config.js";
+import { GleanAuthFailed, type GleanAuth } from "./glean.js";
 import { GoogleAuthFailed, loopbackPort, type GoogleAuth } from "./google.js";
 import { Paperclip, PaperclipError, type Issue } from "./paperclip.js";
 import { TelegramAuthFailed, type TelegramAuth } from "./telegram.js";
@@ -37,6 +38,8 @@ export interface AppOptions {
   google?: GoogleAuth;
   /** Telegram sign-in state and sign-in (D-37); no banner and no sign-in without it. */
   telegram?: TelegramAuth;
+  /** Glean sign-in state and sign-in (D-38); no banner and no sign-in without it. */
+  glean?: GleanAuth;
 }
 
 const SESSION_COOKIE = "pw_session";
@@ -308,7 +311,7 @@ export function createApp(opts: AppOptions): Server {
         store.placeNew(open.map((i) => ({ id: i.id, createdAt: i.createdAt, status: i.status })));
         const recurring = new Map([...store.allRecurring()].map(([id, r]) => [id, { summary: recurringView(r, opts.timezone).summary, nextRun: r.nextRun, paused: r.paused }]));
         const board = buildBoard({ open, closed, placements: store.placements(), seen: store.allSeen(), schedules: store.schedules(), recurring, installedAt: store.meta("installed_at")!, assignees: ctx.assignees });
-        const [busy, google, telegram] = await Promise.all([working(ctx), opts.google?.status(), opts.telegram?.status()]);
+        const [busy, google, telegram, glean] = await Promise.all([working(ctx), opts.google?.status(), opts.telegram?.status(), opts.glean?.status()]);
         for (const card of [...Object.values(board.buckets).flat(), ...board.recurring]) {
           const w = busy.map.get(card.identifier);
           if (w) card.working = w;
@@ -319,7 +322,7 @@ export function createApp(opts: AppOptions): Server {
         // When Tomorrow next rolls into Today: the next calendar day, except before days off.
         const today = localDate(opts.timezone);
         const rollsOn = nextWorkday(today, opts.workdays ?? WORKWEEK);
-        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, rollsOn, rollsTomorrow: rollsOn === addDays(today, 1), buckets: board.buckets, agentsActive: busy.active, google: google ?? null, telegram: telegram ?? null };
+        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, rollsOn, rollsTomorrow: rollsOn === addDays(today, 1), buckets: board.buckets, agentsActive: busy.active, google: google ?? null, telegram: telegram ?? null, glean: glean ?? null };
       },
     },
     { method: "GET", path: /^\/api\/issues\/([^/]+)$/, handle: async (m) => issueView(decodeURIComponent(m[1]!)) },
@@ -517,6 +520,40 @@ export function createApp(opts: AppOptions): Server {
     throw new HttpError(404, "not found");
   }
 
+  /**
+   * Sign in to Glean (D-38): /glean/connect sends the browser to Glean's sign-in, Glean sends it back
+   * to /glean/callback, and glean-mcp keeps the token. On the laptop's loopback address only, like
+   * Google's Reconnect: the sign-in client is registered for that redirect.
+   */
+  async function handleGlean(req: IncomingMessage, res: ServerResponse, url: URL) {
+    const port = loopbackPort(req.headers.host);
+    if (!opts.glean) throw new HttpError(404, "Glean sign-in isn't set up on the board (no glean_auth_token)");
+    if (mode !== "local" || !port) throw new HttpError(403, "sign in to Glean from the board on your computer (http://127.0.0.1:3120)");
+    const host = String(req.headers.host).toLowerCase();
+    try {
+      if (url.pathname === "/glean/connect") {
+        const { url: signIn } = await opts.glean.start(`http://${host}/glean/callback`);
+        log.info("Glean sign-in started");
+        res.writeHead(302, { ...SECURITY_HEADERS, location: signIn, "cache-control": "no-store" }).end();
+        return;
+      }
+      if (url.pathname === "/glean/callback") {
+        const state = url.searchParams.get("state") ?? "";
+        const code = url.searchParams.get("code");
+        if (!code) throw new GleanAuthFailed(`Glean didn't grant access (${url.searchParams.get("error") ?? "no code"})`);
+        await opts.glean.finish(state, code);
+        log.info("Glean connected");
+        res.writeHead(302, { ...SECURITY_HEADERS, location: "/", "cache-control": "no-store" }).end();
+        return;
+      }
+    } catch (err) {
+      if (!(err instanceof GleanAuthFailed)) throw err;
+      log.warn({ err: err.message }, "Glean sign-in failed");
+      return send(res, 400, page(`Couldn't connect Glean: ${err.message}`), "text/html; charset=utf-8");
+    }
+    throw new HttpError(404, "not found");
+  }
+
   async function serveStatic(res: ServerResponse, path: string) {
     const rel = normalize(decodeURIComponent(path)).replace(/^(\.\.[/\\])+/, "");
     let file = join(opts.staticDir, rel);
@@ -557,6 +594,7 @@ export function createApp(opts: AppOptions): Server {
     try {
       if (url.pathname.startsWith("/api/")) await handleApi(req, res, url);
       else if (url.pathname.startsWith("/google/") && req.method === "GET") await handleGoogle(req, res, url);
+      else if (url.pathname.startsWith("/glean/") && req.method === "GET") await handleGlean(req, res, url);
       else if (req.method === "GET" || req.method === "HEAD") await serveStatic(res, url.pathname);
       else throw new HttpError(405, "method not allowed");
     } catch (err) {

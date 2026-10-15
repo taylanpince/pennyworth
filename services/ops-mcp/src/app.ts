@@ -10,12 +10,14 @@ import { Router } from "./routing/routing.js";
 import { SourceStore } from "./sources/store.js";
 import { TranscriptScanner } from "./sources/transcripts.js";
 import type { Logger } from "./util/log.js";
+import { KnowledgeBases } from "./knowledge/knowledge.js";
 import { Vault } from "./vault/vault.js";
 
 export interface App {
   cfg: Config;
   db: Db;
   vault: Vault;
+  knowledge: KnowledgeBases;
   meetings: MeetingService;
   paperclip?: PaperclipApi;
   log: Logger;
@@ -48,7 +50,7 @@ export function createApp(cfg: Config, log: Logger, overrides: { db?: Db; paperc
   const router = new Router(cfg, db, vault);
   const tasks = new TaskService(db, paperclip, log);
   const meetings = new MeetingService(cfg, db, store, scanner, vault, router, tasks, log);
-  return { cfg, db, vault, meetings, paperclip, log };
+  return { cfg, db, vault, knowledge: new KnowledgeBases(cfg.knowledge), meetings, paperclip, log };
 }
 
 export async function healthChecks(app: App): Promise<{ ok: boolean; checks: Record<string, { ok: boolean; detail?: string }> }> {
@@ -78,6 +80,9 @@ export async function healthChecks(app: App): Promise<{ ok: boolean; checks: Rec
     }
   });
   checks.vault_writable = { ok: unwritable.length === 0, detail: unwritable.length ? `not writable: ${unwritable.join(", ")}` : undefined };
+  // Optional: reported, never required.
+  const bases = app.knowledge.names();
+  checks.knowledge_bases = { ok: bases.length > 0, detail: bases.length ? bases.join(", ") : "none mounted (KNOWLEDGE_BASES)" };
   if (app.paperclip) {
     checks.paperclip_api = { ok: await app.paperclip.ping() };
   } else {

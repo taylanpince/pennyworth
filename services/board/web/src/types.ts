@@ -116,6 +116,16 @@ export interface Board {
   google: { accounts: GoogleAccount[]; error?: string } | null;
   /** Telegram sign-in (D-37); null when the board can't ask. */
   telegram: TelegramStatus | null;
+  /** Glean sign-in (D-38); null when the board can't ask. */
+  glean: GleanStatus | null;
+}
+
+export interface GleanStatus {
+  state: "missing" | "ok" | "expired" | "unknown";
+  /** Whether a Glean server is set (GLEAN_MCP_URL): without it there's no banner. */
+  configured: boolean;
+  since: string;
+  detail?: string;
 }
 
 export interface TelegramStatus {

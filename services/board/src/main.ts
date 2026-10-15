@@ -1,6 +1,7 @@
 import pino from "pino";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
+import { GleanAuth } from "./glean.js";
 import { GoogleAuth } from "./google.js";
 import { Paperclip } from "./paperclip.js";
 import { TelegramAuth } from "./telegram.js";
@@ -29,7 +30,8 @@ setInterval(rollover, 60_000).unref();
 
 const google = cfg.google && new GoogleAuth(cfg.google.url, cfg.google.token, log);
 const telegram = cfg.telegram && new TelegramAuth(cfg.telegram.url, cfg.telegram.token, log);
-const common = { paperclip, store, log, staticDir: cfg.staticDir, timezone: cfg.timezone, workdays: cfg.workdays, lan: cfg.lan, activity: {}, google, telegram };
+const glean = cfg.glean && new GleanAuth(cfg.glean.url, cfg.glean.token, log);
+const common = { paperclip, store, log, staticDir: cfg.staticDir, timezone: cfg.timezone, workdays: cfg.workdays, lan: cfg.lan, activity: {}, google, telegram, glean };
 const server = createApp({ ...common, allowedHosts: cfg.allowedHosts, mode: "local" });
 server.listen(cfg.port, "0.0.0.0", () => log.info({ port: cfg.port, hosts: cfg.allowedHosts }, "board listening"));
 // Phones on the home network (D-23): a separate port, paired devices only.

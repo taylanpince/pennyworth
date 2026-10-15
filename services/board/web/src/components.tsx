@@ -212,6 +212,38 @@ export function GoogleBanner({ google, canReconnect }: { google: Board["google"]
 }
 
 /**
+ * Glean sign-in (D-38): a banner when Pennyworth isn't signed in to Glean yet, or Glean stopped
+ * accepting its sign-in, with Connect / Reconnect on the laptop (Glean returns to its loopback address).
+ */
+export function GleanBanner({ glean, canConnect }: { glean: Board["glean"]; canConnect: boolean }) {
+  if (!glean?.configured || (glean.state !== "missing" && glean.state !== "expired")) return null;
+  const since = new Date(glean.since);
+  return (
+    <div className="alert" role="alert">
+      <div className="alert-row">
+        <span>
+          {glean.state === "missing" ? (
+            <>Glean isn't connected yet. The Assistant can't search company knowledge until it is.</>
+          ) : (
+            <>
+              Glean sign-in stopped working on {since.toLocaleDateString(undefined, { weekday: "long" })} at{" "}
+              {since.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}. The Assistant's company search is paused.
+            </>
+          )}
+        </span>
+        {canConnect ? (
+          <a className="btn" href="/glean/connect">
+            {glean.state === "missing" ? "Connect" : "Reconnect"}
+          </a>
+        ) : (
+          <span className="alert-hint">Connect from the board on your computer.</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * Telegram sign-in (D-37): a banner when Pennyworth isn't signed in yet or Telegram ended its session,
  * with a small form (phone, the code Telegram sends, then the 2FA password if the account has one).
  * Only on the laptop's loopback address, like Google's Reconnect.

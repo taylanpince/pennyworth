@@ -19,7 +19,7 @@ import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSo
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentsView } from "./Agents";
 import { PairRequired, api, type Session } from "./api";
-import { CardView, GoogleBanner, PlusIcon, SortableCard, TelegramBanner } from "./components";
+import { CardView, GleanBanner, GoogleBanner, PlusIcon, SortableCard, TelegramBanner } from "./components";
 import { Drawer } from "./Drawer";
 import { Markdown } from "./markdown";
 import { PairScreen, PhonePanel } from "./Pairing";
@@ -458,6 +458,7 @@ export function App() {
       {error && <div className="offline">Offline: {error}. Retrying…</div>}
       <GoogleBanner google={board.google} canReconnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
       <TelegramBanner telegram={board.telegram} canSignIn={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
+      <GleanBanner glean={board.glean} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
 
       {mobile && (
         <nav className="tabs">
