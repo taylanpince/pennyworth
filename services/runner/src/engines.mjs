@@ -52,7 +52,8 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
   const primerEnv = p ? { PRIMER_MCP_TOKEN: p.token } : {};
   if (engine.kind === "codex") {
     const base = sessionId ? ["codex", "exec", "resume", sessionId] : ["codex", "exec"];
-    const args = [...base, "--json", "-o", lastMessageFile, ...sandboxConfig(cfg, worktree)];
+    // The workspace holds several clones and isn't a git repository itself (D-41).
+    const args = [...base, "--json", "--skip-git-repo-check", "-o", lastMessageFile, ...sandboxConfig(cfg, worktree)];
     if (p) {
       args.push(
         "-c", `mcp_servers.primer.url=${JSON.stringify(p.url)}`,
@@ -126,7 +127,7 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
  * The agent's environment: no SSH agent (fetch only via the runner), read-only gh first on PATH,
  * and a git ssh wrapper that refuses pushes.
  */
-export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, logPath, signal }) {
+export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, logPath, signal, env: jobEnv = {} }) {
   const lastMessageFile = `${logPath}.last.md`;
   const { argv, env, promptAsArg } = buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile });
   const full = inDevshells(cfg.devshells.flake, shells, promptAsArg ? [...argv, prompt] : argv);
@@ -137,6 +138,14 @@ export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, log
     GIT_SSH_COMMAND: join(cfg.ghWrapperDir, "git-ssh-no-push"),
     GIT_TERMINAL_PROMPT: "0",
     PENNYWORTH_TASK_WORKTREE: worktree,
+    // The agent commits unsigned (it has no SSH agent to sign with); the runner signs its commits
+    // after the run (D-41).
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "commit.gpgsign",
+    GIT_CONFIG_VALUE_0: "false",
+    GIT_CONFIG_KEY_1: "tag.gpgsign",
+    GIT_CONFIG_VALUE_1: "false",
+    ...jobEnv,
   };
   delete agentEnv.SSH_AUTH_SOCK;
   if (engine.kind === "claude") delete agentEnv.ANTHROPIC_API_KEY; // the subscription token, never an API key

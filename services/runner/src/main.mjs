@@ -2,18 +2,21 @@
 // Pennyworth runner: turns your comments on Paperclip tasks labelled "engineer" into
 // Codex / Claude Code / OpenRouter coding jobs in runner-owned git worktrees on this machine.
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { RUNNER_MARKER, isAgentSubtask, ownRequest, findRepos, mentionedRepos, readOnlyRefusal, isClaudeModel, normalizeRepo, openrouterModels, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
-import { changesSummary, defaultBranch, detectShells, ensureClone, ensureWorktree, git, pushBranch, refreshCheckout, remoteBranchHead, remoteHasBranch, remoteIsEmpty, removeWorktree, startFreshBranch } from "./git.mjs";
+import { changesSummary, defaultBranch, detectShells, ensureClone, ensureGuardHooks, git, remoteIsEmpty } from "./git.mjs";
 import { codexModels, readApproval, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
-import { branchGuidance, checkBranchName, chooseBranchName, isLocalBranch } from "./branch.mjs";
+import { branchGuidance, checkBranchName, chooseBranchName, exampleBranches } from "./branch.mjs";
 import { cleanMessages, leaksInternal, writePrDescription } from "./describe.mjs";
-import { commitMessage, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, publishFooter, subtaskSummary, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
+import { branchesFooter, commitMessage, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, subtaskSummary, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
+import { startRepoHelper } from "./repohelper.mjs";
+import { branchChanges, carryOver, dirtyCheckouts, ensureRepo, findBranches, keepBranches, messagesSince, moveOffDefault, readManifest, signUnsigned, workspacePath, workspaceRepos } from "./workspace.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import { State } from "./state.mjs";
@@ -271,7 +274,7 @@ async function handleRequest(issue, latest) {
     return runCommand(issue, state.task(issue.id), action);
   }
   if (action === "push" || action === "pr") {
-    const what = action === "push" ? "publish the task branch to GitHub" : "push the task branch and open a draft PR";
+    const what = action === "push" ? "publish the task's branches to GitHub" : "push the task's branches and open draft PRs";
     return void (await pc.comment(issue.id, `To ${what}, reply with just **${action}**. I only publish on that exact word.`));
   }
   return dispatch({ issue, instructions, read, candidates, full });
@@ -414,8 +417,9 @@ async function applySettings(issue, task, settings) {
     if (!repoAllowed(repo, cfg.allowed_orgs) && !(await publicRepo(repo.slug))) {
       throw new UserError(`\`${repo.slug}\` is outside your orgs (${cfg.allowed_orgs.join(", ")}) and isn't a public GitHub repository, so I can't work in it.`);
     }
-    if (task.repo && task.repo !== repo.slug) throw new UserError(`This task already works on \`${task.repo}\`. Use a separate task for another repository.`);
-    fields.repo = repo.slug;
+    // A task works in several repositories (D-41): the first is its main one, the others join its workspace.
+    if (!task.repo) fields.repo = repo.slug;
+    else if (task.repo.toLowerCase() !== repo.slug.toLowerCase()) rememberRepos(issue.id, [repo.slug]);
   }
   if (settings.base) fields.base = settings.base.trim();
   if (settings.model && settings.engine !== "openrouter" && !isClaudeModel(settings.model)) settings.model = resolveModelAlias(settings.model, codexModels()) ?? settings.model;
@@ -484,44 +488,23 @@ async function startJob({ issue, instructions, read, candidates }) {
       task = state.task(issue.id);
     }
     state.set(pendingKey, "");
-    // Reference repositories (read-only context), remembered for follow-ups.
-    const refsKey = `refs:${issue.id}`;
-    const refSlugs = [...new Set([...JSON.parse(state.get(refsKey) || "[]"), ...(read?.references ?? [])])].filter((r) => r.toLowerCase() !== task.repo.toLowerCase());
-    state.set(refsKey, JSON.stringify(refSlugs));
-    const references = [];
-    for (const slug of refSlugs) {
-      try {
-        references.push({ slug, path: await refreshCheckout(await ensureClone(cfg.workDir, normalizeRepo(slug))) });
-      } catch (err) {
-        log("reference clone failed", { issue: issue.identifier, repo: slug, err: String(err.message ?? err).slice(0, 300) });
-      }
-    }
-    const repo = normalizeRepo(task.repo);
+    // Every repository the request names joins the workspace (D-41), remembered for follow-ups.
+    rememberRepos(issue.id, read?.references ?? []);
     const engine = task.engine ?? resolveEngine({}, cfg);
     const mode = task.mode ?? "investigate";
     const readOnly = mode === "implement" && readOnlyRefusal(task.repo, cfg.allowed_orgs, "change code there");
     if (readOnly) throw new UserError(readOnly);
 
-    const clone = await ensureClone(cfg.workDir, repo);
-    const base = task.base ?? (await defaultBranch(clone));
-    // The branch is named in the repository's style from the start (D-32); one from before that is
-    // renamed now, so it never shows up in comments.
-    let branch = task.branch ?? (await nameBranch(issue, { clone, repo, base }));
-    const worktree = await ensureWorktree(cfg.workDir, clone, issue.identifier, repo, branch, base);
-    if (isLocalBranch(branch)) {
-      task = await renameLocalBranch(issue, { ...task, base, branch, worktree }, clone, repo);
-      branch = task.branch ?? branch;
-    }
-    // The task's PR may have been merged or closed since the last run: never keep working on it.
-    const prNote = await leaveFinishedPr(issue, { ...task, base, branch, worktree }, clone);
-    if (prNote) {
-      task = state.task(issue.id);
-      branch = task.branch;
-      instructions = `(Runner note: ${prNote} Build on what is there now.)\n\n${instructions}`;
-    }
-    // Devshells: an explicit "shells:" wins, then the ones chosen for this task earlier, then detection.
-    const shells = task.shells ?? resolveShells({}, detectShells(worktree, cfg.devshells.detect), instructions, cfg);
-    state.updateTask(issue.id, { base, branch, worktree, shells, engine, mode });
+    const workspace = await prepareWorkspace(issue, state.task(issue.id));
+    // PRs merged or closed since the last run: never keep working on them.
+    const prNotes = await leaveFinishedPrs(issue, workspace);
+    if (prNotes.length) instructions = `(Runner note: ${prNotes.join(" ")} Build on what is there now.)\n\n${instructions}`;
+    const repos = await repoInfo(workspace, { naming: mode === "implement" ? issue : undefined });
+    const main = repos.find((r) => r.slug.toLowerCase() === task.repo.toLowerCase()) ?? repos[0];
+    // Devshells: the ones chosen for this task earlier, else detected in every repository.
+    const detected = [...new Set(repos.flatMap((r) => detectShells(r.path, cfg.devshells.detect)))];
+    const shells = task.shells ?? resolveShells({}, detected, instructions, cfg);
+    state.updateTask(issue.id, { shells, engine, mode });
 
     const logPath = join(logsDir, `${issue.identifier}-${Date.now()}.log`);
     jobId = state.startJob(issue.id, engineLabel(engine), logPath);
@@ -529,25 +512,33 @@ async function startJob({ issue, instructions, read, candidates }) {
     reportActivity();
     // A saved session can only be continued by the engine that created it (Codex, Claude Code and
     // opencode sessions are not interchangeable). After a switch the new engine starts fresh, with the
-    // earlier requests on this task and the work already on the branch as context.
+    // earlier requests on this task and the work already on its branches as context.
     const sessionEngine = state.get(`session_engine:${issue.id}`) || (String(task.session_id).startsWith("ses_") ? "openrouter" : "codex");
-    const resumed = Boolean(task.session_id && sessionEngine === engine.kind);
+    const resumed = Boolean(state.task(issue.id).session_id && sessionEngine === engine.kind);
     const historyKey = `history:${issue.id}`;
     const earlier = resumed ? "" : state.get(historyKey) || "";
     state.set(historyKey, `${state.get(historyKey) || ""}\n\n---\n\n${instructions}`.trim().slice(-20_000));
-    const refsNote = references.length ? `, reading ${references.map((r) => `\`${r.slug}\``).join(", ")} for reference` : "";
+    const where = repos.map((r) => `\`${r.slug}\``).join(", ");
     await pc.startWork(
       issue.id,
       mode === "answer"
-        ? `Looking into your question in \`${repo.slug}\` with ${engineLabel(engine)}. I'll answer here.`
-        : `${prNote && mode === "implement" ? `${prNote}\n\n` : ""}${resumed ? "Continuing" : "On it"}: ${mode === "implement" ? "making the change" : "investigating"} in \`${repo.slug}\`${refsNote}, with ${engineLabel(engine)}. I'll post the result here.\n\n_Branch \`${branch}\` · worktree \`${worktree}\` · shells ${shells.join(", ")}_`,
+        ? `Looking into your question in ${where} with ${engineLabel(engine)}. I'll answer here.`
+        : `${prNotes.length && mode === "implement" ? `${prNotes.join(" ")}\n\n` : ""}${resumed ? "Continuing" : "On it"}: ${mode === "implement" ? "making the changes" : "investigating"} in ${where}, with ${engineLabel(engine)}. I'll post the result here.\n\n_Workspace \`${workspace}\` · shells ${shells.join(", ")}_`,
     );
-    log("job started", { issue: issue.identifier, repo: repo.slug, engine: engine.kind, mode, resumed });
+    log("job started", { issue: issue.identifier, repos: repos.map((r) => r.slug), engine: engine.kind, mode, resumed });
 
+    const branches = state.branches(issue.id);
     const prompt = resumed
-      ? followUpPrompt({ user: cfg.selfName, mode, instructions })
-      : firstPrompt({ user: cfg.selfName, task: full, repo, worktree, branch, base, mode, shells, instructions, references, earlier });
-    const result = await runAgent({ cfg, engine, shells, worktree, prompt, sessionId: resumed ? task.session_id : undefined, logPath, signal: controller.signal });
+      ? followUpPrompt({ user: cfg.selfName, mode, instructions, workspace, repos, branches })
+      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells, instructions, earlier });
+    const tipsBefore = await branchTips(workspace);
+    const helper = repoHelper.register({ issue, workspace });
+    let result;
+    try {
+      result = await runAgent({ cfg, engine, shells, worktree: workspace, prompt, sessionId: resumed ? state.task(issue.id).session_id : undefined, logPath, signal: controller.signal, env: helper.env });
+    } finally {
+      helper.done();
+    }
     if (result.sessionId) {
       state.updateTask(issue.id, { session_id: result.sessionId });
       state.set(`session_engine:${issue.id}`, engine.kind);
@@ -555,25 +546,25 @@ async function startJob({ issue, instructions, read, candidates }) {
 
     if (result.cancelled) {
       state.finishJob(jobId, "cancelled");
-      await pc.setStatus(issue.id, "in_review", "Stopped on request. The worktree is unchanged since the last run report.");
+      await pc.setStatus(issue.id, "in_review", "Stopped on request. Whatever the run had changed is still in the workspace.");
       return;
     }
 
-    // Implement mode: the runner commits what the agent changed, but only after a finished run.
-    let committed = "";
-    const summaryBefore = await changesSummary(worktree, base);
-    const outcome = runOutcome({ ...result, timeoutMinutes: cfg.timeout_minutes ?? 60, mode, dirty: Boolean(summaryBefore.dirty) });
-    if (mode === "implement" && summaryBefore.dirty && outcome.finished) {
-      await git(worktree, "add", "-A");
-      await git(worktree, "-c", "core.hooksPath=/dev/null", "commit", "--quiet", "-m", publicSubject(commitMessage(result.lastMessage, `chore: ${full.title}`)));
-      committed = "yes";
-    }
-    const changes = await changesSummary(worktree, base);
-    const unexpectedPush = !task.pushed && (await remoteHasBranch(clone, branch));
+    const after = await workspaceRepos(workspace);
+    const dirty = await dirtyCheckouts(after);
+    // Agents commit as they go: the run changed something if any branch moved or appeared.
+    const committedNow = (await branchTips(workspace)) !== tipsBefore;
+    const outcome = runOutcome({ ...result, timeoutMinutes: cfg.timeout_minutes ?? 60, mode, dirty: dirty.length > 0, committed: committedNow });
+    const whereNow = after.map((r) => `\`${r.slug}\``).join(", ");
+    // Commit what's left uncommitted (implement, finished runs only), put every commit on a properly
+    // named branch, and sign the agent's commits.
+    const tidy = await tidyBranches(issue, workspace, { commitDirty: mode === "implement" && outcome.finished, message: publicSubject(commitMessage(result.lastMessage, `chore: ${full.title}`)) });
+    const rows = await branchRows(issue, workspace);
 
     const report = stripCommitLine(result.lastMessage);
+    const stillDirty = (await dirtyCheckouts(after)).length > 0;
     if (mode === "answer" && outcome.finished) {
-      await pc.setStatus(issue.id, "in_review", `${stripAnswerHeading(report)}\n\n_${engineLabel(engine)} · \`${repo.slug}\`${summaryBefore.dirty ? " · note: the worktree has uncommitted changes" : ""}_`);
+      await pc.setStatus(issue.id, "in_review", `${stripAnswerHeading(report)}\n\n_${engineLabel(engine)} · ${whereNow}${stillDirty ? " · note: the workspace has uncommitted changes" : ""}_`);
       state.finishJob(jobId, "done");
       log("job finished", { issue: issue.identifier, code: result.code, mode });
       return;
@@ -584,23 +575,16 @@ async function startJob({ issue, instructions, read, candidates }) {
       outcome.finished ? `\n${report}` : "",
       "",
       "---",
-      `${engineLabel(engine)} · ${mode} · \`${repo.slug}\` · branch \`${branch}\` (from \`${base}\`)`,
+      `${engineLabel(engine)} · ${mode} · ${whereNow}`,
+      branchesFooter(rows, { multiRepo: new Set(rows.map((r) => r.repo)).size > 1 }),
+      ...tidy.notes.map((n) => `\n_${n}_`),
     ];
-    if (changes.commits) {
-      // Only commits GitHub doesn't have yet are new; the rest is already on the branch or in the PR.
-      const remoteHead = await remoteBranchHead(clone, branch).catch(() => "");
-      const since = remoteHead && (await git(worktree, "cat-file", "-e", `${remoteHead}^{commit}`).then(() => true, () => false)) ? remoteHead : "";
-      const unpublished = since ? await git(worktree, "log", "--oneline", `${since}..HEAD`).catch(() => changes.commits) : changes.commits;
-      const stat = since ? (unpublished ? await git(worktree, "diff", "--stat", `${since}..HEAD`).catch(() => "") : "") : changes.stat;
-      parts.push(publishFooter({ unpublished, stat, prUrl: state.task(issue.id).pr_url, onGitHub: Boolean(remoteHead) }));
-    }
-    if (mode !== "implement" && summaryBefore.dirty) parts.push("\n_Note: the worktree has uncommitted changes._");
-    parts.push(`Worktree: \`${worktree}\` · log: \`${logPath}\``);
-    if (unexpectedPush) parts.push(`\n⚠️ **The branch \`${branch}\` exists on GitHub but the runner did not push it.** Please check.`);
+    if (stillDirty) parts.push("\n_Note: the workspace has uncommitted changes._");
+    parts.push(`Workspace: \`${workspace}\` · log: \`${logPath}\``);
     // Failures also go to review (Paperclip refuses "blocked" without a blocker); the report says what failed.
     await pc.setStatus(issue.id, "in_review", parts.filter(Boolean).join("\n"));
-    state.finishJob(jobId, result.timedOut ? "timeout" : result.code ? "failed" : outcome.finished ? "done" : "incomplete", committed ? "committed" : undefined);
-    log("job finished", { issue: issue.identifier, code: result.code, timedOut: result.timedOut, committed: Boolean(committed) });
+    state.finishJob(jobId, result.timedOut ? "timeout" : result.code ? "failed" : outcome.finished ? "done" : "incomplete", rows.some((r) => r.unpublished.length) ? "committed" : undefined);
+    log("job finished", { issue: issue.identifier, code: result.code, timedOut: result.timedOut, branches: rows.length, committed: tidy.committed });
   } catch (err) {
     if (jobId) state.finishJob(jobId, "failed", String(err).slice(0, 500));
     await reportError(issue, err);
@@ -640,7 +624,7 @@ async function handleParentPr(parent, fresh) {
         await reportError(kid, err);
         note = `Failed: ${String(err.message ?? err).split("\n")[0].slice(0, 160)}`;
       }
-      rows.push({ identifier: kid.identifier, title: kid.title, prUrl: note ? "" : state.task(kid.id)?.pr_url, note });
+      rows.push({ identifier: kid.identifier, title: kid.title, prUrl: note ? "" : state.branches(kid.id).filter((b) => b.pr_url && !b.merged).map((b) => b.pr_url).join(", "), note });
     }
     await pc.comment(parent.id, prSummary(rows));
     log("parent pr done", { issue: parent.identifier, opened: rows.filter((r) => r.prUrl).length });
@@ -693,99 +677,122 @@ async function runCommand(issue, task, command) {
           ? `**Nothing running.** The last run ${ENDED[job.status] ?? job.status} ${since(job.finished_at ?? job.started_at)}; its result is in the comments above.`
           : "**Nothing running**, and nothing has run on this task yet.",
       queued ? `${queued} more request${queued === 1 ? " is" : "s are"} queued after it.` : "",
-      task?.repo ? `Working in \`${task.repo}\` on branch \`${task.branch ?? "—"}\`${task.pr_url ? `, PR: ${task.pr_url}` : task.pushed ? " (pushed, no PR yet)" : " (not pushed yet)"}.` : "",
     ];
+    if (task?.workspace && existsSync(task.workspace) && !running.has(issue.id)) {
+      const rows = await branchRows(issue, task.workspace);
+      lines.push(rows.length ? branchesFooter(rows, { multiRepo: new Set(rows.map((r) => r.repo)).size > 1 }) : "\nNo branches yet.");
+    }
     return void (await pc.comment(issue.id, lines.filter(Boolean).join("\n")));
   }
   if (command === "reset") {
     state.updateTask(issue.id, { session_id: null });
-    return void (await pc.comment(issue.id, "Session cleared: the next run starts a fresh agent conversation (the worktree and branch are kept)."));
+    return void (await pc.comment(issue.id, "Session cleared: the next run starts a fresh agent conversation (the workspace and its branches are kept)."));
   }
-  if (!task?.worktree || !task.repo) {
+  if (!task?.repo || (!task.workspace && !task.worktree)) {
     return void (await pc.comment(issue.id, `There's nothing to ${command === "pr" ? "open a PR for" : command} yet: no work has been done on this task. Tell me what to build and I'll start; ${command === "pr" ? "**pr**" : "**push**"} works once there are commits.`));
   }
-  if (command === "push" || command === "pr") {
-    const readOnly = readOnlyRefusal(task.repo, cfg.allowed_orgs, command === "pr" ? "open a PR" : "push to it");
-    if (readOnly) return void (await pc.comment(issue.id, readOnly));
-  }
   if (running.has(issue.id)) return void (await pc.comment(issue.id, `Can't ${command} while a run is in progress. Comment **stop** first, or wait for it to finish.`));
-  const repo = normalizeRepo(task.repo);
-  const clone = join(cfg.workDir, "repos", repo.org, repo.name);
+  const workspace = await prepareWorkspace(issue, task, { clone: false });
 
   if (command === "cleanup") {
-    if (await git(task.worktree, "status", "--porcelain").catch(() => "")) {
-      return void (await pc.comment(issue.id, `I didn't remove the working copy: it has uncommitted changes (\`${task.worktree}\`). Ask me to commit or discard them first.`));
+    const repos = await workspaceRepos(workspace);
+    const dirty = await dirtyCheckouts(repos);
+    if (dirty.length) {
+      return void (await pc.comment(issue.id, `I didn't remove the workspace: it has uncommitted changes (${dirty.map((d) => `\`${d.path}\``).join(", ")}). Ask me to commit or discard them first.`));
     }
-    await removeWorktree(clone, task.worktree);
-    state.updateTask(issue.id, { worktree: null, session_id: null });
-    return void (await pc.comment(issue.id, `Removed the worktree. The local branch \`${task.branch}\` is kept${task.pushed ? " (and pushed)" : ""}.`));
+    // Local branches stay in the runner's cache clones (refs/kept/<task>/…), in case they're needed again.
+    for (const r of repos) await keepBranches(r.path, join(cfg.workDir, "repos", r.org, r.name), issue.identifier);
+    rmSync(workspace, { recursive: true, force: true });
+    const kept = state.branches(issue.id).length;
+    for (const b of state.branches(issue.id)) state.deleteBranch(issue.id, b.repo, b.branch);
+    state.updateTask(issue.id, { workspace: null, session_id: null });
+    return void (await pc.comment(issue.id, `Removed the workspace.${kept ? " Its branches are kept in the runner's copies of the repositories, and pushed ones are on GitHub." : ""}`));
   }
-  const prNote = await leaveFinishedPr(issue, task, clone);
-  if (prNote) task = state.task(issue.id);
-  const { commits } = await changesSummary(task.worktree, task.base);
-  if (!commits) return void (await pc.comment(issue.id, `${prNote ? `${prNote} ` : ""}There are no new commits to publish.`));
-  if (command === "pr" && (await remoteIsEmpty(clone))) {
-    return void (await pc.comment(issue.id, `The repository is still empty, so there's no branch to open a PR against. Reply **push** to publish this work as \`${task.base}\`.`));
+  const notes = await leaveFinishedPrs(issue, workspace);
+  const tidy = await tidyBranches(issue, workspace, { commitDirty: false });
+  const rows = await branchRows(issue, workspace);
+  const publishable = rows.filter((r) => !r.merged && (r.unpublished.length || (command === "pr" && !r.prUrl)));
+  if (!publishable.length) {
+    const open = rows.filter((r) => r.prUrl && !r.merged);
+    return void (await pc.comment(issue.id, [...notes, rows.length ? (open.length ? `Nothing new to publish: GitHub already has every commit${command === "pr" ? `, and the PRs are open: ${open.map((r) => r.prUrl).join(", ")}` : ""}.` : "Nothing new to publish.") : "There are no commits to publish."].join("\n\n")));
   }
-  // A branch from before D-32's change is published under a name in the repository's style.
-  if (!(await remoteIsEmpty(clone))) task = await renameLocalBranch(issue, task, clone, repo);
-  // "pr" always pushes the task branch first: it may never have been pushed (the first push into an
-  // empty repository goes to the base branch instead), and an open PR should get the latest commits.
-  const head = await git(task.worktree, "log", "-1", "--format=%H %s");
-  const upToDate = (await remoteBranchHead(clone, task.branch)) === head.split(" ")[0];
-  if (command === "push" && upToDate) {
-    return void (await pc.comment(
-      issue.id,
-      `**Nothing new to push.** GitHub already has the latest commit on \`${task.branch}\` (\`${head.slice(0, 7)}\` ${head.slice(41)})${task.pr_url ? `, and ${task.pr_url} shows it` : ""}. No commits have been made since the last push.`,
-    ));
-  }
-  if (command === "push" || command === "pr") {
-    if (!checkBranchName(task.branch, { base: task.base, defaultBranch: await defaultBranch(clone) }) && !isLocalBranch(task.branch)) throw new Error(`refusing to push unexpected branch ${task.branch}`);
-    const target = await pushBranch(clone, task.worktree, task.branch, { initialBranch: task.base }).catch((err) => {
-      throw new UserError(`I couldn't push \`${task.branch}\`. Git said:\n\`\`\`\n${String(err.stderr || err.message).trim().slice(-800)}\n\`\`\``);
-    });
-    state.updateTask(issue.id, { pushed: 1 });
-    log("branch pushed", { issue: issue.identifier, repo: repo.slug, branch: target });
-    if (command === "push") {
-      if (prNote) await pc.comment(issue.id, prNote);
-      return void (await pc.comment(
-        issue.id,
-        target === task.branch
-          ? task.pr_url
-            ? `Pushed \`${head.slice(0, 7)}\` ${head.slice(41)} to \`${task.branch}\`. The PR is updated: ${task.pr_url}`
-            : `Pushed \`${task.branch}\` → https://github.com/${repo.slug}/compare/${task.base}...${encodeURIComponent(task.branch)}?expand=1`
-          : `The repository was empty, so I pushed this as its first commit on \`${target}\` → https://github.com/${repo.slug}/tree/${encodeURIComponent(target)}\nLater changes on this task go to \`${task.branch}\` as usual.`,
-      ));
+  // Parents before the branches stacked on them: a stacked PR needs its base on GitHub first.
+  const ordered = [];
+  const visit = (r) => {
+    if (ordered.includes(r)) return;
+    const parent = publishable.find((p) => p.repo === r.repo && p.branch === r.base);
+    if (parent) visit(parent);
+    ordered.push(r);
+  };
+  publishable.forEach(visit);
+
+  const full = await pc.issue(issue.id);
+  const results = [];
+  for (const r of ordered) {
+    const label = `${new Set(rows.map((x) => x.repo)).size > 1 ? `${r.repo} · ` : ""}\`${r.branch}\``;
+    try {
+      results.push(`| ${label} | ${await publishBranch(issue, full, r, command, rows)} |`);
+    } catch (err) {
+      log("publish failed", { issue: issue.identifier, repo: r.repo, branch: r.branch, err: String(err.stderr || err.message).slice(0, 300) });
+      results.push(`| ${label} | ⚠️ ${String(err instanceof UserError ? err.message : err.stderr || err.message).trim().split("\n").slice(-3).join(" ").replace(/\|/g, "/").slice(0, 400)} |`);
     }
   }
-  if (command === "pr") {
-    if (task.pr_url) return void (await pc.comment(issue.id, upToDate ? `The PR is already open and up to date: ${task.pr_url}` : `Pushed the new commits to the open PR: ${task.pr_url}`));
-    const full = await pc.issue(issue.id);
-    // Written for the repository's reviewers: nothing about Pennyworth, tasks or this machine.
-    const range = (await git(task.worktree, "rev-parse", "--verify", "--quiet", `origin/${task.base}`).then(() => true, () => false)) ? [`origin/${task.base}..HEAD`] : ["HEAD"];
-    const messages = cleanMessages(await git(task.worktree, "log", "--reverse", "--format=%B%x1e", ...range).catch(() => ""));
-    const diffRange = range[0] === "HEAD" ? ["4b825dc642cb6eb9a060e54bf8d69288fbee4904", "HEAD"] : [`origin/${task.base}...HEAD`];
-    const stat = await git(task.worktree, "diff", "--stat", ...diffRange).catch(() => "");
-    const diff = await git(task.worktree, "diff", ...diffRange).catch(() => "");
-    const subject = messages.at(-1)?.split("\n")[0] ?? full.title;
-    const fallbackTitle = prTitle(commits, leaksInternal(full.title) ? subject : full.title);
-    const pr = await writePrDescription({
-      cfg, repo: repo.slug, base: task.base,
-      request: await prRequest(full),
-      messages, stat, diff, report: await lastReport(issue.id).catch(() => undefined), fallbackTitle,
-    });
-    const body = leaksInternal(pr.body) ? "" : pr.body;
-    log("pr description", { issue: issue.identifier, generated: pr.generated, rejected: Boolean(pr.rejected) });
-    const realGh = await findRealGh();
-    const { stdout } = await execFileP(realGh, ["pr", "create", "--draft", "--repo", repo.slug, "--head", task.branch, "--base", task.base, "--title", pr.title, "--body", body], { cwd: task.worktree }).catch((err) => {
-      // gh's error message repeats the whole command line (PR body included): show stderr only.
-      throw new UserError(`I couldn't open the PR. GitHub said:\n\`\`\`\n${String(err.stderr || "gh pr create failed").trim().slice(-800)}\n\`\`\``);
-    });
-    const url = stdout.trim().split("\n").pop();
-    state.updateTask(issue.id, { pr_url: url });
-    log("draft PR opened", { issue: issue.identifier, url });
-    await pc.comment(issue.id, `${prNote ? `${prNote}\n\n` : ""}Opened draft PR: ${url}`);
+  await pc.comment(issue.id, [...notes, ...tidy.notes.map((n) => `_${n}_`), "| Branch | Result |", "|---|---|", ...results].join("\n"));
+}
+
+/**
+ * Publish one branch on the user's "push" or "pr": checks first (writable repository, a valid public
+ * name, no internal names in its commits), then push (never forced), then for "pr" a draft PR into its
+ * base, the parent branch for a stacked one. Returns the result line for the table.
+ */
+async function publishBranch(issue, full, r, command, rows) {
+  if (!r.writable) throw new UserError(`not published: \`${r.repo}\` is outside your orgs (${cfg.allowed_orgs.join(", ")}), so it's read-only`);
+  const empty = await remoteIsEmpty(r.path);
+  if (r.branch === r.defaultBase ? !empty : !checkBranchName(r.branch, { base: r.defaultBase, defaultBranch: r.defaultBase })) throw new UserError(`not a branch name I'd publish`);
+  const leaky = (await messagesSince(r.path, `origin/${r.defaultBase}`, r.branch).catch(() => [])).find((m) => leaksInternal(m));
+  if (r.unpublished.length && leaky) throw new UserError(`a commit message mentions internal names ("${leaky.split("\n")[0].slice(0, 80)}"). Ask me to reword it`);
+  const url = await git(r.path, "remote", "get-url", "origin");
+  let pushed = "";
+  if (r.unpublished.length || !r.onGitHub) {
+    // Into an empty repository the first branch becomes its default branch, as GitHub expects.
+    const target = empty ? r.defaultBase : r.branch;
+    await git(r.path, "push", "--no-verify", url, `refs/heads/${r.branch}:refs/heads/${target}`);
+    await git(r.path, "fetch", "--quiet", "origin");
+    state.updateBranch(issue.id, r.repo, r.branch, { pushed: 1 });
+    log("branch pushed", { issue: issue.identifier, repo: r.repo, branch: r.branch, target });
+    if (target !== r.branch) return `The repository was empty: pushed as its first commits on \`${target}\` → https://github.com/${r.repo}/tree/${encodeURIComponent(target)}`;
+    pushed = `Pushed ${r.unpublished.length} commit${r.unpublished.length === 1 ? "" : "s"}`;
   }
+  if (r.prUrl) return `${pushed || "Up to date"}. PR: ${r.prUrl}`;
+  if (command === "push") return `${pushed} → https://github.com/${r.repo}/compare/${r.base}...${encodeURIComponent(r.branch)}?expand=1`;
+  // Written for the repository's reviewers: nothing about Pennyworth, tasks or this machine.
+  const from = r.base === r.defaultBase ? `origin/${r.defaultBase}` : r.base;
+  const messages = cleanMessages((await messagesSince(r.path, from, r.branch)).join("\x1e"));
+  const stat = await git(r.path, "diff", "--stat", `${from}...${r.branch}`).catch(() => "");
+  const diff = await git(r.path, "diff", `${from}...${r.branch}`).catch(() => "");
+  const oneline = await git(r.path, "log", "--oneline", `${from}..${r.branch}`).catch(() => "");
+  const subject = messages.at(-1)?.split("\n")[0] ?? full.title;
+  const fallbackTitle = prTitle(oneline, rows.filter((x) => !x.merged).length > 1 || leaksInternal(full.title) ? subject : full.title);
+  const siblings = rows.filter((x) => x !== r && !x.merged);
+  const pr = await writePrDescription({
+    cfg, repo: r.repo, base: r.base,
+    request: [
+      await prRequest(full),
+      siblings.length ? `This pull request is one of ${siblings.length + 1} from this request; it covers only the branch \`${r.branch}\`${r.purpose ? ` (${r.purpose})` : ""}. Describe only its own changes.` : "",
+      r.base !== r.defaultBase ? `It is stacked on \`${r.base}\`, which has its own pull request.` : "",
+    ].filter(Boolean).join("\n\n"),
+    messages, stat, diff, report: siblings.length ? undefined : await lastReport(issue.id).catch(() => undefined), fallbackTitle,
+  });
+  const body = leaksInternal(pr.body) ? "" : pr.body;
+  log("pr description", { issue: issue.identifier, branch: r.branch, generated: pr.generated, rejected: Boolean(pr.rejected) });
+  const { stdout } = await execFileP(await findRealGh(), ["pr", "create", "--draft", "--repo", r.repo, "--head", r.branch, "--base", r.base, "--title", pr.title, "--body", body], { cwd: r.path }).catch((err) => {
+    // gh's error message repeats the whole command line (PR body included): show stderr only.
+    throw new UserError(`couldn't open the PR. GitHub said: ${String(err.stderr || "gh pr create failed").trim().slice(-400)}`);
+  });
+  const prUrl = stdout.trim().split("\n").pop();
+  state.updateBranch(issue.id, r.repo, r.branch, { pr_url: prUrl });
+  log("draft PR opened", { issue: issue.identifier, url: prUrl });
+  return `${pushed ? `${pushed}, opened` : "Opened"} draft PR ${prUrl}`;
 }
 
 /**
@@ -800,37 +807,205 @@ async function prRequest(full) {
   return parentText ? `${own}\n\nThis change is one repository of a larger request (its rules for PR titles and bodies apply):\n\n${parent.title}\n\n${parentText}` : own;
 }
 
+// ------------------------------------------------------------------ workspaces (D-41)
+
+const BRANCH_DOCS = ["CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md", "AGENTS.md", "CLAUDE.md", ".github/pull_request_template.md"];
+const ghJson = async (args) => execFileP(await findRealGh(), args).then(({ stdout }) => JSON.parse(stdout), () => undefined);
+let ghLogin;
+const login = async () => (ghLogin ??= (await ghJson(["api", "user"]))?.login ?? "");
+const recentPrs = new Map(); // repo → { at, prs }
+async function repoPrs(slug) {
+  const hit = recentPrs.get(slug);
+  if (hit && Date.now() - hit.at < 3_600_000) return hit.prs;
+  const prs = (await ghJson(["pr", "list", "--repo", slug, "--state", "all", "--limit", "60", "--json", "headRefName,author"])) ?? [];
+  recentPrs.set(slug, { at: Date.now(), prs });
+  return prs;
+}
+const branchDocs = (path) => branchGuidance(BRANCH_DOCS.map((f) => [f, existsSync(join(path, f)) ? readFileSync(join(path, f), "utf8") : ""]));
+const writable = (slug) => repoAllowed(normalizeRepo(slug), cfg.allowed_orgs);
+
+/** Repositories this task works in besides its main one (D-41), remembered across runs. */
+function rememberRepos(issueId, slugs) {
+  const key = `repos:${issueId}`;
+  const list = JSON.parse(state.get(key) || state.get(`refs:${issueId}`) || "[]");
+  for (const s of slugs) if (!list.some((l) => l.toLowerCase() === s.toLowerCase())) list.push(s);
+  state.set(key, JSON.stringify(list));
+  return list;
+}
+
+/** Clone one repository into a workspace (from the runner's cache clone). */
+async function addRepo(workspace, slug) {
+  const repo = normalizeRepo(slug);
+  const cache = await ensureClone(cfg.workDir, repo);
+  return ensureRepo(workspace, repo, { cache, hooksDir: ensureGuardHooks(cfg.workDir) });
+}
+
 /**
- * A branch name for the task's work that follows the repository's conventions (its contributing
- * guide, the user's own recent branches, then everyone's), from the request and any commits so far
- * (D-32). Before the worktree exists, the guides are read from origin/<base>.
+ * The task's workspace, with its main repository and every other one it uses cloned (unless
+ * `clone: false`). A task from before workspaces (one worktree of the cache clone, one branch) moves
+ * in first: its branch, PR and uncommitted changes come along, and the old worktree goes.
  */
-async function nameBranch(issue, { clone, repo, base, worktree, withCommits = Boolean(worktree) }) {
-  const realGh = await findRealGh();
-  const ghJson = (args) => execFileP(realGh, args).then(({ stdout }) => JSON.parse(stdout), () => undefined);
-  const login = (await ghJson(["api", "user"]))?.login ?? "";
-  const prs = (await ghJson(["pr", "list", "--repo", repo.slug, "--state", "all", "--limit", "60", "--json", "headRefName,author"])) ?? [];
-  const docs = ["CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md", "AGENTS.md", "CLAUDE.md", ".github/pull_request_template.md"];
-  const read = async (f) => (worktree && existsSync(join(worktree, f)) ? readFileSync(join(worktree, f), "utf8") : worktree ? "" : await git(clone, "show", `origin/${base}:${f}`).catch(() => ""));
-  const guidance = branchGuidance(await Promise.all(docs.map(async (f) => [f, await read(f)])));
-  const messages = withCommits ? cleanMessages(await git(worktree, "log", "--reverse", "--format=%B%x1e", `origin/${base}..HEAD`).catch(() => "")) : [];
-  const taken = async (name) => Boolean(await git(clone, "branch", "--list", name)) || (await remoteHasBranch(clone, name));
+async function prepareWorkspace(issue, task, { clone = true } = {}) {
+  const workspace = task.workspace ?? workspacePath(cfg.workDir, issue.identifier);
+  if (!task.workspace) state.updateTask(issue.id, { workspace });
+  if (task.worktree) await moveIntoWorkspace(issue, task, workspace);
+  if (clone) {
+    for (const slug of [task.repo, ...rememberRepos(issue.id, [])]) {
+      await addRepo(workspace, slug).catch((err) => {
+        if (slug === task.repo) throw err;
+        log("repository clone failed", { issue: issue.identifier, repo: slug, err: String(err.message ?? err).slice(0, 300) });
+      });
+    }
+  }
+  return workspace;
+}
+
+async function moveIntoWorkspace(issue, task, workspace) {
+  const repo = normalizeRepo(task.repo);
+  const cache = join(cfg.workDir, "repos", repo.org, repo.name);
+  const path = await addRepo(workspace, task.repo);
+  if (existsSync(task.worktree) && task.branch) {
+    // Uncommitted changes travel as a binary patch, untracked files included.
+    let patch = "";
+    if (await git(task.worktree, "status", "--porcelain")) {
+      await git(task.worktree, "add", "-A");
+      patch = (await execFileP("git", ["diff", "--cached", "--binary", "HEAD"], { cwd: task.worktree, maxBuffer: 64 * 1024 * 1024 })).stdout;
+    }
+    await git(path, "fetch", "--quiet", cache, `+refs/heads/${task.branch}:refs/heads/${task.branch}`);
+    await git(path, "switch", "--quiet", task.branch);
+    if (patch) {
+      const dir = mkdtempSync(join(tmpdir(), "pw-move-"));
+      try {
+        writeFileSync(join(dir, "p"), patch);
+        await git(path, "apply", "--index", join(dir, "p"));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+    await git(cache, "worktree", "remove", "--force", task.worktree);
+  }
+  if (task.branch) {
+    state.saveBranch(issue.id, { repo: repo.slug, branch: task.branch, base: task.base ?? (await defaultBranch(path)) });
+    state.updateBranch(issue.id, repo.slug, task.branch, { pushed: task.pushed ? 1 : 0, pr_url: task.pr_url ?? null });
+  }
+  // The old session ran in the old worktree: start afresh, with the task's history as context.
+  state.updateTask(issue.id, { worktree: null, branch: null, pr_url: null, pushed: 0, session_id: null });
+  log("moved into a workspace", { issue: issue.identifier, branch: task.branch, workspace });
+}
+
+/** `pennyworth-repo <org/name>` from a running job: clone another repository into its workspace. */
+const repoHelper = startRepoHelper(async ({ issue, workspace }, raw) => {
+  const repo = normalizeRepo(raw);
+  if (!repo) throw new Error(`\`${raw}\` isn't a GitHub repository (use org/name).`);
+  if (!repoAllowed(repo, cfg.allowed_orgs) && !(await publicRepo(repo.slug))) throw new Error(`${repo.slug} is outside ${cfg.allowed_orgs.join(", ")} and isn't a public repository I can read.`);
+  const path = await addRepo(workspace, repo.slug);
+  rememberRepos(issue.id, [repo.slug]);
+  log("repository added by the agent", { issue: issue.identifier, repo: repo.slug });
+  return `${repo.slug} is at ${path} (default branch ${await defaultBranch(path)})${writable(repo.slug) ? "" : ". It is read-only: changes there can't be published"}.`;
+}, log);
+
+/** Each repository in the workspace for the prompt; with `naming`, its branch naming rules and examples. */
+async function repoInfo(workspace, { naming } = {}) {
+  const out = [];
+  for (const r of await workspaceRepos(workspace)) {
+    const info = { slug: r.slug, path: r.path, base: await defaultBranch(r.path), writable: writable(r.slug) };
+    if (naming && info.writable) {
+      const examples = exampleBranches(await repoPrs(r.slug), { login: await login(), base: info.base });
+      const guidance = branchDocs(r.path);
+      info.naming = [
+        guidance ? `From the repository's guides:\n\n${guidance}` : "",
+        examples.mine.length ? `${cfg.selfName}'s recent branches here: ${examples.mine.slice(0, 10).map((b) => `\`${b}\``).join(", ")}` : "",
+        examples.others.length ? `Others' recent branches: ${examples.others.slice(0, 12).map((b) => `\`${b}\``).join(", ")}` : "",
+        !guidance && !examples.mine.length && !examples.others.length ? "No convention found: use `<type>/<short-description>` with a conventional commit type." : "",
+      ].filter(Boolean).join("\n\n");
+    }
+    out.push(info);
+  }
+  return out;
+}
+
+/** A branch name in the repository's style (D-32) for commits that aren't on a proper branch yet. */
+async function nameBranch(issue, { path, slug, base, messages = [] }) {
   const full = await pc.issue(issue.id);
+  const taken = async (name) => Boolean(await git(path, "branch", "--list", name)) || Boolean(await git(path, "ls-remote", "--heads", "origin", name).catch(() => ""));
   const { name, generated } = await chooseBranchName({
-    cfg, repo: repo.slug, base, defaultBranch: await defaultBranch(clone), login, guidance, prs,
-    request: await prRequest(full), messages, title: leaksInternal(full.title) ? "" : full.title, taken,
+    cfg, repo: slug, base, defaultBranch: base, login: await login(), guidance: branchDocs(path), prs: await repoPrs(slug),
+    request: await prRequest(full), messages: cleanMessages(messages.join("\x1e")), title: leaksInternal(full.title) ? "" : full.title, taken,
   });
-  log("branch named", { issue: issue.identifier, branch: name, generated });
+  log("branch named", { issue: issue.identifier, repo: slug, branch: name, generated });
   return name;
 }
 
-/** Rename a task branch from before D-32's change (pennyworth/<task>) that GitHub doesn't have yet. */
-async function renameLocalBranch(issue, task, clone, repo) {
-  if (!isLocalBranch(task.branch) || !task.worktree || (await remoteHasBranch(clone, task.branch))) return task;
-  const name = await nameBranch(issue, { clone, repo, base: task.base, worktree: task.worktree });
-  await git(task.worktree, "branch", "-m", name);
-  state.updateTask(issue.id, { branch: name });
-  return state.task(issue.id);
+/**
+ * After a run, and before publishing: commit what's left uncommitted (`commitDirty`), move commits made
+ * on a default branch or a detached HEAD onto a branch, rename branches that aren't publishable
+ * (pennyworth/…, internal words), and sign the agent's commits. Returns notes for the report.
+ */
+async function tidyBranches(issue, workspace, { commitDirty, message }) {
+  const notes = [];
+  let committed = 0;
+  for (const r of await workspaceRepos(workspace)) {
+    const base = await defaultBranch(r.path);
+    try {
+      if (commitDirty) {
+        for (const d of await dirtyCheckouts([r])) {
+          if (!d.branch || d.branch === base) await git(d.path, "switch", "--quiet", "-c", await nameBranch(issue, { path: r.path, slug: r.slug, base, messages: [message] }));
+          await git(d.path, "add", "-A");
+          await git(d.path, "-c", "core.hooksPath=/dev/null", "commit", "--quiet", "-m", message);
+          committed++;
+        }
+      }
+      const onBase = await messagesSince(r.path, `origin/${base}`, base).catch(() => []);
+      if (onBase.length) {
+        const moved = await moveOffDefault(r.path, base, await nameBranch(issue, { path: r.path, slug: r.slug, base, messages: onBase }));
+        if (moved) notes.push(`Commits made on \`${base}\` in ${r.slug} were moved to \`${moved}\`.`);
+      }
+      for (const b of await findBranches(r.path, { base, slug: r.slug })) {
+        if (b.branch === base || checkBranchName(b.branch, { base, defaultBranch: base }) || (await git(r.path, "ls-remote", "--heads", "origin", b.branch).catch(() => ""))) continue;
+        const name = await nameBranch(issue, { path: r.path, slug: r.slug, base, messages: await messagesSince(r.path, `origin/${base}`, b.branch) });
+        await git(r.path, "branch", "-m", b.branch, name);
+        state.deleteBranch(issue.id, r.slug, b.branch);
+        notes.push(`Renamed \`${b.branch}\` to \`${name}\` in ${r.slug}.`);
+      }
+      await signUnsigned(r.path);
+    } catch (err) {
+      log("tidy failed", { issue: issue.identifier, repo: r.slug, err: String(err.stderr || err.message || err).slice(0, 300) });
+      notes.push(`Couldn't finish tidying ${r.slug}'s branches: ${String(err.stderr || err.message || err).trim().split("\n").pop().slice(0, 200)}`);
+    }
+  }
+  return { notes, committed };
+}
+
+/** Every local branch tip in the workspace, as one string: compared before and after a run. */
+async function branchTips(workspace) {
+  const out = [];
+  for (const r of await workspaceRepos(workspace)) out.push(`${r.slug}\n${await git(r.path, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads").catch(() => "")}`);
+  return out.join("\n");
+}
+
+/**
+ * The task's branches now, saved to the state (D-41): every local branch with commits of its own in
+ * every workspace repository, with what GitHub doesn't have yet. Rows of branches that disappeared
+ * are dropped unless they were pushed.
+ */
+async function branchRows(issue, workspace) {
+  const manifest = readManifest(workspace);
+  const rows = [];
+  const repos = await workspaceRepos(workspace);
+  for (const r of repos) {
+    const base = await defaultBranch(r.path);
+    const found = await findBranches(r.path, { base, manifest, slug: r.slug });
+    for (const b of found) state.saveBranch(issue.id, { repo: r.slug, branch: b.branch, base: b.base, purpose: b.purpose });
+    for (const k of state.branches(issue.id).filter((k) => k.repo === r.slug && !found.some((b) => b.branch === k.branch))) {
+      if (!k.pushed && !k.pr_url) state.deleteBranch(issue.id, k.repo, k.branch);
+    }
+    for (const b of state.branches(issue.id).filter((k) => k.repo === r.slug)) {
+      if (!(await git(r.path, "rev-parse", "--verify", "--quiet", `refs/heads/${b.branch}`).catch(() => ""))) continue;
+      const c = await branchChanges(r.path, { branch: b.branch, base: b.base, defaultBase: base });
+      rows.push({ repo: r.slug, path: r.path, branch: b.branch, base: b.base, defaultBase: base, purpose: b.purpose, unpublished: c.unpublished, stat: c.stat, onGitHub: c.onGitHub, pushed: b.pushed, prUrl: b.pr_url ?? undefined, merged: b.merged, writable: writable(r.slug), readOnly: !writable(r.slug) });
+    }
+  }
+  return rows;
 }
 
 /** Commit subjects are public: never let a task number or our tooling into one. */
@@ -851,44 +1026,55 @@ async function lastReport(issueId) {
 }
 
 /**
- * If the task's PR was merged, move the work to a fresh branch from the latest base, carrying over
- * any commits made after the merge; if it was closed unmerged, forget it so "pr" opens a new one.
- * Returns a sentence for the user (empty when the PR is still open or there is none).
+ * PRs of the task's branches that were merged or closed since we last looked. A closed one is
+ * forgotten, so "pr" opens a new one. A merged one stays as merged; commits made on its branch after
+ * the merge move to a new branch from the latest default branch. Returns sentences for the user.
  */
-async function leaveFinishedPr(issue, task, clone) {
-  if (!task.pr_url || !task.worktree) return "";
-  let pr;
-  try {
-    const { stdout } = await execFileP(await findRealGh(), ["pr", "view", task.pr_url, "--json", "state,number,headRefOid"]);
-    pr = JSON.parse(stdout);
-  } catch (err) {
-    log("pr state check failed", { issue: issue.identifier, err: String(err.stderr || err.message).slice(0, 300) });
-    return "";
+async function leaveFinishedPrs(issue, workspace) {
+  const notes = [];
+  const repos = await workspaceRepos(workspace);
+  for (const b of state.branches(issue.id).filter((b) => b.pr_url && !b.merged)) {
+    let pr;
+    try {
+      const { stdout } = await execFileP(await findRealGh(), ["pr", "view", b.pr_url, "--json", "state,number,headRefOid"]);
+      pr = JSON.parse(stdout);
+    } catch (err) {
+      log("pr state check failed", { issue: issue.identifier, err: String(err.stderr || err.message).slice(0, 300) });
+      continue;
+    }
+    if (pr.state === "OPEN") continue;
+    if (pr.state === "CLOSED") {
+      state.updateBranch(issue.id, b.repo, b.branch, { pr_url: null });
+      notes.push(`PR #${pr.number} (\`${b.branch}\`) was closed without merging, so **pr** will open a new one.`);
+      continue;
+    }
+    state.updateBranch(issue.id, b.repo, b.branch, { merged: 1 });
+    const r = repos.find((x) => x.slug === b.repo);
+    if (!r) continue;
+    const base = await defaultBranch(r.path);
+    let note = `PR #${pr.number} (\`${b.branch}\`) is merged.`;
+    try {
+      const after = await git(r.path, "rev-list", "--count", `${pr.headRefOid}..${b.branch}`).catch(() => "0");
+      if (Number(after)) {
+        const next = await nameBranch(issue, { path: r.path, slug: r.slug, base, messages: await messagesSince(r.path, pr.headRefOid, b.branch) });
+        const carried = await carryOver(r.path, { branch: b.branch, base, since: pr.headRefOid, name: next });
+        note += ` The ${carried} commit${carried === 1 ? "" : "s"} made on it since moved to a new branch \`${next}\` from the latest \`${base}\`.`;
+      }
+    } catch (err) {
+      note += ` The commits made on it since don't apply cleanly on the latest \`${base}\`, so they're still on \`${b.branch}\`. Git said: ${String(err.stderr || err.message).trim().split("\n").pop().slice(0, 200)}`;
+    }
+    log("pr merged", { issue: issue.identifier, pr: pr.number, branch: b.branch });
+    notes.push(note);
   }
-  if (pr.state === "OPEN") return "";
-  if (pr.state === "CLOSED") {
-    state.updateTask(issue.id, { pr_url: null });
-    return `PR #${pr.number} was closed without merging, so **pr** will open a new one.`;
-  }
-  if (await git(task.worktree, "status", "--porcelain")) {
-    throw new UserError(`PR #${pr.number} was merged, but the worktree has uncommitted changes, so I didn't move them to a new branch. Reply **cleanup** to start over from the latest \`${task.base}\`.`);
-  }
-  const next = await nameBranch(issue, { clone, repo: normalizeRepo(task.repo), base: task.base, worktree: task.worktree, withCommits: false });
-  let carried;
-  try {
-    carried = await startFreshBranch(clone, task.worktree, { base: task.base, since: pr.headRefOid, branch: next });
-  } catch (err) {
-    throw new UserError(`PR #${pr.number} was merged, and the commits made since don't apply cleanly on the latest \`${task.base}\`. They are still on \`${task.branch}\`. Git said:\n\`\`\`\n${String(err.stderr || err.message).trim().slice(-600)}\n\`\`\``);
-  }
-  state.updateTask(issue.id, { branch: next, pr_url: null, pushed: 0 });
-  log("moved off merged PR", { issue: issue.identifier, pr: pr.number, branch: next, carried });
-  return `PR #${pr.number} is merged, so this work continues on a new branch \`${next}\` from the latest \`${task.base}\`${carried ? ` (${carried} commit${carried === 1 ? "" : "s"} made since the merge carried over)` : ""}.`;
+  return notes;
 }
 
-/** True when the task has a worktree with commits on its branch (something to push or open a PR for). */
+/** True when the task has commits on a branch (something to push or open a PR for). */
 async function taskHasCommits(task) {
-  if (!task?.worktree || !task.base) return false;
-  return Boolean((await changesSummary(task.worktree, task.base).catch(() => ({}))).commits);
+  if (task?.worktree && task.base) return Boolean((await changesSummary(task.worktree, task.base).catch(() => ({}))).commits);
+  if (!task?.workspace || !existsSync(task.workspace)) return false;
+  for (const r of await workspaceRepos(task.workspace)) if ((await findBranches(r.path, { base: await defaultBranch(r.path) }).catch(() => [])).length) return true;
+  return false;
 }
 
 async function findRealGh() {

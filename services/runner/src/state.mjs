@@ -41,7 +41,42 @@ export class State {
         detail      TEXT
       );
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+      -- A task's branches across its workspace's repositories (D-41).
+      CREATE TABLE IF NOT EXISTS branches (
+        issue_id   TEXT NOT NULL,
+        repo       TEXT NOT NULL,
+        branch     TEXT NOT NULL,
+        base       TEXT NOT NULL,
+        purpose    TEXT,
+        pushed     INTEGER NOT NULL DEFAULT 0,
+        pr_url     TEXT,
+        merged     INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (issue_id, repo, branch)
+      );
     `);
+    // The task's workspace directory (D-41); tasks from before it have only a worktree.
+    if (!this.db.prepare("SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'workspace'").get()) this.db.exec("ALTER TABLE tasks ADD COLUMN workspace TEXT");
+  }
+
+  branches(issueId) {
+    return this.db.prepare("SELECT * FROM branches WHERE issue_id = ? ORDER BY repo, branch").all(issueId);
+  }
+
+  /** Record a branch the task has (insert or update its base and purpose). */
+  saveBranch(issueId, { repo, branch, base, purpose }) {
+    this.db
+      .prepare("INSERT INTO branches (issue_id, repo, branch, base, purpose, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (issue_id, repo, branch) DO UPDATE SET base = excluded.base, purpose = COALESCE(NULLIF(excluded.purpose, ''), branches.purpose), updated_at = excluded.updated_at")
+      .run(issueId, repo, branch, base, purpose ?? "", new Date().toISOString());
+  }
+
+  updateBranch(issueId, repo, branch, fields) {
+    const keys = Object.keys(fields);
+    this.db.prepare(`UPDATE branches SET ${keys.map((k) => `${k} = ?`).join(", ")}, updated_at = ? WHERE issue_id = ? AND repo = ? AND branch = ?`).run(...keys.map((k) => fields[k] ?? null), new Date().toISOString(), issueId, repo, branch);
+  }
+
+  deleteBranch(issueId, repo, branch) {
+    this.db.prepare("DELETE FROM branches WHERE issue_id = ? AND repo = ? AND branch = ?").run(issueId, repo, branch);
   }
 
   task(issueId) {

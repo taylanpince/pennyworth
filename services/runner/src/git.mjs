@@ -12,7 +12,7 @@ export async function git(cwd, ...args) {
 }
 
 /** Hooks dir whose pre-push always refuses: agents cannot push from task worktrees. */
-function ensureGuardHooks(workDir) {
+export function ensureGuardHooks(workDir) {
   const dir = join(workDir, ".guard-hooks");
   mkdirSync(dir, { recursive: true });
   const hook = join(dir, "pre-push");

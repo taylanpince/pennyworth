@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Clone another repository into this task's workspace: pennyworth-repo <org/name or GitHub URL>.
+# Agents have no SSH agent to clone private repositories with, so the runner does the clone (D-41)
+# and prints where it is.
+set -euo pipefail
+[ $# -eq 1 ] || { echo "usage: pennyworth-repo <org/name>" >&2; exit 2; }
+[ -n "${PENNYWORTH_REPO_URL:-}" ] || { echo "pennyworth-repo: only available inside a task run" >&2; exit 2; }
+repo="$(printf '%s' "$1" | tr -d '"\\')"
+out="$(curl -sS --max-time 900 -X POST -H "Authorization: Bearer ${PENNYWORTH_REPO_TOKEN:-}" -H 'content-type: application/json' \
+  --data "{\"repo\":\"$repo\"}" -w '\n%{http_code}' "$PENNYWORTH_REPO_URL/repo")"
+code="${out##*$'\n'}"
+out="${out%$'\n'*}"
+[ "$code" = 200 ] || { echo "pennyworth-repo: $out" >&2; exit 1; }
+echo "$out"

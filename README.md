@@ -14,7 +14,7 @@ It is built on [Paperclip](https://github.com/paperclipai/paperclip) (agents, ta
 - **Email:** threads you label `pennyworth` in Gmail become tasks, and close when you remove the label.
 - **Daily brief:** every weekday morning, a ranked view of your day: priorities, meetings, what's stale.
 - **Assistant:** research and drafts (agendas, summaries) from Slack, Drive, Docs, Calendar and your notes, posted as task comments for you to review. It also acts on your replies to any task.
-- **Coding jobs:** assign a task to an Engineer and say what you want. Codex, Claude Code or an OpenRouter model works in its own git worktree, as you, and nothing is pushed until you say `push` or `pr`.
+- **Coding jobs:** assign a task to an Engineer and say what you want. Codex, Claude Code or an OpenRouter model works in the task's own workspace, as you: several repositories, several branches and stacked branches in one task, and nothing is pushed until you say `push` or `pr`.
 - **Board:** a keyboard-driven task board on localhost, also usable from a paired phone at home.
 
 All writes are idempotent, and nothing ambiguous is written. [`docs/SPECS.md`](docs/SPECS.md) is the original spec, and [`docs/DECISIONS.md`](docs/DECISIONS.md) (D-1 to D-31) explains every deviation from it.
@@ -22,7 +22,7 @@ All writes are idempotent, and nothing ambiguous is written. [`docs/SPECS.md`](d
 ```text
 host (Linux, systemd user services)
 ├── pennyworth-runner (systemd --user, runs as you)       services/runner/
-│     engineer tasks → Codex / Claude Code / OpenRouter jobs in its own worktrees
+│     engineer tasks → Codex / Claude Code / OpenRouter jobs in per-task workspaces
 │     your replies on tasks → the Assistant; review-request tasks → closed from GitHub
 ├── transcript watcher (systemd --user .path) ── signed webhook ──► "Meeting scan"
 └── docker compose (all containers: non-root, cap_drop ALL, no-new-privileges)
@@ -207,7 +207,7 @@ For anything that isn't code: research, drafts, and acting on your replies.
 
 - **Assign a task to the Assistant**, e.g. "Update the agenda for today's partner call from #ext-… and the previous agendas doc". It reads Slack, your allowed Telegram chats, Glean, Google Docs (all tabs), Drive, Calendar, your notes, your reference docs and public web pages (from a search cache, never live). It posts the deliverable as a comment for you to review and paste, then assigns the task back to you.
 - **Reply on any of your tasks.** About 90 seconds after your last comment, the runner hands it to the Assistant, which acts on clear intent: fixes names and details in the task and in the meeting notes Pennyworth wrote, records context, closes the task ("done", "not relevant"), or answers questions. It replies with one line saying what changed.
-- **Work across many repositories:** ask it to open an Engineer sub-task per repository. Reply "go" on the parent to start them all, then **pr** on the parent to open every PR (D-24).
+- **Work across many repositories at once:** one Engineer task can change several repositories itself (D-41). For a large fan-out (the same change in 20 repositories), ask the Assistant to open an Engineer sub-task per repository instead: they run in parallel with a report each. Reply "go" on the parent to start them all, then **pr** on the parent to open every PR (D-24).
 
 It never sends messages and never edits Slack, Docs or Calendar. It publishes only to Primer and as GitHub comments, and only when you ask.
 
@@ -230,8 +230,8 @@ Comment on a task and the work happens in a repository on this machine, the way 
 
 1. **Assign the task to an Engineer.** The Engineer picks the engine: **Engineer · Codex**, **Engineer · Claude** (Claude Code) or **Engineer · OpenRouter** (GLM, DeepSeek, Kimi and other OpenRouter models through opencode). To pick the model and effort too, switch the assignee's **Model lane** to **Override**; the board suggests the models listed under the agent's `models` in `config/paperclip.yaml`, and any other OpenRouter id works when typed in full. Tasks you wrote start right away. Tasks Pennyworth created from Slack, email or meetings wait for your comment, because their text is other people's words.
 2. **Say what you want, in plain words:** which repository (link or org/name), any reference repositories, whether you want an answer, a report/spec or the change itself, and optionally an engine or model ("use Claude", "use DeepSeek"). A short model call reads the request; code checks its answer against the repositories you mentioned and the known models, and asks you if it can't tell. There's no syntax to learn.
-3. **The runner picks it up** within about 20 seconds. It clones the repo into `~/pennyworth/repos`, creates a worktree on a branch named in the repository's style (its contributing guide, else your own recent branches there, else everyone's: `feat/…`, `<you>/…`), runs the engine inside your devshells under Codex's sandbox (writes only in the worktree and build caches), posts the report on the task and sets it to *in review*. In implement mode it commits with a conventional commit message.
-4. **Follow-ups** continue the same session in the same worktree. If the PR was merged meanwhile, the work moves to a fresh branch from the latest base.
+3. **The runner picks it up** within about 20 seconds. It gives the task a workspace, `~/pennyworth/tasks/<task>/`, with a full clone of each repository it needs (copied from the runner's cache in `~/pennyworth/repos`), and runs the engine there inside your devshells under Codex's sandbox (writes only in the workspace and build caches). The agent works the way you would in your own checkout (D-41): it puts each change on its own branch, named in the repository's style (its contributing guide, else your own recent branches there, else everyone's: `feat/…`, `<you>/…`), stacks a branch on another when one change builds on the next, and commits as it goes. It runs `pennyworth-repo org/name` to bring in another repository mid-run. Afterwards the runner commits anything left uncommitted, moves commits made on a default branch to a branch of their own, signs the agent's commits with your key, and posts the report with a table of the task's branches. The task goes to *in review*.
+4. **Follow-ups** continue the same session in the same workspace. If a PR was merged meanwhile, commits made on its branch since move to a fresh branch from the latest default branch.
 
 You can also talk about the run itself: "stop that", "how's it going?", "start over", "we're done, clean up".
 
@@ -239,10 +239,12 @@ Publishing takes the exact word, as a comment on its own:
 
 | Command | What it does |
 |---|---|
-| `push` | publish the branch to GitHub (never forced). An empty repository gets the work as its first commit on `main` |
-| `pr` | push and open a **draft** PR, with a title and description written for the repository's reviewers |
+| `push` | publish every branch with new commits to GitHub (never forced), parents before the branches stacked on them. An empty repository gets the work as its first commit on `main` |
+| `pr` | push, then open a **draft** PR for every branch that has none, each into its base (a stacked branch's PR goes into its parent's branch), with a title and description written for the repository's reviewers. Open PRs just get the new commits |
 
-Agents can't push or write to GitHub themselves: `gh` is wrapped read-only, pushes are disabled in the runner's clones, a pre-push hook and an ssh wrapper both refuse them, and after each run the runner checks that nothing appeared on GitHub. Only *your* comments are instructions.
+Repositories outside your orgs are read-only (D-35): their branches are listed but never published.
+
+Agents can't push or write to GitHub themselves: `gh` is wrapped read-only, pushes are disabled in the runner's clones, and a pre-push hook and an ssh wrapper both refuse them. Only *your* comments are instructions.
 
 Engine credentials live in `~/.config/pennyworth/` (0600): `openrouter_key` for OpenRouter, and `claude_oauth_token` from `claude setup-token` for Claude Code. Claude Code runs in a runner-owned home with no settings, plugins or connectors, no MCP servers but read-only Primer, a fixed tool allowlist, and `codex sandbox` around the whole process.
 
