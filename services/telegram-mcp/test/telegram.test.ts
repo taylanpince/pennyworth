@@ -42,7 +42,7 @@ class FakeTelegram implements Source {
     return { id: "100", username: "dana", name: "Dana Whitfield" };
   }
   addChat(c: Partial<Chat> & { chat_ref: string }, msgs: Message[] = []) {
-    this.chatList.push({ title: c.chat_ref, type: "group", top_message: 0, muted: false, archived: false, unread_mentions: 0, ...c });
+    this.chatList.push({ title: c.chat_ref, type: "group", top_message: 0, muted: false, archived: false, unread: 0, unread_mentions: 0, ...c });
     this.messages.set(c.chat_ref, []);
     for (const m of msgs) this.add(m, false);
   }
@@ -139,7 +139,7 @@ describe("request guard", () => {
 });
 
 describe("scope and text", () => {
-  const chat = (over: Partial<Chat>): Chat => ({ chat_ref: "tg:1", title: "Globex <> Initech", type: "group", top_message: 1, muted: false, archived: false, unread_mentions: 0, ...over });
+  const chat = (over: Partial<Chat>): Chat => ({ chat_ref: "tg:1", title: "Globex <> Initech", type: "group", top_message: 1, muted: false, archived: false, unread: 0, unread_mentions: 0, ...over });
 
   it("leaves out excluded, muted and archived chats unless asked", () => {
     expect(inScope(chat({}), SCOPE)).toBe(true);

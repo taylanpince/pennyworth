@@ -85,6 +85,8 @@ export function toMessage(m: Api.TypeMessage | undefined): Message | undefined {
 export class TelegramReader implements Source {
   private account?: Account;
   private peers = new Map<string, Api.TypeInputPeer>();
+  /** Every update Telegram pushed, before any filtering: tells "nothing pushed" from "pushed but dropped". */
+  rawUpdates = 0;
 
   constructor(readonly client: TelegramClient) {}
 
@@ -131,6 +133,7 @@ export class TelegramReader implements Source {
           top_message: dialog.topMessage,
           muted: muteUntil > now,
           archived: folder,
+          unread: dialog.unreadCount ?? 0,
           unread_mentions: dialog.unreadMentionsCount ?? 0,
         });
       }
@@ -182,6 +185,7 @@ export class TelegramReader implements Source {
   }
 
   onMessage(handler: (m: Message) => void): void {
+    this.client.addEventHandler(() => void this.rawUpdates++);
     this.client.addEventHandler((e: NewMessageEvent) => {
       const m = toMessage(e.message);
       if (m) handler(m);

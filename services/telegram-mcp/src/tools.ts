@@ -120,7 +120,7 @@ export async function callTool(scout: Scout, source: Source, name: string, args:
   switch (name) {
     case "list_allowed_chats":
       List.parse(args ?? {});
-      return { chats: scout.chats().map((c) => ({ chat_ref: c.chat_ref, title: c.title, type: c.type, unread_mentions: c.unread_mentions })) };
+      return { chats: scout.chats().map((c) => ({ chat_ref: c.chat_ref, title: c.title, type: c.type, unread: c.unread, unread_mentions: c.unread_mentions })) };
     case "read_chat_history": {
       const a = History.parse(args);
       return { messages: (await source.before(chat(a.chat_ref).chat_ref, a.before_message_id, a.limit)).reverse().map(out) };

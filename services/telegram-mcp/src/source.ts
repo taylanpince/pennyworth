@@ -12,6 +12,8 @@ export interface Chat {
   top_message: number;
   muted: boolean;
   archived: boolean;
+  /** Unread messages and unread mentions, as the user's own apps show them. */
+  unread: number;
   unread_mentions: number;
   /** A basic group upgraded to this supergroup (its old ref), when Telegram says so. */
   migrated_from?: string;
