@@ -167,6 +167,11 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Message IDs have gaps:** small groups and DMs share the account's ID counter. Read "the messages before" with `read_chat_history`, never by ID range. `read_chat_history` returns newest first, up to 50; `get_new_messages` returns the earliest after an ID, oldest first, up to 100.
 - **Content is wrapped** in `<untrusted-telegram-content>` tags by telegram-mcp, and people paste API keys into these chats. The scout prompt forbids copying credentials into tasks. Message text is never written to disk or logged.
 
+### Glean
+
+- **Redirect URIs are restricted by admin policy** (2026-10-15). Dynamic registration refuses most loopback callbacks (`invalid_redirect_uri … not permitted by administrator policy`); `http://127.0.0.1:3120/callback` works, `/glean/callback` doesn't. That's why the board's Glean callback is the bare `/callback`. Probe a new redirect with a registration request before building on it.
+- Request `offline_access` with the resource's `mcp` scope, or there may be no refresh token.
+
 ### Slack
 
 - `mcp.slack.com` has no dynamic client registration. It needs a public client registered for the user's workspace (`SLACK_CLIENT_ID` in `.env`, callback `http://localhost:3118/callback`, PKCE, no secret) and rotating refresh tokens, which are persisted read-write in `~/.config/pennyworth/slack/`.

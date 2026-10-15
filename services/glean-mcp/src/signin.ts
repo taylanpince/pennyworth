@@ -58,6 +58,10 @@ export class SignIn {
     for (const u of [`${is.origin}/.well-known/oauth-authorization-server${path}`, `${is.origin}${path}/.well-known/openid-configuration`, `${is.origin}/.well-known/oauth-authorization-server`]) {
       const r = await this.json(u).catch(() => undefined);
       if (r?.ok && typeof r.body.authorization_endpoint === "string" && typeof r.body.token_endpoint === "string") {
+        // Glean's resource asks only for "mcp"; without offline_access there may be no refresh token,
+        // and the sign-in would end with the first access token.
+        const offered = Array.isArray(r.body.scopes_supported) ? r.body.scopes_supported : [];
+        if (scopes?.length && offered.includes("offline_access") && !scopes.includes("offline_access")) scopes = [...scopes, "offline_access"];
         return { issuer, meta: r.body as unknown as Metadata, ...(scopes?.length ? { scopes } : {}) };
       }
     }

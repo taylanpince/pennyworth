@@ -11,7 +11,7 @@ export interface GleanStatus {
 /**
  * Glean sign-in state from glean-mcp, and signing in through it (D-38), like Google's Reconnect
  * (D-36): /glean/connect sends the browser to Glean's sign-in, Glean sends it back to
- * /glean/callback, and glean-mcp exchanges the code and keeps the token. The board holds only the
+ * /callback, and glean-mcp exchanges the code and keeps the token. The board holds only the
  * auth token; it never sees a Glean token.
  */
 export class GleanAuth {

@@ -522,8 +522,9 @@ export function createApp(opts: AppOptions): Server {
 
   /**
    * Sign in to Glean (D-38): /glean/connect sends the browser to Glean's sign-in, Glean sends it back
-   * to /glean/callback, and glean-mcp keeps the token. On the laptop's loopback address only, like
-   * Google's Reconnect: the sign-in client is registered for that redirect.
+   * to /callback, and glean-mcp keeps the token. On the laptop's loopback address only, like Google's
+   * Reconnect: the sign-in client is registered for that redirect. The path is plain /callback because
+   * the organization's Glean only permits loopback redirects of that shape.
    */
   async function handleGlean(req: IncomingMessage, res: ServerResponse, url: URL) {
     const port = loopbackPort(req.headers.host);
@@ -532,12 +533,12 @@ export function createApp(opts: AppOptions): Server {
     const host = String(req.headers.host).toLowerCase();
     try {
       if (url.pathname === "/glean/connect") {
-        const { url: signIn } = await opts.glean.start(`http://${host}/glean/callback`);
+        const { url: signIn } = await opts.glean.start(`http://${host}/callback`);
         log.info("Glean sign-in started");
         res.writeHead(302, { ...SECURITY_HEADERS, location: signIn, "cache-control": "no-store" }).end();
         return;
       }
-      if (url.pathname === "/glean/callback") {
+      if (url.pathname === "/callback") {
         const state = url.searchParams.get("state") ?? "";
         const code = url.searchParams.get("code");
         if (!code) throw new GleanAuthFailed(`Glean didn't grant access (${url.searchParams.get("error") ?? "no code"})`);
@@ -594,7 +595,7 @@ export function createApp(opts: AppOptions): Server {
     try {
       if (url.pathname.startsWith("/api/")) await handleApi(req, res, url);
       else if (url.pathname.startsWith("/google/") && req.method === "GET") await handleGoogle(req, res, url);
-      else if (url.pathname.startsWith("/glean/") && req.method === "GET") await handleGlean(req, res, url);
+      else if ((url.pathname === "/glean/connect" || url.pathname === "/callback") && req.method === "GET") await handleGlean(req, res, url);
       else if (req.method === "GET" || req.method === "HEAD") await serveStatic(res, url.pathname);
       else throw new HttpError(405, "method not allowed");
     } catch (err) {

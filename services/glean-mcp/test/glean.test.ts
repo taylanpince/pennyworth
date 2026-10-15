@@ -74,9 +74,9 @@ describe("sign-in", () => {
       if (url === "https://acme-be.glean.com/.well-known/oauth-protected-resource/mcp/default")
         return Response.json({ resource: MCP, authorization_servers: ["https://acme-be.glean.com/oauth"], scopes_supported: ["MCP", "SEARCH"] });
       if (url === "https://acme-be.glean.com/.well-known/oauth-authorization-server/oauth")
-        return Response.json({ issuer: "https://acme-be.glean.com/oauth", authorization_endpoint: "https://acme.glean.com/oauth/authorize", token_endpoint: "https://acme-be.glean.com/oauth/token", ...(opts.register === false ? {} : { registration_endpoint: "https://acme-be.glean.com/oauth/register" }) });
+        return Response.json({ issuer: "https://acme-be.glean.com/oauth", authorization_endpoint: "https://acme.glean.com/oauth/authorize", token_endpoint: "https://acme-be.glean.com/oauth/token", scopes_supported: ["mcp", "search", "offline_access"], ...(opts.register === false ? {} : { registration_endpoint: "https://acme-be.glean.com/oauth/register" }) });
       if (url === "https://acme-be.glean.com/oauth/register") return Response.json({ client_id: "pw-client" }, { status: 201 });
-      if (url === "https://acme-be.glean.com/oauth/token") return Response.json({ access_token: "at", refresh_token: "rt", expires_in: 3600, scope: "MCP SEARCH" });
+      if (url === "https://acme-be.glean.com/oauth/token") return Response.json({ access_token: "at", refresh_token: "rt", expires_in: 3600, scope: "MCP SEARCH offline_access" });
       return new Response("not found", { status: 404 });
     }) as unknown as typeof fetch;
     return { calls, fetchImpl };
@@ -90,7 +90,7 @@ describe("sign-in", () => {
     const { url } = await signIn.start("http://127.0.0.1:3120/glean/callback");
     const u = new URL(url);
     expect(u.origin + u.pathname).toBe("https://acme.glean.com/oauth/authorize");
-    expect(Object.fromEntries(u.searchParams)).toMatchObject({ client_id: "pw-client", redirect_uri: "http://127.0.0.1:3120/glean/callback", code_challenge_method: "S256", resource: MCP, scope: "MCP SEARCH" });
+    expect(Object.fromEntries(u.searchParams)).toMatchObject({ client_id: "pw-client", redirect_uri: "http://127.0.0.1:3120/glean/callback", code_challenge_method: "S256", resource: MCP, scope: "MCP SEARCH offline_access" });
     expect(statSync(join(dir, "client.json")).mode & 0o777).toBe(0o600);
 
     await signIn.finish(u.searchParams.get("state")!, "the-code");

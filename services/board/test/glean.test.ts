@@ -67,7 +67,7 @@ describe("Glean sign-in routes", () => {
     const r = await get(`${localBase}/glean/connect`, "localhost:3120");
     expect(r.status).toBe(302);
     expect(r.location).toMatch(/^https:\/\/acme\.glean\.com\//);
-    expect(seen.at(-1)).toEqual({ path: "/auth/start", body: { redirect_uri: "http://localhost:3120/glean/callback" } });
+    expect(seen.at(-1)).toEqual({ path: "/auth/start", body: { redirect_uri: "http://localhost:3120/callback" } });
   });
 
   it("refuses away from the laptop's loopback address", async () => {
@@ -77,12 +77,12 @@ describe("Glean sign-in routes", () => {
   });
 
   it("finishes the sign-in and returns to the board, or explains (escaped) why not", async () => {
-    expect(await get(`${localBase}/glean/callback?state=s&code=good`, "127.0.0.1:3120")).toMatchObject({ status: 302, location: "/" });
-    const bad = await get(`${localBase}/glean/callback?state=s&code=bad`, "127.0.0.1:3120");
+    expect(await get(`${localBase}/callback?state=s&code=good`, "127.0.0.1:3120")).toMatchObject({ status: 302, location: "/" });
+    const bad = await get(`${localBase}/callback?state=s&code=bad`, "127.0.0.1:3120");
     expect(bad.status).toBe(400);
     expect(bad.body).toContain("invalid_grant");
     expect(bad.body).not.toContain("<i>");
-    const denied = await get(`${localBase}/glean/callback?state=s&error=access_denied`, "127.0.0.1:3120");
+    const denied = await get(`${localBase}/callback?state=s&error=access_denied`, "127.0.0.1:3120");
     expect(denied.status).toBe(400);
     expect(denied.body).toContain("access_denied");
   });
