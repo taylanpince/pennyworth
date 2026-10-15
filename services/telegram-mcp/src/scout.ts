@@ -105,6 +105,8 @@ export class Scout {
   private swept = false;
   private queue: Promise<unknown> = Promise.resolve();
   private lastSweep?: { at: number; errors: string[] };
+  private live = 0; // messages pushed by Telegram since the last sweep
+  private caughtUp = 0; // messages the last sweep found that live updates hadn't delivered
   private saveTimer?: NodeJS.Timeout;
   private topicTitles = new Map<string, string>();
   private readonly now: () => number;
@@ -157,7 +159,7 @@ export class Scout {
   }
 
   status() {
-    return { last_scan_at: this.lastSweep ? new Date(this.lastSweep.at).toISOString() : null, errors: this.lastSweep?.errors ?? [] };
+    return { last_scan_at: this.lastSweep ? new Date(this.lastSweep.at).toISOString() : null, errors: this.lastSweep?.errors ?? [], live_since_scan: this.live, caught_up_last_scan: this.caughtUp };
   }
 
   /** Reloads the dialog list and catches every scanned chat up from its cursor. */
@@ -167,6 +169,7 @@ export class Scout {
 
   /** A new message pushed by Telegram. */
   handle(m: Message): Promise<void> {
+    this.live++;
     return this.serial(async () => {
       let chat = this.chatMap.get(m.chat_ref);
       if (!chat && !this.known.has(m.chat_ref)) {
@@ -205,6 +208,7 @@ export class Scout {
 
     const work: (() => Promise<void>)[] = [];
     const titles: string[] = [];
+    this.caughtUp = 0;
     for (const chat of this.chats().filter(scanned)) {
       const cs = this.state.chats[chat.chat_ref];
       if (!cs) {
@@ -225,6 +229,7 @@ export class Scout {
     this.fresh = false;
     this.save(true);
     this.lastSweep = { at: this.now(), errors };
+    this.live = 0;
   }
 
   /** A chat seen for the first time: its recent messages, then live. */
@@ -244,6 +249,7 @@ export class Scout {
     const cs = this.state.chats[chat.chat_ref]!;
     for (let page = 0; page < MAX_PAGES; page++) {
       const msgs = await this.source.after(chat.chat_ref, cs.cursor, PAGE);
+      this.caughtUp += msgs.length;
       await this.classify(chat, msgs);
       if (msgs.length < PAGE) return;
     }

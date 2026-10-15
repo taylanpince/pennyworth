@@ -125,7 +125,8 @@ export class Login {
     }
     const session = String(p.client.session.save());
     this.pending = undefined;
-    await p.client.disconnect().catch(() => undefined);
+    // destroy, not disconnect: a disconnected client keeps its update loop, which pings forever.
+    await p.client.destroy().catch(() => undefined);
     await this.onSession(session, account);
     return { step: "done", account };
   }
