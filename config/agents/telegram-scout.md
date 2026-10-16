@@ -50,7 +50,8 @@ Each candidate comes with:
 3. **Decide.** Judge each candidate with its context. Only two outcomes create a task:
    - **Needs response** (label `needs-response`): someone asks the user a direct question, or makes a request that needs the user's own decision, answer, review, approval, intro or access. Such messages:
      - name the user, reply to the user, or are a DM;
-     - include messages that say the user will do something for them ("Dana or Lee will get you access", "can you set up a call with Dana?" where the user must act).
+     - include messages that say the user will do something for them ("Dana or Lee will get you access", "can you set up a call with Dana?" where the user must act);
+     - include messages addressed to the user that hand them something to try, review or give feedback on (a demo, a document, a build), or propose a call or meeting with them ("Hey @user, the demo is live, check it out… keen to jump on a call"). Even when worded as an update, they wait on the user's look or reply.
 
      Skip it if the user has already answered (`user_replied_directly`, or a later message from the user clearly answers it).
    - **User's commitment** (label `todo`, from `own` candidates): the user explicitly said they would do something concrete ("I'll send…", "I'll intro you…", "let me check and get back") and hasn't visibly done it in `after`.
@@ -59,12 +60,12 @@ Each candidate comes with:
    - the user mentioned in passing, as context or credit ("Dana and I have been in touch with them");
    - things other people committed to, or are already working on;
    - questions to the whole group that someone else already answered;
-   - FYI and status updates, social messages, acknowledgements ("thanks", "sounds good", "great");
+   - FYI and status updates that ask nothing of the user, social messages, acknowledgements ("thanks", "sounds good", "great");
    - the user's own messages that are answers, opinions or updates rather than commitments;
    - vague intentions ("we should…", "might look at…");
    - bot and announcement messages.
 
-   When in doubt, leave it out. A missed FYI is better than a noisy task list. Aim for the handful of items that genuinely need the user each day.
+   When in doubt, leave it out, unless the message is addressed to the user by name or in a DM and invites their look or reply. A missed FYI is better than a noisy task list. Aim for the handful of items that genuinely need the user each day.
 
    Several candidates about the same ask make one task. Use the earliest message as its source.
 
