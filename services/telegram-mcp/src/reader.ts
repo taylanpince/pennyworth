@@ -4,6 +4,7 @@ import type bigInt from "big-integer";
 import { Api, TelegramClient, utils } from "telegram";
 import { NewMessage, type NewMessageEvent } from "telegram/events/index.js";
 import { LogLevel } from "telegram/extensions/Logger.js";
+import { ConnectionTCPObfuscated } from "telegram/network/index.js";
 import { StringSession } from "telegram/sessions/index.js";
 import { guard, readAllowed } from "./guard.js";
 import type { Account, Chat, Message, Source } from "./source.js";
@@ -20,6 +21,9 @@ export const DEVICE = { deviceModel: process.env.TELEGRAM_DEVICE_NAME ?? "Pennyw
 export function newClient(session: string, api: ApiCredentials, allowed: (className: string) => boolean, onRefused?: (className: string) => void): TelegramClient {
   const client = new TelegramClient(new StringSession(session), api.api_id, api.api_hash, {
     ...DEVICE,
+    // Plain MTProto (GramJS's default TCPFull) is cut off by the Cloudflare WARP gateway right after
+    // the first packet, so every connect failed; the obfuscated transport gets through.
+    connection: ConnectionTCPObfuscated,
     connectionRetries: 5,
     autoReconnect: true,
     floodSleepThreshold: 60,
