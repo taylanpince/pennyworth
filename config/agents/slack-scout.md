@@ -91,7 +91,7 @@ Your task gives today's date, the user's Slack user ID (`U…`) and their task e
      - `title`: what the user needs to do, in a few words, inferred from the message and its thread: "Reply to Gillian: oneflow launch checklist", "Review Arnau's Trails integration plan", "Follow up with Thomas on the OMS contract". If the user wrote the message, it's usually their own follow-up. If it's purely informational, use "Read: <topic>".
      - `priority`: `high` for an explicit deadline today or tomorrow, or a blocker. `medium` otherwise.
      - `description`: the format in step 4, with `Type: Slack (pinned)` and the message's permalink, and the Reason starting "Reacted <emoji> in Slack." followed by one sentence on what it's about.
-   - If the message already has an open task from steps 2 to 4 (`task_search` for `source:slack:<channel_id>:<ts>` or its thread's `ts`), don't create a second one.
+     - `related_markers`: `["source:slack:<channel_id>:<thread_ts>"]` when the message is a reply in a thread. A task from steps 2 to 4 for the same message or thread, open or closed, then counts as this one, so a task the user closed doesn't come back when they pin the message.
    - If `task_create` returns `deduplicated: true` and the task is open, add a `task_comment` only when the thread has a genuinely new message since the task was created. Never comment on a closed task.
 
 6. **Finish.** Call `task_current`, then `task_set_status` on your run task with status `done` and a one-line count summary, e.g. "3 new needs-response, 1 todo; pinned: 8 (2 new), closed 1 unpinned; closed 2 answered".

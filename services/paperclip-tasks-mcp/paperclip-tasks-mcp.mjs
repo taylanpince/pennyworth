@@ -201,19 +201,28 @@ const TOOLS = {
         labels: { type: "array", items: { type: "string" } },
         priority: { type: "string", enum: PRIORITIES },
         dedupe_closed: { type: "boolean", description: "also return a done or cancelled task with this marker instead of creating one (never recreate what the user closed)" },
+        related_markers: { type: "array", items: { type: "string" }, description: "markers of other tasks for the same item (e.g. the Slack thread's source:slack:<channel>:<thread_ts>); an existing one is returned instead of creating a task, closed ones too with dedupe_closed" },
       },
       required: ["title", "description", "marker"],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    run: async ({ title, description, marker, labels, priority, dedupe_closed }) => {
+    run: async ({ title, description, marker, labels, priority, dedupe_closed, related_markers }) => {
       if (!COMPANY) throw new Error("PAPERCLIP_COMPANY_ID not set");
       const m = String(marker).trim();
       if (!/^[A-Za-z0-9:._\/-]{3,200}$/.test(m)) throw new Error("invalid marker");
+      // A pinned Slack message is the same item as the needs-response or todo task for it:
+      // closing either must not bring it back under the other marker.
+      const markers = [m, ...(related_markers ?? []).map((r) => String(r).trim())];
+      if (m.startsWith("source:slack:pin:")) markers.push(m.replace(/^source:slack:pin:/, "source:slack:"));
+      if (markers.some((k) => !/^[A-Za-z0-9:._\/-]{3,200}$/.test(k))) throw new Error("invalid related marker");
       // Idempotency keys expire after 7 days in Paperclip, so also look for an open task
-      // (or, with dedupe_closed, a closed one) that already carries this marker.
-      const existing = await findByMarker(m, dedupe_closed ? `${OPEN_STATUSES},done,cancelled` : OPEN_STATUSES);
-      if (existing) return { ...brief(existing), deduplicated: true };
+      // (or, with dedupe_closed, a closed one) that already carries one of these markers.
+      const statuses = dedupe_closed ? `${OPEN_STATUSES},done,cancelled` : OPEN_STATUSES;
+      for (const k of new Set(markers)) {
+        const existing = await findByMarker(k, statuses);
+        if (existing) return { ...brief(existing), deduplicated: true };
+      }
       const body = {
         title: String(title).slice(0, 200),
         description: `${String(description).replace(/<!--|-->/g, "").slice(0, 60_000)}\n\n<!-- source:${m} -->`,
