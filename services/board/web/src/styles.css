@@ -196,6 +196,7 @@ kbd {
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 .card::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: var(--p, transparent); }
 .card.prio-critical { --p: var(--urgent); }
@@ -303,6 +304,13 @@ kbd {
 .comment { padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; background: var(--surface-2); }
 .comment-me { background: var(--accent-soft); border-color: transparent; }
 .comment-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.thread-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.thread-head h3 { margin: 0; }
+.comment.folded { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 6px 12px; margin-bottom: 4px; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.comment.folded:hover { border-color: var(--border-strong); }
+.comment.folded .who { flex: none; }
+.comment.folded .preview { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; color: var(--muted); }
+.comment-head.foldable { cursor: pointer; }
 .who { font-weight: 600; font-size: 12.5px; }
 .who-runner, .who-agent { color: var(--tomorrow); }
 .composer { border-top: 1px solid var(--border); padding: 10px 16px; padding-bottom: max(10px, env(safe-area-inset-bottom)); background: var(--surface); }

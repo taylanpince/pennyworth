@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { Avatar, Chips, CloseIcon, MoveMenu } from "./components";
 import { Markdown } from "./markdown";
-import { BUCKETS, BUCKET_NAMES, WEEKDAYS, type Assignee, type Board, type Bucket, type Cadence, type IssueView, type Label, type Models, type Update, type Weekday } from "./types";
+import { BUCKETS, BUCKET_NAMES, WEEKDAYS, type Assignee, type Board, type Bucket, type Cadence, type CommentView, type IssueView, type Label, type Models, type Update, type Weekday } from "./types";
 import { PRIORITIES, PRIORITY_NAMES, ago, runTime, shortName, when } from "./util";
 
 interface Props {
@@ -97,6 +97,22 @@ function IssueBody({ issue, board, busy, update, setStatus, onClose, onMove, rel
   const [bucket, setBucket] = useState<Bucket | null>(issue.bucket);
   useEffect(() => setBucket(issue.bucket), [issue.bucket]);
 
+  // Open on the latest comment, and follow new ones while the reader is at the end (or just replied).
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const atEnd = useRef(true);
+  const seen = useRef<string | undefined>(undefined);
+  const latest = issue.comments.at(-1);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const last = el?.querySelector<HTMLElement>(".thread > .comment:last-child");
+    if (!el || !last || latest?.id === seen.current) return;
+    const first = seen.current === undefined;
+    seen.current = latest?.id;
+    if (!first && !atEnd.current && latest?.author.kind !== "me") return;
+    const top = last.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+    el.scrollTop = last.offsetHeight > el.clientHeight - 24 ? top - 12 : el.scrollHeight;
+  }, [latest]);
+
   return (
     <>
       <header className="drawer-head">
@@ -140,7 +156,7 @@ function IssueBody({ issue, board, busy, update, setStatus, onClose, onMove, rel
         </div>
       )}
 
-      <div className="drawer-scroll">
+      <div className="drawer-scroll" ref={scrollRef} onScroll={(e) => (atEnd.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 80)}>
         <Title issue={issue} editable={editable} save={(title) => update({ title })} />
 
         <section className="props">
@@ -193,26 +209,73 @@ function IssueBody({ issue, board, busy, update, setStatus, onClose, onMove, rel
 
         <Description issue={issue} prefix={board.prefix} editable={editable} save={(description) => update({ description })} />
 
-        <section className="thread">
-          <h3>Activity</h3>
-          {issue.comments.length === 0 && <p className="muted small">No comments yet.</p>}
-          {issue.comments.map((c) => (
-            <article key={c.id} className={`comment comment-${c.author.kind}`}>
-              <div className="comment-head">
-                <span className={`who who-${c.author.kind}`}>{c.author.kind === "runner" ? `Runner${assignee?.kind === "engineer" ? ` · ${shortName(assignee)}` : ""}` : c.author.name}</span>
-                <span className="muted small" title={new Date(c.createdAt).toLocaleString()}>
-                  {ago(c.createdAt)}
-                </span>
-              </div>
-              <Markdown text={c.body} prefix={board.prefix} />
-            </article>
-          ))}
-        </section>
+        <Thread issue={issue} assignee={assignee} prefix={board.prefix} />
       </div>
 
       {editable && <Composer issue={issue} reload={reload} toast={toast} />}
     </>
   );
+}
+
+/** The latest comments stay open; older ones fold into one-line rows that open on a click. */
+const OPEN_COMMENTS = 2;
+
+function Thread({ issue, assignee, prefix }: { issue: IssueView; assignee: Assignee | undefined; prefix: string }) {
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  const comments = issue.comments;
+  const older = comments.slice(0, Math.max(0, comments.length - OPEN_COMMENTS));
+  const allOpen = older.every((c) => open.has(c.id));
+  const toggle = (id: string) => setOpen((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set([...s, id])));
+  const who = (c: CommentView) => (c.author.kind === "runner" ? `Runner${assignee?.kind === "engineer" ? ` · ${shortName(assignee)}` : ""}` : c.author.name);
+  const time = (c: CommentView) => (
+    <span className="muted small" title={new Date(c.createdAt).toLocaleString()}>
+      {ago(c.createdAt)}
+    </span>
+  );
+  return (
+    <section className="thread">
+      <div className="thread-head">
+        <h3>Activity</h3>
+        {older.length > 0 && (
+          <button className="link-btn" onClick={() => setOpen(allOpen ? new Set() : new Set(older.map((c) => c.id)))}>
+            {allOpen ? "Fold earlier" : `Show all ${comments.length}`}
+          </button>
+        )}
+      </div>
+      {comments.length === 0 && <p className="muted small">No comments yet.</p>}
+      {comments.map((c, i) => {
+        const old = i < older.length;
+        if (old && !open.has(c.id))
+          return (
+            <button key={c.id} className={`comment folded comment-${c.author.kind}`} title="Show the whole comment" onClick={() => toggle(c.id)}>
+              <span className={`who who-${c.author.kind}`}>{who(c)}</span>
+              <span className="preview">{preview(c.body)}</span>
+              {time(c)}
+            </button>
+          );
+        return (
+          <article key={c.id} className={`comment comment-${c.author.kind}`}>
+            <div className={`comment-head${old ? " foldable" : ""}`} title={old ? "Fold" : undefined} onClick={old ? () => toggle(c.id) : undefined}>
+              <span className={`who who-${c.author.kind}`}>{who(c)}</span>
+              {time(c)}
+            </div>
+            <Markdown text={c.body} prefix={prefix} />
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
+/** One line of a comment's text for its folded row. */
+function preview(md: string): string {
+  return md
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/```[\s\S]*?```/g, " … ")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[#>*_`~|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function assigneeNote(a: Assignee | undefined): string | undefined {

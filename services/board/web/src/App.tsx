@@ -37,17 +37,38 @@ const HINTS: Record<Bucket, string> = {
   backlog: "Someday",
 };
 
+const isBucket = (id: unknown) => (BUCKETS as string[]).includes(String(id));
+
 /**
  * What a dragged card is over: a card under the pointer (closest one), else the column under the
  * pointer. closestCorners alone prefers a small card in the old column over a tall empty one.
+ * Inside a column, the gaps between cards count as the nearest card, and anywhere below the last
+ * card counts as the column itself, which means "the bottom".
  */
 const collision: CollisionDetection = (args) => {
   const hits = pointerWithin(args);
   if (!hits.length) return rectIntersection(args);
-  const cards = hits.filter((h) => !(BUCKETS as string[]).includes(String(h.id)));
-  if (!cards.length) return hits;
-  return closestCenter({ ...args, droppableContainers: args.droppableContainers.filter((d) => cards.some((c) => c.id === d.id)) });
+  const cards = hits.filter((h) => !isBucket(h.id));
+  if (cards.length) return closestCenter({ ...args, droppableContainers: args.droppableContainers.filter((d) => cards.some((c) => c.id === d.id)) });
+  const column = hits.find((h) => isBucket(h.id));
+  const pointer = args.pointerCoordinates;
+  if (!column || !pointer) return hits;
+  const inColumn = args.droppableContainers.filter((d) => d.data.current?.sortable?.containerId === column.id);
+  const bottom = Math.max(...inColumn.map((d) => args.droppableRects.get(d.id)?.bottom ?? -Infinity));
+  if (!inColumn.length || pointer.y > bottom) return [column];
+  return closestCenter({ ...args, droppableContainers: inColumn });
 };
+
+/**
+ * Mouse and pen only. Pointer events fire for touches too, and this sensor would claim them before
+ * the TouchSensor saw them, turning every swipe that moved 6px into a drag instead of a scroll.
+ */
+class MouseOrPenSensor extends PointerSensor {
+  static activators = PointerSensor.activators.map((a) => ({
+    ...a,
+    handler: (e: Parameters<typeof a.handler>[0], opts: Parameters<typeof a.handler>[1]) => e.nativeEvent.pointerType !== "touch" && a.handler(e, opts),
+  }));
+}
 
 function parseRoute(): Route {
   const h = decodeURIComponent(location.hash.replace(/^#\/?/, ""));
@@ -250,14 +271,16 @@ export function App() {
   // ---------------------------------------------------------------- drag and drop
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 220, tolerance: 6 } }),
+    useSensor(MouseOrPenSensor, { activationConstraint: { distance: 6 } }),
+    // touch: a deliberate long press drags, anything that moves first scrolls
+    useSensor(TouchSensor, { activationConstraint: { delay: 350, tolerance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
   function onDragStart(e: DragStartEvent) {
     setActiveId(String(e.active.id));
     dragFrom.current = bucketOf(String(e.active.id)) ?? null;
+    if (e.activatorEvent.type === "touchstart") navigator.vibrate?.(10);
   }
 
   function containerOf(id: string): Bucket | undefined {
@@ -271,7 +294,13 @@ export function App() {
     if (!over || !cur) return;
     const from = bucketOf(id);
     const to = containerOf(over);
-    if (!from || !to || from === to) return;
+    if (!from || !to) return;
+    if (from === to) {
+      // below the last card of its own column: show it at the bottom
+      const list = cur[from];
+      if (over === to && list[list.length - 1]?.id !== id) setItems({ ...cur, [from]: [...list.filter((c) => c.id !== id), list.find((c) => c.id === id)!] });
+      return;
+    }
     const card = cur[from].find((c) => c.id === id)!;
     const idx = cur[to].findIndex((c) => c.id === over);
     const target = [...cur[to]];
@@ -291,7 +320,7 @@ export function App() {
     if (!b) return;
     const list = cur[b];
     const oldIndex = list.findIndex((c) => c.id === id);
-    const newIndex = list.findIndex((c) => c.id === over);
+    const newIndex = over === b ? list.length - 1 : list.findIndex((c) => c.id === over);
     if (newIndex >= 0 && oldIndex !== newIndex) {
       cur = { ...cur, [b]: arrayMove(list, oldIndex, newIndex) };
       setItems(cur);
@@ -672,7 +701,7 @@ function Column({ bucket, cards, total, board, selected, dragDisabled, onOpen, o
             </button>
           </div>
         )}
-        <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
+        <SortableContext id={bucket} items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           {cards.map((c) => (
             <SortableCard key={c.id} card={c} assignees={board.assignees} selected={c.id === selected} disabled={dragDisabled} onOpen={onOpen} onDone={onDone} onMove={onMove} current={bucket} />
           ))}
