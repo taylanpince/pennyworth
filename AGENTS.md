@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-39) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-42) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -21,7 +21,7 @@ host (NixOS, user taylan)
     ├── primer-mcp           proxy to the org's Primer: read, plus publish documents/versions for the Assistant (D-31);
     │                        reads only on 127.0.0.1:3123/mcp/read for the runner's Engineer jobs (D-40)
     ├── glean-mcp            proxy to the org's Glean: read-only search for the Assistant; board sign-in (D-38)
-    ├── github-mcp           GitHub issues/PRs with the user's gh token: read, comment in GITHUB_COMMENT_ORGS when asked (D-39)
+    ├── github-mcp           GitHub issues/PRs with the user's gh token: read, comment and open issues (on a project board) in GITHUB_COMMENT_ORGS when asked (D-39, D-42)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
                              :3121 on the LAN (pennyworth.local, paired devices from the home subnet only, D-23)
                              :3122 internal API (bearer token): scheduled moves and recurring tasks for the bridge and the runner (D-25),
@@ -38,7 +38,7 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`:
 | Slack Scout | Slack items for the user |
 | Telegram Scout | Telegram mentions, replies and DMs for the user, from the candidates telegram-mcp picks |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
-| Assistant | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, notes, reference docs, cached web), publishing to Primer or commenting on GitHub issues when asked, acting on the user's replies (including scheduling a task or making it recurring), and running recurring tasks |
+| Assistant | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, notes, reference docs, cached web), publishing to Primer, commenting on or opening GitHub issues when asked, acting on the user's replies (including scheduling a task or making it recurring), and running recurring tasks |
 | Engineer · Codex / · Claude / · OpenRouter | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20) |
 
 ## Everyday commands
@@ -91,7 +91,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 
 - **Read before you write**, and keep edits surgical. Match the surrounding style. TS services use zod and pino; scripts are plain `.mjs` with no dependencies beyond `yaml`.
 - **Determinism belongs in code, judgement in agents.** Matching, routing, Obsidian writes and deduplication are ops-mcp code. Agents produce JSON or pick tools. Don't move decisions into prompts.
-- **Security posture is non-negotiable.** No Slack/email sends (Primer publishing and GitHub issue comments on the user's word are the only writes to outside services, D-31, D-39), no Calendar/Drive/Docs writes, no autonomous pushes, read-only Google and Slack scopes. Agents get least-privilege MCP tools per agent (`mcp_servers` / `enabled_tools` in `config/paperclip.yaml`). Source content is untrusted; keep the injection clause in every agent prompt.
+- **Security posture is non-negotiable.** No Slack/email sends (Primer publishing and GitHub issue comments and new issues on the user's word are the only writes to outside services, D-31, D-39, D-42), no Calendar/Drive/Docs writes, no autonomous pushes, read-only Google and Slack scopes. Agents get least-privilege MCP tools per agent (`mcp_servers` / `enabled_tools` in `config/paperclip.yaml`). Source content is untrusted; keep the injection clause in every agent prompt.
 - **Tasks are the user's.** Every task Pennyworth creates is assigned to the user (see the Paperclip gotchas). Only create tasks for the user's *own* clear actions; other people's actions stay in the notes. The one exception: Engineer sub-tasks the Assistant creates when the user asks (D-24). They wait for the user's go-ahead on the parent.
 - **Personal config stays out of git:** `.env`, `config/{system,routing,paperclip,runner}.yaml`, `compose.vault.yaml`, `data/`. Examples live in `config/*.example.yaml`; update both when you add keys. Secrets live in `~/.config/pennyworth/` (0700 dir, 0600 files) and never go in the repo, logs or tasks.
 - **Git:**
@@ -181,7 +181,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 
 ### GitHub (Assistant)
 
-- **github-mcp holds the user's full gh token (D-39).** Only `guard` in `services/github-mcp/src/github.ts` limits it: fixed read routes plus issue comments. Never add a generic request tool, never call fetch with the token outside `request`, and check what a route does before adding it. The token is re-read on every call; `scripts/github-auth.sh` refreshes it in place.
+- **github-mcp holds the user's full gh token (D-39).** Only `guard` in `services/github-mcp/src/github.ts` limits it: fixed read routes plus issue comments, new issues, and GraphQL limited to the documents in `GRAPHQL` (D-42: project read, add item, set status). Never add a generic request tool, never call fetch with the token outside `request`, never let a caller pass GraphQL text, and check what a route or document does before adding it. The token is re-read on every call; `scripts/github-auth.sh` refreshes it in place.
 - The cached web search can't open private repositories (404): GitHub links go through `github_issue_read`.
 
 ### Slack

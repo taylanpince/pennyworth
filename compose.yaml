@@ -250,7 +250,7 @@ services:
       - backplane
       - egress
 
-  # GitHub issues and pull requests: read, and comment on them in GITHUB_COMMENT_ORGS (D-39). Holds
+  # GitHub issues and pull requests: read, and comment or open issues in GITHUB_COMMENT_ORGS (D-39, D-42). Holds
   # the user's gh token; services/github-mcp/src/github.ts allows only those requests.
   github-mcp:
     <<: *hardening

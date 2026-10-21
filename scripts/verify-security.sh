@@ -125,11 +125,18 @@ pass "primer-mcp exposes reads plus create-document/add-version only; never dele
 glean_tools="$(sed -n 's/^export const READ_TOOLS = \[\(.*\)\];/\1/p' services/glean-mcp/src/policy.ts | tr -d '" ' | tr ',' '\n')"
 bad_glean="$(echo "$glean_tools" | grep -Ev '^(search|read_document|employee_search|meeting_lookup|code_search|chat)$' || true)"
 [ -n "$glean_tools" ] && [ -z "$bad_glean" ] && pass "glean-mcp exposes only search/read tools (services/glean-mcp/src/policy.ts)" || fail "glean-mcp: unexpected tools allowed: $bad_glean"
-# GitHub: the user's gh token can push and delete; the guard allows fixed reads plus issue comments only (D-39).
+# GitHub: the user's gh token can push and delete; the guard allows fixed reads plus issue comments, new issues
+# and fixed GraphQL documents whose only mutations add an issue to a project and set its status (D-39, D-42).
 gh_routes="$(sed -n '/^export const ROUTES/,/^\];/p' services/github-mcp/src/github.ts | grep '^  { method:')"
-bad_gh="$(echo "$gh_routes" | grep -v '{ method: "GET", path: ' | grep -vxF '  { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}/comments$`) },' || true)"
-[ -n "$gh_routes" ] && [ -z "$bad_gh" ] && grep -q 'guard(method, path)' services/github-mcp/src/github.ts && [ "$(grep -c 'fetchImpl(' services/github-mcp/src/github.ts)" = 1 ] \
-  && pass "github-mcp: every request goes through the guard; the only write is an issue comment (services/github-mcp/src/github.ts)" || fail "github-mcp: unexpected GitHub requests allowed: $bad_gh"
+bad_gh="$(echo "$gh_routes" | grep -v '{ method: "GET", path: ' | grep -vxF \
+  -e '  { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}/comments$`) },' \
+  -e '  { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/issues$`) },' \
+  -e '  { method: "POST", path: /^\/graphql$/ },' || true)"
+[ -n "$gh_routes" ] && [ -z "$bad_gh" ] && grep -q 'guard(method, path, opts.body)' services/github-mcp/src/github.ts && [ "$(grep -c 'fetchImpl(' services/github-mcp/src/github.ts)" = 1 ] \
+  && pass "github-mcp: every request goes through the guard; the only writes are issue comments, new issues and GraphQL (services/github-mcp/src/github.ts)" || fail "github-mcp: unexpected GitHub requests allowed: $bad_gh"
+gh_mutations="$(sed -n '/^export const GRAPHQL/,/^} as const;/p' services/github-mcp/src/github.ts | grep -oE 'mutation\([^)]*\) \{ [A-Za-z0-9]+' | awk '{print $NF}' | sort -u | tr '\n' ' ')"
+[ "$gh_mutations" = "addProjectV2ItemById updateProjectV2ItemFieldValue " ] && grep -q 'GRAPHQL_DOCS.has(' services/github-mcp/src/github.ts \
+  && pass "github-mcp: GraphQL limited to fixed documents whose only mutations add an issue to a project and set its status" || fail "github-mcp: unexpected GraphQL mutations: $gh_mutations"
 pass "no email/Slack/Telegram send or calendar write tool is configured for any agent"
 
 echo

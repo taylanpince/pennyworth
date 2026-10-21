@@ -161,7 +161,7 @@ agents:
       # knowledge_*: reference docs mounted from KNOWLEDGE_BASES (D-38).
       ops_mcp: [obsidian_search, obsidian_read, obsidian_read_document_map, meeting_note_correct, knowledge_list, knowledge_index, knowledge_search, knowledge_read]
       glean: [search, read_document, employee_search, meeting_lookup, code_search, chat]
-      github: [github_whoami, github_issue_read, github_search_issues, github_issue_comment]
+      github: [github_whoami, github_issue_read, github_search_issues, github_issue_comment, github_issue_create]
       google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
       # task_create_engineer_task: Engineer sub-tasks that wait for the user's go-ahead (D-24).
       # task_schedule, task_recurring: board moves on a date and recurring tasks (D-25).
