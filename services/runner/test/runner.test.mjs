@@ -651,6 +651,17 @@ describe("run report footer", async () => {
     const body = `**Done. Report only: no code was changed.** Ask me…\n\n## Summary\nFive issues.\n\n## Next steps\nFix them.\n---\nfooter\n\n${M}`;
     assert.equal(latestReport(["older", body], M), "## Summary\nFive issues.\n\n## Next steps\nFix them.");
   });
+  it("gives the intake the newest answer too, not the report before it (PEN-2228)", async () => {
+    const { latestResult } = await import("../src/prompt.mjs");
+    const M = "<!-- pennyworth-runner -->";
+    const report = `**Done.**\n\n## Summary\nChanged it.\n\n## Next steps\nReplying **pr** opens the draft PR.\n---\nfooter\n\n${M}`;
+    const ack = `Looking into your question in \`acme/api\` with Codex. I'll answer here.\n\n${M}`;
+    const onIt = `On it: making the changes in \`acme/api\`, with Codex. I'll post the result here.\n\n_Workspace \`/w\` · shells llm_\n\n${M}`;
+    const answer = `Prod was never configured.\n\nReply **go ahead** and I'll make these changes.\n\n_Codex · \`acme/api\`, \`acme/ops\`_\n\n${M}`;
+    assert.equal(latestResult([report, "why?", ack, answer, "go ahead"], M), "Prod was never configured.\n\nReply **go ahead** and I'll make these changes.");
+    assert.match(latestResult([report, "why?", ack], M), /Replying \*\*pr\*\*/);
+    assert.match(latestResult([answer, "go ahead", onIt], M), /Prod was never configured/);
+  });
 });
 
 describe("parent summary (D-24)", async () => {

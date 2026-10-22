@@ -254,6 +254,24 @@ export function latestReport(bodies, marker) {
   return undefined;
 }
 
+/**
+ * What the user is replying to, for the intake: the newest run report or answer. Answers end with
+ * the `_engine · repos_` line; the "On it" notices end with `_Workspace …_` and are skipped. Without
+ * answers, "go ahead" after an answer proposing changes was read against the report before it,
+ * whose "reply pr" made it a publish (PEN-2228).
+ */
+export function latestResult(bodies, marker) {
+  for (const body of [...bodies].reverse()) {
+    if (!String(body ?? "").includes(marker)) continue;
+    const report = latestReport([body], marker);
+    if (report) return report;
+    const text = body.replace(/<!--[\s\S]*?-->/g, "").trim();
+    const last = text.split("\n").pop();
+    if (/^_.+ · .+_$/.test(last) && !last.startsWith("_Workspace ")) return text.slice(0, -last.length).trim();
+  }
+  return undefined;
+}
+
 /** PR title: the commit subject when the branch has exactly one commit (`git log --oneline`), else the task title. */
 export function prTitle(commits, taskTitle) {
   const lines = String(commits ?? "").trim().split("\n").filter(Boolean);

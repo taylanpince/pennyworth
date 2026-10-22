@@ -15,7 +15,7 @@ import { codexModels, readApproval, readRequest, resolveModelAlias } from "./int
 import { Paperclip } from "./paperclip.mjs";
 import { branchGuidance, checkBranchName, chooseBranchName, exampleBranches } from "./branch.mjs";
 import { cleanMessages, leaksInternal, writePrDescription } from "./describe.mjs";
-import { branchesFooter, commitMessage, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, subtaskSummary, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
+import { branchesFooter, commitMessage, firstPrompt, followUpPrompt, latestReport, latestResult, prSummary, prTitle, subtaskSummary, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
 import { startRepoHelper } from "./repohelper.mjs";
 import { baseRef, branchChanges, carryOver, dirtyCheckouts, ensureRepo, findBranches, keepBranches, messagesSince, moveOffDefault, readManifest, signUnsigned, workspacePath, workspaceRepos } from "./workspace.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
@@ -260,7 +260,7 @@ async function handleRequest(issue, latest) {
   const busy = running.has(issue.id) || queue.some((j) => j.issue.id === issue.id);
   const hasWork = await taskHasCommits(before);
   const openrouter = openrouterModels(await pc.engineerAgents().catch(() => []));
-  const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, latest, candidates, openrouter, known: before.repo, previousMode: before.mode, busy, hasWork, lastResult: await lastReport(issue.id).catch(() => undefined) })
+  const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, latest, candidates, openrouter, known: before.repo, previousMode: before.mode, busy, hasWork, lastResult: await lastResultOf(issue.id).catch(() => undefined) })
     .catch((err) => (log("intake failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }), undefined));
   // Publishing needs something to publish: "build X and prepare a PR" on a fresh task is a run.
   const action = (read?.action === "push" || read?.action === "pr") && !hasWork ? "run" : (read?.action ?? "run");
@@ -1029,6 +1029,12 @@ function logTail(path, lines = 6) {
 async function lastReport(issueId) {
   const comments = [...(await pc.comments(issueId))].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
   return latestReport(comments.map((c) => c.body), RUNNER_MARKER);
+}
+
+/** The newest report or answer on a task: what the user's reply is about. */
+async function lastResultOf(issueId) {
+  const comments = [...(await pc.comments(issueId))].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  return latestResult(comments.map((c) => c.body), RUNNER_MARKER);
 }
 
 /**
