@@ -209,6 +209,8 @@ function IssueBody({ issue, board, busy, update, setStatus, onClose, onMove, rel
 
         <Description issue={issue} prefix={board.prefix} editable={editable} save={(description) => update({ description })} />
 
+        <Files issue={issue} />
+
         <Thread issue={issue} assignee={assignee} prefix={board.prefix} />
       </div>
 
@@ -445,6 +447,34 @@ function Description({ issue, prefix, editable, save }: { issue: IssueView; pref
   );
 }
 
+const size = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
+
+/** Files on the task (D-43). A PDF's text version is for the agents and isn't listed. */
+function Files({ issue }: { issue: IssueView }) {
+  const files = issue.files.filter((f) => !f.textOf);
+  if (!files.length) return null;
+  return (
+    <section className="files">
+      <h3>Files</h3>
+      <ul>
+        {files.map((f) => (
+          <li key={f.id}>
+            <a href={`/api/issues/${encodeURIComponent(issue.id)}/files/${f.id}`} target="_blank" rel="noopener noreferrer">
+              {f.name}
+            </a>
+            <span className="muted small" title={new Date(f.createdAt).toLocaleString()}>
+              {size(f.size)} · {f.by === "me" ? "you" : "agent"} · {ago(f.createdAt)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Paperclip's limit for one file. */
+const MAX_FILE = 10 * 1024 * 1024;
+
 function Composer({ issue, reload, toast }: { issue: IssueView; reload: () => Promise<void>; toast: Props["toast"] }) {
   const key = `draft:${issue.id}`;
   const [text, setText] = useState(() => {
@@ -454,42 +484,98 @@ function Composer({ issue, reload, toast }: { issue: IssueView; reload: () => Pr
       return "";
     }
   });
+  const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
   useEffect(() => {
     try {
       if (text) localStorage.setItem(key, text);
       else localStorage.removeItem(key);
     } catch {}
   }, [key, text]);
+  function add(list: FileList | null | undefined) {
+    const picked = [...(list ?? [])];
+    const big = picked.filter((f) => f.size > MAX_FILE);
+    if (big.length) toast(`${big.map((f) => f.name).join(", ")} ${big.length > 1 ? "are" : "is"} over 10 MB`);
+    setFiles((now) => [...now, ...picked.filter((f) => f.size <= MAX_FILE && f.size > 0)]);
+  }
   async function send() {
-    if (!text.trim() || sending) return;
+    if ((!text.trim() && !files.length) || sending) return;
     setSending(true);
     try {
-      await api.comment(issue.id, text);
-      setText("");
+      // Files first, so whoever reads the comment finds them on the task.
+      const names: string[] = [];
+      for (const f of files) {
+        await api.attach(issue.id, f);
+        names.push(f.name);
+        setFiles((now) => now.filter((x) => x !== f));
+      }
+      if (text.trim()) {
+        await api.comment(issue.id, names.length ? `${text.trimEnd()}\n\nAttached: ${names.map((n) => `\`${n.replace(/`/g, "")}\``).join(", ")}` : text);
+        setText("");
+      } else toast(`Attached ${names.length === 1 ? names[0] : `${names.length} files`}`);
       await reload();
     } catch (e) {
       toast(`Couldn't send: ${(e as Error).message}`);
+      await reload();
     } finally {
       setSending(false);
     }
   }
   return (
-    <footer className="composer">
+    <footer
+      className="composer"
+      onDragOver={(e) => e.dataTransfer.types.includes("Files") && e.preventDefault()}
+      onDrop={(e) => {
+        if (!e.dataTransfer.files.length) return;
+        e.preventDefault();
+        add(e.dataTransfer.files);
+      }}
+    >
       <textarea
-        placeholder="Reply… (⌘↵ to send)"
+        placeholder="Reply… (⌘↵ to send; paste or drop files to attach)"
         value={text}
         rows={2}
         onChange={(e) => setText(e.target.value)}
+        onPaste={(e) => {
+          if (!e.clipboardData.files.length) return;
+          e.preventDefault();
+          add(e.clipboardData.files);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.preventDefault(), void send();
           if (e.key === "Escape") (e.target as HTMLTextAreaElement).blur();
         }}
       />
+      {files.length > 0 && (
+        <div className="attach-list">
+          {files.map((f, i) => (
+            <span key={`${f.name}-${i}`} className="attach-chip" title={size(f.size)}>
+              {f.name}
+              <button className="icon-btn subtle" aria-label={`Remove ${f.name}`} disabled={sending} onClick={() => setFiles((now) => now.filter((x) => x !== f))}>
+                <CloseIcon />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="row-end">
         <span className="muted small">{issue.replyTarget}</span>
-        <button className="btn primary" disabled={!text.trim() || sending} onClick={() => void send()}>
-          {sending ? "Sending…" : "Send"}
+        <input
+          ref={picker}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            add(e.target.files);
+            e.target.value = "";
+          }}
+        />
+        <button className="btn" disabled={sending} title="Attach files as context for the agents" onClick={() => picker.current?.click()}>
+          Attach
+        </button>
+        <button className="btn primary" disabled={(!text.trim() && !files.length) || sending} onClick={() => void send()}>
+          {sending ? (files.length ? "Uploading…" : "Sending…") : "Send"}
         </button>
       </div>
     </footer>

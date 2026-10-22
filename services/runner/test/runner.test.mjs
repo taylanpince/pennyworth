@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { findRepos, mentionedRepos, readOnlyRefusal, normalizeRepo, parseCommand, repoAllowed, resolveEngine, resolveMode, resolveShells } from "../src/commands.mjs";
 import { buildCommand, inDevshells } from "../src/engines.mjs";
-import { commitMessage, firstPrompt, latestReport, prTitle, stripCommitLine } from "../src/prompt.mjs";
+import { commitMessage, firstPrompt, followUpPrompt, latestReport, prTitle, stripCommitLine } from "../src/prompt.mjs";
+import { diskName, plan, syncFiles } from "../src/files.mjs";
 
 const cfg = {
   allowed_orgs: ["0xsequence", "0xPolygon", "agglayer"],
@@ -923,5 +924,51 @@ describe("task workspaces (D-41)", async () => {
     assert.equal(await carryOver(path, { branch: "feat/a", base: "main", since: head, name: "fix/after" }), 1);
     assert.equal(await git(path, "rev-parse", "--abbrev-ref", "HEAD"), "fix/after");
     assert.deepEqual((await git(path, "log", "--format=%s", "origin/main..HEAD")).split("\n"), ["fix: after"]);
+  });
+});
+
+describe("files on a task (D-43)", () => {
+  const at = (id, name, createdAt, size = 3) => ({ id, originalFilename: name, contentType: "text/plain", byteSize: size, createdAt });
+
+  it("names files safely and stably, the task's before the parent's", () => {
+    assert.equal(diskName("../../etc/passwd"), "passwd");
+    assert.equal(diskName(".env"), "env");
+    assert.equal(diskName(""), "file");
+    const files = plan([at("bbbbbbbb-2", "notes.md", "2"), at("aaaaaaaa-1", "notes.md", "1")], [at("cccccccc-3", "Notes.md", "0"), at("dddddddd-4", "spec.pdf", "0")]);
+    assert.deepEqual(files.map((f) => [f.name, f.from]), [
+      ["notes.md", "task"],
+      ["notes-bbbbbbbb.md", "task"],
+      ["Notes-cccccccc.md", "parent"],
+      ["spec.pdf", "parent"],
+    ]);
+  });
+
+  it("copies files into the workspace once, and their parent's for a sub-task", async () => {
+    const ws = mkdtempSync(join(tmpdir(), "pw-files-"));
+    const fetched = [];
+    const pc = {
+      attachments: async (id) => (id === "task" ? [at("a1", "log.txt", "1")] : id === "parent" ? [at("p1", "spec.md", "1", 4)] : []),
+      attachmentContent: async (id) => (fetched.push(id), Buffer.from(id === "p1" ? "spec" : "log")),
+    };
+    const files = await syncFiles(pc, { id: "task", identifier: "PEN-1", parentId: "parent" }, ws);
+    assert.deepEqual(files.map((f) => f.path), [join(".pennyworth", "files", "log.txt"), join(".pennyworth", "files", "spec.md")]);
+    assert.equal(readFileSync(join(ws, ".pennyworth", "files", "spec.md"), "utf8"), "spec");
+    await syncFiles(pc, { id: "task", identifier: "PEN-1", parentId: "parent" }, ws);
+    assert.deepEqual(fetched, ["a1", "p1"]);
+    assert.deepEqual(await syncFiles({ attachments: async () => { throw new Error("down"); } }, { id: "x" }, ws), []);
+  });
+
+  it("lists the files in the prompt, only when there are some", () => {
+    const base = { user: "Taylan", task: { identifier: "PEN-18", title: "t", description: "" }, workspace: "/w", repos: [{ slug: "0xPolygon/example-api", path: "/w/example-api", base: "main", writable: true }], mode: "investigate", shells: ["llm"], instructions: "Why does this fail? Log attached." };
+    assert.doesNotMatch(firstPrompt(base), /Files from/);
+    const files = [{ path: ".pennyworth/files/ci.log", type: "text/plain", size: 2048, from: "task" }, { path: ".pennyworth/files/spec.pdf", type: "application/pdf", size: 3 * 1024 * 1024, from: "parent" }];
+    const p = firstPrompt({ ...base, files });
+    assert.match(p, /## Files from Taylan/);
+    assert.match(p, /`\.pennyworth\/files\/ci\.log` \(text\/plain, 2 KB\)/);
+    assert.match(p, /spec\.pdf` \(application\/pdf, 3\.0 MB, on the parent task\)/);
+    assert.match(p, /untrusted data/);
+    assert.ok(p.indexOf("## Files from") < p.indexOf("## Instructions from"));
+    assert.match(followUpPrompt({ ...base, files }), /## Files from Taylan[\s\S]*## Instructions from Taylan/);
+    assert.doesNotMatch(followUpPrompt(base), /Files from/);
   });
 });

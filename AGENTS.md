@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-42) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-43) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -23,6 +23,7 @@ host (NixOS, user taylan)
     ├── glean-mcp            proxy to the org's Glean: read-only search for the Assistant; board sign-in (D-38)
     ├── github-mcp           GitHub issues/PRs with the user's gh token: read, comment and open issues (on a project board) in GITHUB_COMMENT_ORGS when asked (D-39, D-42)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
+                             files attached as context go to Paperclip's attachments, PDFs with a text version (D-43);
                              :3121 on the LAN (pennyworth.local, paired devices from the home subnet only, D-23)
                              :3122 internal API (bearer token): scheduled moves and recurring tasks for the bridge and the runner (D-25),
                              and the runner's job activity for the Agents view (D-34)
@@ -38,7 +39,7 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`:
 | Slack Scout | Slack items for the user |
 | Telegram Scout | Telegram mentions, replies and DMs for the user, from the candidates telegram-mcp picks |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
-| Assistant | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, notes, reference docs, cached web), publishing to Primer, commenting on or opening GitHub issues when asked, acting on the user's replies (including scheduling a task or making it recurring), and running recurring tasks |
+| Assistant | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, notes, reference docs, cached web, files attached to tasks), publishing to Primer, commenting on or opening GitHub issues when asked, acting on the user's replies (including scheduling a task or making it recurring), and running recurring tasks |
 | Engineer · Codex / · Claude / · OpenRouter | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20) |
 
 ## Everyday commands

@@ -13,6 +13,16 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return data as T;
 }
 
+/** A file's bytes as base64 (uploads are JSON, like every other write: checkRequest). */
+function base64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ""));
+    reader.onerror = () => reject(new Error(`couldn't read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
 /** This device isn't paired with the board yet (LAN access, D-23). */
 export class PairRequired extends Error {
   constructor() {
@@ -44,6 +54,8 @@ export const api = {
   issue: (ref: string) => call<IssueView>("GET", `/api/issues/${encodeURIComponent(ref)}`),
   update: (ref: string, u: Update) => call<IssueView>("PATCH", `/api/issues/${encodeURIComponent(ref)}`, u),
   comment: (ref: string, body: string) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/comments`, { body }),
+  attach: async (ref: string, file: File) =>
+    call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/files`, { name: file.name, type: file.type, data: await base64(file) }),
   move: (ref: string, bucket: Bucket, position: "top" | "bottom" = "top") => call("POST", `/api/issues/${encodeURIComponent(ref)}/move`, { bucket, position }),
   order: (bucket: Bucket, ids: string[]) => call("PUT", `/api/buckets/${bucket}`, { ids }),
   carried: (action: "keep" | "tomorrow" | "later") => call<{ ok: true; count: number }>("POST", "/api/buckets/today/carried", { action }),

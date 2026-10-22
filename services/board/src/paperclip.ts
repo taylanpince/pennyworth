@@ -79,6 +79,18 @@ export interface Model {
   label: string;
 }
 
+/** A file on a task (Paperclip stores it; the board uploads the user's). */
+export interface Attachment {
+  id: string;
+  issueId: string;
+  originalFilename: string | null;
+  contentType: string;
+  byteSize: number;
+  createdAt: string;
+  createdByUserId?: string | null;
+  createdByAgentId?: string | null;
+}
+
 const OPEN = "backlog,todo,in_progress,in_review,blocked";
 
 export class PaperclipError extends Error {
@@ -198,5 +210,39 @@ export class Paperclip {
 
   createIssue(body: Record<string, unknown>): Promise<Issue> {
     return this.request<Issue>("POST", `/api/companies/${this.companyId}/issues`, body);
+  }
+
+  attachments(id: string): Promise<Attachment[]> {
+    return this.request<Attachment[]>("GET", `/api/issues/${encodeURIComponent(id)}/attachments`);
+  }
+
+  async addAttachment(issueId: string, name: string, type: string, data: Buffer): Promise<Attachment> {
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(data)], { type }), name);
+    const path = `/api/companies/${this.companyId}/issues/${encodeURIComponent(issueId)}/attachments`;
+    const res = await this.fetchImpl(new URL(path, this.baseUrl), {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.key}`, accept: "application/json" },
+      body: form,
+      signal: AbortSignal.timeout(60_000),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let message = text.slice(0, 300);
+      try {
+        message = (JSON.parse(text) as { error?: string }).error ?? message;
+      } catch {}
+      throw new PaperclipError(`Paperclip POST attachment → ${res.status}: ${message}`, res.status);
+    }
+    return JSON.parse(text) as Attachment;
+  }
+
+  async attachmentContent(id: string): Promise<Buffer> {
+    const res = await this.fetchImpl(new URL(`/api/attachments/${encodeURIComponent(id)}/content`, this.baseUrl), {
+      headers: { authorization: `Bearer ${this.key}` },
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) throw new PaperclipError(`Paperclip GET attachment → ${res.status}`, res.status);
+    return Buffer.from(await res.arrayBuffer());
   }
 }

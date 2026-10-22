@@ -82,6 +82,20 @@ export class Paperclip {
     return this.api("GET", `/api/issues/${encodeURIComponent(id)}`);
   }
 
+  /** Files on a task (D-43). */
+  attachments(issueId) {
+    return this.api("GET", `/api/issues/${encodeURIComponent(issueId)}/attachments`);
+  }
+
+  async attachmentContent(id) {
+    const res = await fetch(new URL(`/api/attachments/${encodeURIComponent(id)}/content`, this.base), {
+      headers: { authorization: `Bearer ${this.key}` },
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) throw new Error(`Paperclip GET attachment ${id} → ${res.status}`);
+    return Buffer.from(await res.arrayBuffer());
+  }
+
   async comments(issueId) {
     const list = await this.api("GET", `/api/issues/${encodeURIComponent(issueId)}/comments?order=asc&limit=500`);
     return list.filter((c) => !c.deletedAt);

@@ -164,6 +164,19 @@ export interface IssueView extends Omit<Card, "scheduled" | "recurring" | "worki
   scheduled: { date: string; bucket: Bucket; position: "top" | "bottom" } | null;
   recurring: RecurringView | null;
   comments: CommentView[];
+  files: FileView[];
+}
+
+/** A file on a task (D-43). */
+export interface FileView {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  createdAt: string;
+  by: "me" | "agent";
+  /** Set on a PDF's text version, which isn't listed separately. */
+  textOf: string | null;
 }
 
 export interface Models {

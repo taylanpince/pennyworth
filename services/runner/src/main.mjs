@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { RUNNER_MARKER, isAgentSubtask, ownRequest, findRepos, mentionedRepos, readOnlyRefusal, isClaudeModel, normalizeRepo, openrouterModels, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
+import { syncFiles } from "./files.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureGuardHooks, git, remoteIsEmpty } from "./git.mjs";
 import { codexModels, readApproval, readRequest, resolveModelAlias } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
@@ -528,9 +529,10 @@ async function startJob({ issue, instructions, read, candidates }) {
     log("job started", { issue: issue.identifier, repos: repos.map((r) => r.slug), engine: engine.kind, mode, resumed });
 
     const branches = state.branches(issue.id);
+    const files = await syncFiles(pc, full, workspace, log);
     const prompt = resumed
-      ? followUpPrompt({ user: cfg.selfName, mode, instructions, workspace, repos, branches })
-      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells, instructions, earlier });
+      ? followUpPrompt({ user: cfg.selfName, mode, instructions, workspace, repos, branches, files })
+      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells, instructions, earlier, files });
     const tipsBefore = await branchTips(workspace);
     const helper = repoHelper.register({ issue, workspace });
     let result;

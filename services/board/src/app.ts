@@ -8,6 +8,7 @@ import { RunnerReportSchema, agentsView, runTasks, workingOn, type RunContext, t
 import { RecurringSchema, RunStateSchema, ScheduleSchema, changeRecurring, claimDue, recurringView, scheduleMove } from "./automation.js";
 import { BadRequest, CreateSchema, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
 import { inNetworks } from "./config.js";
+import { INLINE_TYPES, MAX_UPLOAD_BODY, UploadSchema, decode, fileType, fileViews, isPdf, pdfText, safeName } from "./files.js";
 import { GleanAuthFailed, type GleanAuth } from "./glean.js";
 import { GoogleAuthFailed, loopbackPort, type GoogleAuth } from "./google.js";
 import { Paperclip, PaperclipError, type Issue } from "./paperclip.js";
@@ -155,7 +156,7 @@ export function createApp(opts: AppOptions): Server {
 
   async function issueView(ref: string) {
     const { ctx, issue, assigned } = await ownIssue(ref);
-    const [comments, busy] = await Promise.all([pc.comments(issue.id), working(ctx)]);
+    const [comments, busy, files] = await Promise.all([pc.comments(issue.id), working(ctx), pc.attachments(issue.id).catch(() => [])]);
     store.markSeen(issue.id);
     const placement = store.placements().get(issue.id);
     const rec = store.recurring(issue.id);
@@ -171,7 +172,49 @@ export function createApp(opts: AppOptions): Server {
       recurring: rec ? recurringView(rec, opts.timezone) : null,
       working: busy.map.get(issue.identifier) ?? null,
       comments: comments.map((c) => commentView(c, ctx.me, ctx.agents)),
+      files: fileViews(files, ctx.me),
     };
+  }
+
+  /** Attach a file to a task (D-43); a PDF also gets its text as `<name>.txt`, for the agents. */
+  async function attach(ref: string, body: unknown) {
+    const { issue, assigned } = await ownIssue(ref);
+    if (!assigned) throw new HttpError(403, "this task isn't yours or an assistant's");
+    const input = parse(UploadSchema, body);
+    const data = decode(input.data);
+    if (typeof data === "string") throw new BadRequest(data);
+    const name = safeName(input.name);
+    const type = fileType(input.type, name);
+    await pc.addAttachment(issue.id, name, type, data);
+    log.info({ issue: issue.identifier, type, bytes: data.length }, "file attached");
+    if (isPdf(type, name)) {
+      const text = await pdfText(data);
+      if (!text) log.warn({ issue: issue.identifier }, "no text in an attached PDF");
+      else
+        await pc
+          .addAttachment(issue.id, `${name}.txt`, "text/plain", Buffer.from(text, "utf8"))
+          .catch((err) => log.warn({ err: String(err.message ?? err).slice(0, 300), issue: issue.identifier }, "couldn't attach a PDF's text"));
+    }
+    return issueView(issue.id);
+  }
+
+  /** A task's file, for the user: downloaded, except plain images, which open in the browser. */
+  async function download(res: ServerResponse, ref: string, id: string) {
+    const { issue } = await ownIssue(ref);
+    const file = (await pc.attachments(issue.id)).find((a) => a.id === id);
+    if (!file) throw new HttpError(404, "no such file");
+    const data = await pc.attachmentContent(file.id);
+    const inline = INLINE_TYPES.has(file.contentType);
+    const name = file.originalFilename ?? "file";
+    res.writeHead(200, {
+      ...SECURITY_HEADERS,
+      "content-security-policy": "default-src 'none'; img-src 'self'; sandbox",
+      "content-type": inline ? file.contentType : "application/octet-stream",
+      "content-length": String(data.length),
+      "content-disposition": `${inline ? "inline" : "attachment"}; filename="${name.replace(/[^\x20-\x7e]|["\\]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+      "cache-control": "private, no-store",
+    });
+    res.end(data);
   }
 
   async function schedule(ref: string, body: unknown) {
@@ -300,7 +343,7 @@ export function createApp(opts: AppOptions): Server {
     },
   ];
 
-  const routes: { method: string; path: RegExp; handle: (m: RegExpMatchArray, body: unknown, url: URL) => Promise<unknown> }[] = [
+  const routes: { method: string; path: RegExp; maxBody?: number; handle: (m: RegExpMatchArray, body: unknown, url: URL) => Promise<unknown> }[] = [
     {
       method: "GET",
       path: /^\/api\/board$/,
@@ -353,6 +396,7 @@ export function createApp(opts: AppOptions): Server {
         return issueView(issue.id);
       },
     },
+    { method: "POST", path: /^\/api\/issues\/([^/]+)\/files$/, maxBody: MAX_UPLOAD_BODY + 1024, handle: async (m, body) => attach(decodeURIComponent(m[1]!), body) },
     {
       method: "POST",
       path: /^\/api\/issues\/([^/]+)\/move$/,
@@ -478,9 +522,11 @@ export function createApp(opts: AppOptions): Server {
       return send(res, 200, JSON.stringify(await p.handle(path.match(p.path)!, body, req, res)), "application/json");
     }
     if (mode === "lan" && !store.checkSession(sessionToken(req))) throw new HttpError(401, "pair");
+    const file = req.method === "GET" ? /^\/api\/issues\/([^/]+)\/files\/([0-9a-f-]{36})$/.exec(path) : null;
+    if (file) return download(res, decodeURIComponent(file[1]!), file[2]!);
     const route = routes.find((r) => r.method === req.method && r.path.test(path));
     if (!route) throw new HttpError(404, "not found");
-    const body = req.method === "GET" ? undefined : await readJson(req);
+    const body = req.method === "GET" ? undefined : await readJson(req, route.maxBody);
     const result = await route.handle(path.match(route.path)!, body, url);
     send(res, 200, JSON.stringify(result), "application/json");
   }
@@ -618,12 +664,12 @@ function parse<T extends z.ZodType>(schema: T, body: unknown): z.infer<T> {
   return r.data;
 }
 
-async function readJson(req: IncomingMessage): Promise<unknown> {
+async function readJson(req: IncomingMessage, max = 256_000): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > 256_000) throw new HttpError(413, "too large");
+    if (size > max) throw new HttpError(413, "too large");
     chunks.push(chunk as Buffer);
   }
   if (!size) return {};

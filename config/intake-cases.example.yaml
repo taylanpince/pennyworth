@@ -85,3 +85,23 @@
   comment: Use OpenRouter for this one and write up how the balance cache works.
   context: { known_repo: 0xPolygon/example-gateway }
   expect: { action: run, mode: investigate, engine: openrouter, model: null }
+
+- id: comment with attached files
+  why: files uploaded from the board end the comment with an "Attached:" line (D-43); it isn't a repository or a command
+  title: Gateway returns 502 under load
+  comment: |-
+    Here's the CI log and the error from the dashboard, can you figure out why it fails?
+
+    Attached: `ci-run-4471.log`, `grafana-502.png`
+  context: { known_repo: 0xPolygon/example-gateway }
+  expect: { action: run, mode: [investigate, answer], references: [] }
+
+- id: implement from an attached spec
+  why: the request points at an attached file, not at a repository
+  title: Rate limits per API key
+  comment: |-
+    Implement this per the attached spec.
+
+    Attached: `rate-limits-v2.pdf`
+  context: { known_repo: 0xPolygon/example-gateway }
+  expect: { action: run, mode: implement, references: [] }
