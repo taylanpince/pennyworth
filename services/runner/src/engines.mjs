@@ -79,9 +79,10 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
         OPENROUTER_API_KEY: key,
         // Non-interactive: opencode must not stop to ask for permission, because an unanswered prompt
         // is auto-rejected and ends the run. Reading outside the worktree (reference repos) is
-        // fine: the codex sandbox around opencode still limits writes to the worktree.
+        // fine: the codex sandbox around opencode still limits writes to the worktree. Its default asks
+        // before reading `.env` files, which repositories track too (PEN-2421).
         OPENCODE_CONFIG_CONTENT: JSON.stringify({
-          permission: { edit: "allow", bash: "allow", webfetch: "allow", external_directory: "allow", doom_loop: "allow" },
+          permission: { read: "allow", edit: "allow", bash: "allow", webfetch: "allow", external_directory: "allow", doom_loop: "allow" },
           autoupdate: false,
           share: "disabled",
           ...(p ? { mcp: { primer: { type: "remote", url: p.url, headers: { Authorization: "Bearer {env:PRIMER_MCP_TOKEN}" }, oauth: false, enabled: true } } } : {}),
