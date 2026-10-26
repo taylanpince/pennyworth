@@ -18,7 +18,7 @@ import { crewNames, findRepos, openrouterModels, stripHidden } from "../src/comm
 import { loadConfig, REPO_ROOT } from "../src/config.mjs";
 import { readApproval, readRequest } from "../src/intake.mjs";
 
-const FIELDS = ["action", "mode", "repo", "references", "engine", "model", "primer", "decision"];
+const FIELDS = ["action", "mode", "repo", "references", "engine", "model", "primer", "gapMinutes", "decision"];
 
 /** The request text exactly as handleRequest builds it (title + own description on a first run). */
 export function requestFor(c) {

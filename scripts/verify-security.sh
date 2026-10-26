@@ -114,7 +114,15 @@ git ls-files --cached --others --exclude-standard | grep -qE '(^|/)(\.env|system
 echo "Capabilities (by construction)"
 pass "ops-mcp exposes no delete/replace/arbitrary-write tools (see services/ops-mcp/src/mcp/tools.ts)"
 pass "google-workspace-mcp requests only *.readonly scopes and has GET-only client code"
-pass "slack-mcp exposes only allowlisted read tools and never send/react/edit tools (services/slack-mcp/src/policy.ts)"
+# Slack: reads, plus saving a draft by exact name with fixed arguments; the name guard refuses every other write (D-46).
+grep -qF 'export const DRAFT_TOOL = "slack_send_message_draft";' services/slack-mcp/src/policy.ts && grep -qF 'export const DRAFT_ARGS = ["channel_id", "message", "thread_ts"];' services/slack-mcp/src/policy.ts \
+  && grep -qF 'upstreamArgs(name,' services/slack-mcp/src/main.ts && grep -qE '^const NEVER = /\(send\|post\|schedule' services/slack-mcp/src/policy.ts \
+  && pass "slack-mcp exposes allowlisted read tools and the draft tool only; never send/react/edit tools (services/slack-mcp/src/policy.ts)" || fail "slack-mcp: write policy changed"
+for a in config/paperclip.yaml config/paperclip.example.yaml; do
+  [ -f "$a" ] || continue
+  drafters="$(awk '/^  [a-z-]+:$/{agent=$1} /slack_send_message_draft/{print agent}' "$a" | sort -u | tr '\n' ' ')"
+  [ "$drafters" = "assistant: " ] && pass "$a: only the Assistant can save Slack drafts" || fail "$a: Slack drafts allowed for: $drafters"
+done
 # The session can do anything the account can: every request goes through the guard, which allows reads only (D-37).
 grep -q 'guard(client, allowed' services/telegram-mcp/src/reader.ts && grep -q 'readingClient(' services/telegram-mcp/src/main.ts \
   && pass "telegram-mcp: the reading client is wrapped in the request guard" || fail "telegram-mcp: request guard not wired in"
@@ -125,18 +133,34 @@ pass "primer-mcp exposes reads plus create-document/add-version only; never dele
 glean_tools="$(sed -n 's/^export const READ_TOOLS = \[\(.*\)\];/\1/p' services/glean-mcp/src/policy.ts | tr -d '" ' | tr ',' '\n')"
 bad_glean="$(echo "$glean_tools" | grep -Ev '^(search|read_document|employee_search|meeting_lookup|code_search|chat)$' || true)"
 [ -n "$glean_tools" ] && [ -z "$bad_glean" ] && pass "glean-mcp exposes only search/read tools (services/glean-mcp/src/policy.ts)" || fail "glean-mcp: unexpected tools allowed: $bad_glean"
-# GitHub: the user's gh token can push and delete; the guard allows fixed reads plus issue comments, new issues
-# and fixed GraphQL documents whose only mutations add an issue to a project and set its status (D-39, D-42).
+# GitHub: the user's gh token can push and delete; the guard allows fixed reads plus issue comments, new issues,
+# fixed GraphQL documents whose only mutations add an issue to a project and set its status (D-39, D-42), and
+# issue state/labels/assignees, pull request reviews and failed-job re-runs (D-46).
 gh_routes="$(sed -n '/^export const ROUTES/,/^\];/p' services/github-mcp/src/github.ts | grep '^  { method:')"
 bad_gh="$(echo "$gh_routes" | grep -v '{ method: "GET", path: ' | grep -vxF \
   -e '  { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}/comments$`) },' \
   -e '  { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/issues$`) },' \
-  -e '  { method: "POST", path: /^\/graphql$/ },' || true)"
+  -e '  { method: "POST", path: /^\/graphql$/ },' \
+  -e '  { method: "PATCH", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}$`) },' \
+  -e '  { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}/labels$`) },' \
+  -e '  { method: "DELETE", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}/labels/${LABEL}$`) },' \
+  -e '  { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}/assignees$`) },' \
+  -e '  { method: "DELETE", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}/assignees$`) },' \
+  -e '  { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/pulls/${NUM}/reviews$`) },' \
+  -e '  { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/actions/runs/${RUN}/rerun-failed-jobs$`) },' || true)"
 [ -n "$gh_routes" ] && [ -z "$bad_gh" ] && grep -q 'guard(method, path, opts.body)' services/github-mcp/src/github.ts && [ "$(grep -c 'fetchImpl(' services/github-mcp/src/github.ts)" = 1 ] \
-  && pass "github-mcp: every request goes through the guard; the only writes are issue comments, new issues and GraphQL (services/github-mcp/src/github.ts)" || fail "github-mcp: unexpected GitHub requests allowed: $bad_gh"
+  && grep -qF '{ method: "PATCH", path: /\/issues\/[0-9]+$/, fields: ["state", "state_reason"] },' services/github-mcp/src/github.ts \
+  && pass "github-mcp: every request goes through the guard; the only writes are issue comments, new issues, issue state/labels/assignees, reviews, failed-job re-runs and GraphQL (services/github-mcp/src/github.ts)" || fail "github-mcp: unexpected GitHub requests allowed: $bad_gh"
 gh_mutations="$(sed -n '/^export const GRAPHQL/,/^} as const;/p' services/github-mcp/src/github.ts | grep -oE 'mutation\([^)]*\) \{ [A-Za-z0-9]+' | awk '{print $NF}' | sort -u | tr '\n' ' ')"
 [ "$gh_mutations" = "addProjectV2ItemById updateProjectV2ItemFieldValue " ] && grep -q 'GRAPHQL_DOCS.has(' services/github-mcp/src/github.ts \
   && pass "github-mcp: GraphQL limited to fixed documents whose only mutations add an issue to a project and set its status" || fail "github-mcp: unexpected GraphQL mutations: $gh_mutations"
+# The runner merges the PRs a task lists (D-46): its only GitHub writes are merge and update-branch (REST, checked
+# against merges.WRITES) and marking a draft ready (one fixed GraphQL mutation). Pushes and draft PRs stay on the exact word.
+merge_writes="$(sed -n '/^export const WRITES/,/^\];/p' services/runner/src/merges.mjs | grep -oE 'method: "[A-Z]+", path: /[^ ]+/' | tr '\n' ' ')"
+[ "$merge_writes" = 'method: "PUT", path: /^repos\/[\w.-]+\/[\w.-]+\/pulls\/\d+\/merge$/ method: "PUT", path: /^repos\/[\w.-]+\/[\w.-]+\/pulls\/\d+\/update-branch$/ ' ] \
+  && [ "$(grep -o 'mutation([^)]*) { [A-Za-z]*' services/runner/src/merges.mjs | awk '{print $NF}' | tr '\n' ' ')" = "markPullRequestReadyForReview " ] \
+  && [ "$(grep -c '"-X"' services/runner/src/main.mjs)" = 1 ] && grep -q 'merges.WRITES.some(' services/runner/src/main.mjs \
+  && pass "runner: merge queue writes only merges, branch updates and ready-for-review (services/runner/src/merges.mjs)" || fail "runner: unexpected merge-queue writes: $merge_writes"
 pass "no email/Slack/Telegram send or calendar write tool is configured for any agent"
 
 echo

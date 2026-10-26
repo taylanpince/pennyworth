@@ -258,7 +258,11 @@ describe("plain-language intake", async () => {
       { repo: "0xpolygon/indexer-gateway-b", references: ["0xPolygon/indexer-gateway-a", "evil/repo", "0xPolygon/indexer-gateway-b"], mode: "investigate", engine: "", model: "astra", question: "" },
       { candidates, models },
     );
-    assert.deepEqual(v, { action: "run", repo: "0xPolygon/indexer-gateway-b", references: ["0xPolygon/indexer-gateway-a"], mode: "investigate", engine: "codex", model: "gpt-6-astra", primer: false, question: undefined });
+    assert.deepEqual(v, { action: "run", repo: "0xPolygon/indexer-gateway-b", references: ["0xPolygon/indexer-gateway-a"], mode: "investigate", engine: "codex", model: "gpt-6-astra", primer: false, question: undefined, gapMinutes: undefined });
+    assert.equal(validateIntake({ action: "merge", gap_minutes: 15 }, { candidates, models }).action, "merge");
+    assert.equal(validateIntake({ action: "merge", gap_minutes: 15 }, { candidates, models }).gapMinutes, 15);
+    assert.equal(validateIntake({ action: "merge", gap_minutes: -1 }, { candidates, models }).gapMinutes, undefined);
+    assert.equal(validateIntake({ action: "merge", gap_minutes: 0 }, { candidates, models }).gapMinutes, 0);
     assert.equal(validateIntake({ repo: "", references: [], mode: "investigate", engine: "", model: "", primer: true, question: "" }, { candidates, models }).primer, true);
     assert.equal(validateIntake({ repo: "", references: [], mode: "investigate", engine: "", model: "", primer: "yes", question: "" }, { candidates, models }).primer, false);
     assert.equal(validateIntake({ repo: "evil/repo", references: [], mode: "rm -rf", engine: "x", model: "", question: "" }, { candidates, models }).repo, undefined);

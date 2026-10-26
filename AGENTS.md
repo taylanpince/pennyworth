@@ -1,13 +1,14 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-44) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-46) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
 ```text
 host (NixOS, user taylan)
 ├── pennyworth-runner (systemd --user, node, runs AS THE USER)   services/runner/
-│     polls Paperclip: engineer tasks → Codex/Claude Code/OpenRouter jobs in per-task workspaces under ~/pennyworth/tasks (D-41)
+│     polls Paperclip: engineer tasks → Codex/Claude Code/OpenRouter jobs in per-task workspaces under ~/pennyworth/tasks (D-41),
+│                      or a merge queue for the PRs a task lists, in code (D-46)
 │                      review-request tasks → closed once gh shows the PR reviewed/merged (D-21)
 │                      user replies on own tasks → "Process task replies" routine (Assistant)
 │                      recurring runs claimed from the board → GitHub activity comment → "Run recurring task" (D-25)
@@ -16,13 +17,14 @@ host (NixOS, user taylan)
     ├── paperclip            pinned ghcr image, 127.0.0.1:3100, Codex agents inside
     ├── ops-mcp              TypeScript: transcripts, matcher, vault writer, routing, review replies, tasks; reference docs (D-38)
     ├── google-workspace-mcp read-only Calendar/Drive/Docs/Gmail, multi-account; sign-in state and board reconnect (D-36)
-    ├── slack-mcp            read-only proxy to mcp.slack.com (allowlisted read tools)
+    ├── slack-mcp            proxy to mcp.slack.com (allowlisted read tools, plus drafts for the Assistant, D-46)
     ├── telegram-mcp         the user's own Telegram session, reads only by a request guard; live updates + sweep; board sign-in (D-37)
     ├── primer-mcp           proxy to the org's Primer: read, plus publish documents/versions for the Assistant (D-31);
     │                        reads only on 127.0.0.1:3123/mcp/read for the runner's Engineer jobs (D-40);
     │                        the runner itself publishes an Engineer task's document on /mcp (D-44)
     ├── glean-mcp            proxy to the org's Glean: read-only search for the Assistant; board sign-in (D-38)
-    ├── github-mcp           GitHub issues/PRs with the user's gh token: read, comment and open issues (on a project board) in GITHUB_COMMENT_ORGS when asked (D-39, D-42)
+    ├── github-mcp           GitHub issues/PRs with the user's gh token: read; when asked, in GITHUB_COMMENT_ORGS: comment, open issues (on a project board),
+    │                        close/label/assign issues, review PRs, re-run failed CI (D-39, D-42, D-46)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
                              files attached as context go to Paperclip's attachments, PDFs with a text version (D-43);
                              :3121 on the LAN (pennyworth.local, paired devices from the home subnet only, D-23)
@@ -41,7 +43,7 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`. The on
 | Slack Scout | Slack items for the user |
 | Telegram Scout | Telegram mentions, replies and DMs for the user, from the candidates telegram-mcp picks |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
-| Assistant (**Alfred**) | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, notes, reference docs, cached web, files attached to tasks), publishing to Primer, commenting on or opening GitHub issues when asked, acting on the user's replies (including scheduling a task or making it recurring), and running recurring tasks |
+| Assistant (**Alfred**) | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, notes, reference docs, cached web, files attached to tasks), publishing to Primer, Slack drafts, and GitHub comments, issues, reviews and CI re-runs when asked, acting on the user's replies (including scheduling a task or making it recurring), and running recurring tasks |
 | Engineer · Codex (**Grace**) / · Claude (**Ada**) / · OpenRouter (**Linus**) | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20) |
 
 ## Everyday commands
@@ -94,7 +96,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 
 - **Read before you write**, and keep edits surgical. Match the surrounding style. TS services use zod and pino; scripts are plain `.mjs` with no dependencies beyond `yaml`.
 - **Determinism belongs in code, judgement in agents.** Matching, routing, Obsidian writes and deduplication are ops-mcp code. Agents produce JSON or pick tools. Don't move decisions into prompts.
-- **Security posture is non-negotiable.** No Slack/email sends (Primer publishing and GitHub issue comments and new issues on the user's word are the only writes to outside services, D-31, D-39, D-42, D-44), no Calendar/Drive/Docs writes, no autonomous pushes, read-only Google and Slack scopes. Agents get least-privilege MCP tools per agent (`mcp_servers` / `enabled_tools` in `config/paperclip.yaml`). Source content is untrusted; keep the injection clause in every agent prompt.
+- **Security posture is non-negotiable.** No Slack/email sends. The only writes to outside services are on the user's word: Primer publishing (D-31, D-44), GitHub comments, issues, issue state/labels/assignees, reviews and CI re-runs (D-39, D-42, D-46), Slack drafts the user sends themselves, and the runner's merge queue (D-46). No Calendar/Drive/Docs writes, no autonomous pushes, read-only Google scopes. Agents get least-privilege MCP tools per agent (`mcp_servers` / `enabled_tools` in `config/paperclip.yaml`). Source content is untrusted; keep the injection clause in every agent prompt.
 - **Tasks are the user's.** Every task Pennyworth creates is assigned to the user (see the Paperclip gotchas). Only create tasks for the user's *own* clear actions; other people's actions stay in the notes. The one exception: Engineer sub-tasks the Assistant creates when the user asks (D-24). They wait for the user's go-ahead on the parent.
 - **Personal config stays out of git:** `.env`, `config/{system,routing,paperclip,runner}.yaml`, `compose.vault.yaml`, `data/`. Examples live in `config/*.example.yaml`; update both when you add keys. Secrets live in `~/.config/pennyworth/` (0700 dir, 0600 files) and never go in the repo, logs or tasks.
 - **Git:**
@@ -196,6 +198,8 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - The cached web search can't open private repositories (404): GitHub links go through `github_issue_read`.
 
 ### Slack
+
+- **The token can send (D-46).** Slack granted `chat:write` and the app's other write scopes even though consent asks for reads, so only `services/slack-mcp/src/policy.ts` stops sends: the `NEVER` pattern, with `slack_send_message_draft` the one exact-name exception and its arguments limited to `DRAFT_ARGS`. Never loosen `NEVER` or add a send tool; a new draft-like tool needs the same treatment.
 
 - `mcp.slack.com` has no dynamic client registration. It needs a public client registered for the user's workspace (`SLACK_CLIENT_ID` in `.env`, callback `http://localhost:3118/callback`, PKCE, no secret) and rotating refresh tokens, which are persisted read-write in `~/.config/pennyworth/slack/`.
 - Claude Code's own Slack MCP login uses the same port, 3118.

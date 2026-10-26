@@ -25,7 +25,7 @@ function fake(routes: Record<string, unknown>) {
 }
 
 describe("guard", () => {
-  it("allows the read endpoints and issue comments only", () => {
+  it("allows the read endpoints and the writes the user can ask for", () => {
     for (const [m, p] of [
       ["GET", "/user"],
       ["GET", "/repos/0xsequence/issue-tracker/issues/7334"],
@@ -36,9 +36,25 @@ describe("guard", () => {
       ["POST", "/repos/a/b/issues/3/comments"],
       ["POST", "/repos/a/b/issues"],
       ["GET", "/repos/a/b/labels"],
+      ["GET", "/repos/a/b/actions/runs"],
+      ["GET", "/repos/a/b/actions/runs/123"],
+      ["POST", "/repos/a/b/issues/3/labels"],
+      ["DELETE", "/repos/a/b/issues/3/labels/needs%20triage"],
+      ["POST", "/repos/a/b/issues/3/assignees"],
+      ["DELETE", "/repos/a/b/issues/3/assignees"],
+      ["POST", "/repos/a/b/actions/runs/123/rerun-failed-jobs"],
     ] as const)
       expect(() => guard(m, p)).not.toThrow();
+    expect(() => guard("PATCH", "/repos/a/b/issues/3", { state: "closed", state_reason: "not_planned" })).not.toThrow();
+    expect(() => guard("POST", "/repos/a/b/pulls/3/reviews", { event: "APPROVE", commit_id: "abc" })).not.toThrow();
     for (const query of Object.values(GRAPHQL)) expect(() => guard("POST", "/graphql", { query })).not.toThrow();
+  });
+
+  it("limits what an issue edit and a review may carry", () => {
+    for (const body of [{ title: "x" }, { state: "closed", body: "x" }, { state: "closed", assignees: [] }, { milestone: 1 }])
+      expect(() => guard("PATCH", "/repos/a/b/issues/3", body), JSON.stringify(body)).toThrow(GitHubRefused);
+    for (const body of [undefined, { body: "x" }, { event: "DISMISS" }, { event: "APPROVE", comments: [] }])
+      expect(() => guard("POST", "/repos/a/b/pulls/3/reviews", body), JSON.stringify(body)).toThrow(GitHubRefused);
   });
 
   it("refuses GraphQL that isn't one of the fixed documents", () => {
@@ -48,16 +64,19 @@ describe("guard", () => {
 
   it("refuses everything else the token could do", () => {
     for (const [m, p] of [
-      ["PATCH", "/repos/a/b/issues/3"], // close, retitle
       ["PATCH", "/repos/a/b/issues/comments/9"], // edit a comment
       ["DELETE", "/repos/a/b/issues/comments/9"],
       ["PUT", "/repos/a/b/pulls/3/merge"],
-      ["POST", "/repos/a/b/pulls/3/reviews"], // approve
       ["DELETE", "/repos/a/b/git/refs/heads/main"],
       ["PUT", "/repos/a/b/contents/README.md"],
       ["GET", "/repos/a/b/contents/README.md"],
-      ["POST", "/repos/a/b/issues/3/labels"],
       ["GET", "/repos/a/b/issues/3/comments/../../../../user/keys"],
+      ["PUT", "/repos/a/b/issues/3/labels"], // replace all labels
+      ["DELETE", "/repos/a/b/issues/3/labels"], // remove all labels
+      ["POST", "/repos/a/b/actions/runs/123/rerun"], // re-run every job, passing ones too
+      ["POST", "/repos/a/b/actions/runs/123/cancel"],
+      ["POST", "/repos/a/b/pulls/3/reviews/9/dismissals"],
+      ["PUT", "/repos/a/b/pulls/3/reviews/9"],
       ["GET", "/graphql"],
       ["POST", "/repos/a/b/labels"],
       ["GET", "/user/repos"],
@@ -191,6 +210,49 @@ describe("GitHub", () => {
       const out = await new GitHub(tokenFile(), new Set(["0xsequence"]), impl).createIssue({ title: "T", body: "", project: "https://github.com/orgs/0xsequence/projects/16", status: "Triage" });
       expect(out.number).toBe(9);
       expect(out.project?.error).toMatch(/opened, but adding it to the project failed/);
+    });
+  });
+
+  describe("D-46 writes", () => {
+    const issue7 = { ...issue, comments: 0, labels: [{ name: "bug" }, { name: "needs triage" }], assignees: [] };
+
+    it("closes an issue as not planned and changes labels, with existing labels only", async () => {
+      const { impl, calls } = fake({ "GET /repos/a/b/issues/7": issue7, "GET /repos/a/b/labels": [{ name: "WaaS" }, { name: "bug" }], "POST /repos/a/b/issues/7/labels": [], "DELETE /repos/a/b/issues/7/labels/needs%20triage": [], "PATCH /repos/a/b/issues/7": {} });
+      const gh = new GitHub(tokenFile(), new Set(["a"]), impl);
+      const out = (await gh.updateIssue({ owner: "a", repo: "b", number: 7 }, { state: "closed", reason: "not_planned", addLabels: ["waas"], removeLabels: ["Needs Triage"] })) as { done: string[] };
+      expect(out.done).toEqual(["added labels WaaS", "removed label needs triage", "closed as not planned"]);
+      expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ state: "closed", state_reason: "not_planned" });
+      expect(calls.find((c) => c.method === "POST")?.body).toEqual({ labels: ["WaaS"] });
+    });
+
+    it("refuses a missing label, closing a pull request, and other organizations before writing", async () => {
+      const { impl, calls } = fake({ "GET /repos/a/b/issues/7": issue7, "GET /repos/a/b/issues/8": { ...issue7, pull_request: {} }, "GET /repos/a/b/labels": [{ name: "bug" }] });
+      const gh = new GitHub(tokenFile(), new Set(["a"]), impl);
+      await expect(gh.updateIssue({ owner: "a", repo: "b", number: 7 }, { addLabels: ["nope"] })).rejects.toThrow(/has no label "nope"/);
+      await expect(gh.updateIssue({ owner: "a", repo: "b", number: 8 }, { state: "closed" })).rejects.toThrow(/pull requests aren't closed/);
+      await expect(gh.updateIssue({ owner: "x", repo: "b", number: 7 }, { state: "closed" })).rejects.toBeInstanceOf(GitHubRefused);
+      expect(calls.every((c) => c.method === "GET")).toBe(true);
+    });
+
+    it("reviews at the head it read, and needs text unless approving", async () => {
+      const { impl, calls } = fake({ "GET /repos/a/b/pulls/7": { state: "open", head: { sha: "abc" } }, "POST /repos/a/b/pulls/7/reviews": { id: 5, html_url: "h", state: "APPROVED" } });
+      const gh = new GitHub(tokenFile(), new Set(["a"]), impl);
+      await expect(gh.review({ owner: "a", repo: "b", number: 7 }, "APPROVE", "")).resolves.toEqual({ id: 5, url: "h", state: "APPROVED" });
+      expect(calls.at(-1)?.body).toEqual({ event: "APPROVE", commit_id: "abc" });
+      await expect(gh.review({ owner: "a", repo: "b", number: 7 }, "REQUEST_CHANGES", " ")).rejects.toBeInstanceOf(GitHubRefused);
+      await expect(gh.review({ owner: "x", repo: "b", number: 7 }, "APPROVE", "")).rejects.toBeInstanceOf(GitHubRefused);
+    });
+
+    it("re-runs only the latest failed run of each workflow on a pull request", async () => {
+      const run = (id: number, workflow_id: number, conclusion: string, created_at: string) => ({ id, name: `w${workflow_id}`, html_url: `h${id}`, status: "completed", conclusion, head_sha: "abc", workflow_id, created_at });
+      const { impl, calls } = fake({
+        "GET /repos/a/b/pulls/7": { head: { sha: "abc" } },
+        "GET /repos/a/b/actions/runs": { workflow_runs: [run(1, 10, "failure", "1"), run(2, 10, "success", "2"), run(3, 20, "failure", "1"), run(4, 30, "success", "1")] },
+        "POST /repos/a/b/actions/runs/3/rerun-failed-jobs": {},
+      });
+      const out = (await new GitHub(tokenFile(), new Set(["a"]), impl).rerunFailed({ pr: { owner: "a", repo: "b", number: 7 } })) as { rerun: { url: string }[] };
+      expect(out.rerun).toEqual([{ name: "w20", url: "h3" }]);
+      expect(calls.filter((c) => c.method === "POST").map((c) => c.url.pathname)).toEqual(["/repos/a/b/actions/runs/3/rerun-failed-jobs"]);
     });
   });
 

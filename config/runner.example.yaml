@@ -76,6 +76,11 @@ reviews:
   enabled: true
   interval_minutes: 5
 
+# Merging the PRs an Engineer task lists, one at a time, in code (D-46).
+merges:
+  gap_minutes: 15        # between merges, unless the request says otherwise
+  timeout_minutes: 90    # stop the queue when a check or CI stays pending this long
+
 # Your comments on your own open tasks → the Assistant ("Process task replies" routine).
 replies:
   enabled: true

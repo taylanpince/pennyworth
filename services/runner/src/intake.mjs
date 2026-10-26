@@ -8,12 +8,12 @@ import { join } from "node:path";
 import { isClaudeModel } from "./commands.mjs";
 import { inDevshells } from "./engines.mjs";
 
-export const ACTIONS = ["run", "stop", "status", "reset", "cleanup", "push", "pr"];
+export const ACTIONS = ["run", "stop", "status", "reset", "cleanup", "push", "pr", "merge"];
 
 export const INTAKE_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["action", "repo", "references", "mode", "engine", "model", "primer", "question"],
+  required: ["action", "repo", "references", "mode", "engine", "model", "primer", "question", "gap_minutes"],
   properties: {
     action: { type: "string", enum: ACTIONS },
     repo: { type: "string" },
@@ -23,6 +23,7 @@ export const INTAKE_SCHEMA = {
     model: { type: "string" },
     primer: { type: "boolean" },
     question: { type: "string" },
+    gap_minutes: { type: "integer" },
   },
 };
 
@@ -68,12 +69,13 @@ export function intakePrompt({ user, title, description, instructions, latest, c
 
 Fields:
 - action: what ${user}'s newest comment asks of the runner (a run is ${busy ? "IN PROGRESS" : "not in progress"} on this task):
-  - "stop": stop or cancel the run in progress.
-  - "status": how the runner's work on this task is going (progress, what it is doing). Not a question about the code.
+  - "stop": stop or cancel the run or the merges in progress.
+  - "status": how the runner's work on this task is going (progress, what it is doing, how the merges are going). Not a question about the code.
   - "reset": start the agent's conversation afresh (forget the session), keeping the code.
   - "cleanup": remove the local working copy; the work on this task is finished.
   - "push": publish work that is ALREADY done on this task to GitHub. "pr": open a pull request for work ALREADY done.
     Work done on this task so far: ${hasWork ? "yes, there are unpublished or published commits" : "NONE, nothing has been built yet"}. A request to build, change or prepare something (even "…and open a PR" or "prepare a PR that…") is "run": the work has to be done first.
+  - "merge": merge pull requests that already exist on GitHub, named in the request or the task ("merge these approved PRs one by one", "land #12 and #13"), or carry on with merges that stopped ("continue the merges", "fixed it, carry on"). Not for writing code, opening PRs or reviewing them.
   - "run": anything else, i.e. a question, research, a review or changes for the agent. When in doubt, "run".
 - repo: the repository the work happens in (code is written or investigated there). Pick exactly one slug from the candidates, or "" if this task already has one (${known ? `it does: ${known}` : "it does not"}) and the request doesn't name a different one, or if you truly cannot tell.
 - references: other candidate repositories mentioned only as examples, inspiration or context to read.
@@ -85,6 +87,7 @@ Fields:
 - engine: "openrouter" if they ask for OpenRouter or opencode, or name a model from the OpenRouter list below (GLM, DeepSeek, Kimi, Qwen…); "claude" if they ask for Claude or Claude Code; "codex" if they name Codex${crewLine(crew)}; otherwise "".
 - model: a model they name, mapped to a known model: a Codex model (e.g. "astra"); for Claude, "opus", "sonnet", "haiku", "fable" or a full claude-… id; for OpenRouter, the id from the list (e.g. "deepseek" → the DeepSeek model listed first), or the full provider/model id they wrote. Otherwise "" (also for "use OpenRouter" alone).
 - primer: true if ${user} wants the result as a Primer document: the request asks to publish, put or share it on Primer, or for a Primer report or doc (Primer is the organization's document host). A Primer link given only to read is not that. Otherwise false.
+- gap_minutes: for "merge", the minutes to wait between merges if ${user} says ("at least 15 mins between each" → 15, "an hour apart" → 60, "no need to wait" → 0). Otherwise -1.
 - question: only if repo is "" and the task has no repository yet, one short plain-language question asking which repository to use. Otherwise "".
 
 Candidate repositories: ${candidates.length ? candidates.join(", ") : "(none)"}
@@ -126,7 +129,8 @@ export function validateIntake(raw, { candidates, models, openrouter = [] }) {
   const engine = or ? "openrouter" : claude ? "claude" : raw?.engine === "codex" || model ? "codex" : undefined;
   const question = String(raw?.question ?? "").trim().slice(0, 500) || undefined;
   const action = ACTIONS.includes(raw?.action) ? raw.action : "run";
-  return { action, repo, references, mode, engine, model, primer: raw?.primer === true, question };
+  const gapMinutes = Number.isInteger(raw?.gap_minutes) && raw.gap_minutes >= 0 && raw.gap_minutes <= 720 ? raw.gap_minutes : undefined;
+  return { action, repo, references, mode, engine, model, primer: raw?.primer === true, question, gapMinutes };
 }
 
 /** One no-tools Codex call with a JSON schema for its answer; resolves with the parsed JSON. */

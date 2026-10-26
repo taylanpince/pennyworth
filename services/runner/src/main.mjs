@@ -22,6 +22,7 @@ import { startRepoHelper } from "./repohelper.mjs";
 import { baseRef, branchChanges, carryOver, dirtyCheckouts, ensureRepo, findBranches, keepBranches, messagesSince, moveOffDefault, readManifest, signUnsigned, workspacePath, workspaceRepos } from "./workspace.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
+import * as merges from "./merges.mjs";
 import { State } from "./state.mjs";
 
 const execFileP = promisify(execFile);
@@ -67,6 +68,11 @@ async function poll() {
     lastRecurringCheck = Date.now();
     await startRecurringRuns().catch((err) => log("recurring check failed", { err: String(err.message ?? err).slice(0, 300) }));
   }
+  // Merges you asked for (D-46), at most once a minute.
+  if (Date.now() - lastMergeCheck >= 60_000) {
+    lastMergeCheck = Date.now();
+    await advanceMerges().catch((err) => log("merge check failed", { err: String(err.message ?? err).slice(0, 300) }));
+  }
   state.set("last_poll", now);
   drainQueue();
 }
@@ -90,8 +96,12 @@ let activityError = "";
 /** Tell the board what is running, queued and recently finished: every 30 seconds and on every job start and end. */
 function reportActivity() {
   if (!boardApi) return;
+  const merging = activeMerges()
+    .map((issueId) => [issueId, mergeQueue(issueId)])
+    .filter(([issueId, q]) => q?.state === "running" && !running.has(issueId))
+    .map(([issueId, q]) => ({ issueId, identifier: q.identifier, startedAt: q.startedAt, engine: q.engine, mode: "merging PRs", repo: [...new Set(q.prs.map((p) => p.repo))].join(", ").slice(0, 200) }));
   const body = {
-    running: [...running.entries()].map(([issueId, r]) => ({ issueId, identifier: r.identifier, startedAt: r.startedAt, ...(r.info ?? {}) })),
+    running: [...[...running.entries()].map(([issueId, r]) => ({ issueId, identifier: r.identifier, startedAt: r.startedAt, ...(r.info ?? {}) })), ...merging].slice(0, 50),
     queued: queue.filter((j) => !running.has(j.issue.id)).map((j) => ({ issueId: j.issue.id, identifier: j.issue.identifier })),
     recent: state.recentJobs(15).map((j) => ({ issueId: j.issue_id, identifier: j.identifier, engine: j.engine ?? undefined, status: j.status, startedAt: j.started_at, finishedAt: j.finished_at })),
     latest: state.latestJobs(200).map((j) => ({ identifier: j.identifier, status: j.status })),
@@ -270,7 +280,9 @@ async function handleRequest(issue, latest) {
   const action = (read?.action === "push" || read?.action === "pr") && !hasWork ? "run" : (read?.action ?? "run");
   log("request read", { issue: issue.identifier, action, mode: read?.mode });
 
+  if (action === "merge") return startMerges(issue, full, instructions, latest, read?.gapMinutes);
   if (["stop", "status", "reset", "cleanup"].includes(action)) {
+    if (action === "stop" && mergeQueue(issue.id)?.state === "running" && !running.has(issue.id)) return stopMerges(issue, "you asked me to stop");
     if (action === "stop") {
       const before = queue.length;
       for (let i = queue.length - 1; i >= 0; i--) if (queue[i].issue.id === issue.id) queue.splice(i, 1);
@@ -325,6 +337,114 @@ async function dispatch(job) {
   } else {
     void startJob(job);
   }
+}
+
+// ------------------------------------------------------------------ merges (D-46)
+
+let lastMergeCheck = 0;
+const mergeQueue = (issueId) => (state.get(`merges:${issueId}`) ? JSON.parse(state.get(`merges:${issueId}`)) : undefined);
+const activeMerges = () => JSON.parse(state.get("merges:active") || "[]");
+function saveMerges(issueId, queue) {
+  state.set(`merges:${issueId}`, JSON.stringify(queue));
+  const active = activeMerges().filter((id) => id !== issueId);
+  state.set("merges:active", JSON.stringify(queue.state === "running" ? [...active, issueId] : active));
+}
+
+/**
+ * "Merge these approved PRs, 15 minutes apart": queue the PRs the comment names (else the task's),
+ * or carry on with a stopped queue. advanceMerges() does the merging, one poll at a time.
+ */
+async function startMerges(issue, full, instructions, latest, gapMinutes) {
+  const existing = mergeQueue(issue.id);
+  let prs = merges.findPrs(latest);
+  if (!prs.length && !existing?.prs.some((p) => p.status === "pending")) prs = merges.findPrs(`${instructions}\n${full.description ?? ""}`);
+  const outside = prs.filter((p) => !repoAllowed(normalizeRepo(p.repo), cfg.allowed_orgs));
+  if (outside.length) return void (await pc.comment(issue.id, `I only merge in your orgs (${cfg.allowed_orgs.join(", ")}), so I didn't start: ${outside.map((p) => p.url).join(", ")}.`));
+  if (running.has(issue.id)) return void (await pc.comment(issue.id, "Can't start merging while a run is in progress on this task. Comment **stop** first, or wait for it to finish."));
+  const queue = merges.startOrResume(existing, prs, { gapMinutes: gapMinutes ?? existing?.gapMinutes ?? cfg.merges?.gap_minutes ?? 15 });
+  if (!queue) return void (await pc.comment(issue.id, existing?.state === "done" ? "Every PR on this task is already merged. Link the ones you want merged next." : "Which pull requests should I merge? Link them in a comment (or in the task), in the order you want them merged."));
+  const engine = state.task(issue.id)?.engine;
+  Object.assign(queue, { identifier: issue.identifier, engine: engine ? engineLabel(engine) : undefined });
+  saveMerges(issue.id, queue);
+  const pending = queue.prs.filter((p) => p.status === "pending");
+  await pc.startWork(
+    issue.id,
+    `${existing && !prs.length ? "Carrying on" : "On it"}: merging ${pending.length} PR${pending.length === 1 ? "" : "s"} one at a time${pending.length > 1 && queue.gapMinutes ? `, at least ${queue.gapMinutes} minutes apart` : ""}, in this order: ${pending.map((p) => `#${p.number}`).join(", ")}. Each one has to be approved with green checks, and its base branch green before and after it. If anything isn't, I stop and tell you here.`,
+  );
+  log("merges started", { issue: issue.identifier, prs: pending.length, gap: queue.gapMinutes });
+  lastMergeCheck = 0; // start right away
+  reportActivity();
+}
+
+async function stopMerges(issue, why) {
+  const queue = mergeQueue(issue.id);
+  Object.assign(queue, { state: "stopped", reason: why, stoppedAt: new Date().toISOString() });
+  saveMerges(issue.id, queue);
+  const next = queue.prs.find((p) => p.status === "pending");
+  await pc.setStatus(issue.id, "in_review", merges.summary(queue, `**Stopped the merges** (${why}).${next ? ` Tell me to carry on and I'll continue from #${next.number}.` : ""}`));
+  reportActivity();
+}
+
+/** One step for every running queue: GitHub reads and writes go through mergeGithub. */
+async function advanceMerges() {
+  for (const issueId of activeMerges()) {
+    const queue = mergeQueue(issueId);
+    if (queue?.state !== "running") {
+      if (queue) saveMerges(issueId, queue);
+      else state.set("merges:active", JSON.stringify(activeMerges().filter((id) => id !== issueId)));
+      continue;
+    }
+    let step;
+    try {
+      step = await merges.advance(queue, { github: mergeGithub, timeoutMinutes: cfg.merges?.timeout_minutes ?? 90 });
+      queue.errors = 0;
+    } catch (err) {
+      // GitHub or the network: try again next minute, and give up after ten in a row.
+      queue.errors = (queue.errors ?? 0) + 1;
+      log("merge step failed", { issue: queue.identifier, errors: queue.errors, err: String(err.stderr || err.message || err).slice(0, 300) });
+      saveMerges(issueId, queue);
+      if (queue.errors >= 10) await stopMerges({ id: issueId, identifier: queue.identifier }, `GitHub kept failing: ${String(err.stderr || err.message || err).trim().split("\n").pop().slice(0, 200)}`);
+      continue;
+    }
+    saveMerges(issueId, step.queue);
+    if (step.done) await pc.setStatus(issueId, "in_review", step.say.join("\n\n"));
+    else for (const s of step.say) await pc.comment(issueId, s);
+    if (step.say.length || step.done) log("merges advanced", { issue: queue.identifier, state: step.queue.state, merged: step.queue.prs.filter((p) => p.status === "merged").length });
+    if (step.done) reportActivity();
+  }
+}
+
+/** GitHub for the merge queue, with your gh login: fixed GraphQL reads, and the writes in merges.WRITES only. */
+const mergeGithub = {
+  async pr(repo, number) {
+    const [owner, name] = repo.split("/");
+    const { stdout } = await execFileP(await findRealGh(), ["api", "graphql", "-f", `query=${merges.PR_QUERY}`, "-f", `owner=${owner}`, "-f", `repo=${name}`, "-F", `number=${number}`], { maxBuffer: 16 * 1024 * 1024 });
+    return JSON.parse(stdout).data;
+  },
+  async commit(repo, oid) {
+    const [owner, name] = repo.split("/");
+    const { stdout } = await execFileP(await findRealGh(), ["api", "graphql", "-f", `query=${merges.COMMIT_QUERY}`, "-f", `owner=${owner}`, "-f", `repo=${name}`, "-f", `oid=${oid}`], { maxBuffer: 16 * 1024 * 1024 });
+    return JSON.parse(stdout).data?.repository?.object;
+  },
+  async merge(repo, number, { sha, method }) {
+    return (await githubWrite(`repos/${repo}/pulls/${number}/merge`, { merge_method: method, sha })).sha;
+  },
+  async updateBranch(repo, number, head) {
+    await githubWrite(`repos/${repo}/pulls/${number}/update-branch`, { expected_head_sha: head });
+  },
+  async markReady(id) {
+    const { stdout } = await execFileP(await findRealGh(), ["api", "graphql", "-f", `query=${merges.READY_MUTATION}`, "-f", `id=${id}`]);
+    const res = JSON.parse(stdout);
+    if (res.errors?.length) throw new Error(res.errors.map((e) => e.message).join("; "));
+  },
+};
+
+async function githubWrite(path, fields) {
+  if (!merges.WRITES.some((w) => w.method === "PUT" && w.path.test(path))) throw new Error(`refused GitHub write ${path}`);
+  const args = ["api", "-X", "PUT", path];
+  for (const [k, v] of Object.entries(fields)) args.push("-f", `${k}=${v}`);
+  const { stdout } = await execFileP(await findRealGh(), args);
+  return JSON.parse(stdout || "{}");
 }
 
 // ------------------------------------------------------------------ replies → Assistant
@@ -744,6 +864,9 @@ async function runCommand(issue, task, command) {
           : "**Nothing running**, and nothing has run on this task yet.",
       queued ? `${queued} more request${queued === 1 ? " is" : "s are"} queued after it.` : "",
     ];
+    const mq = mergeQueue(issue.id);
+    if (mq?.state === "running") lines[0] = `**Merging:** ${mq.prs.filter((p) => p.status === "merged").length} of ${mq.prs.length} merged; now waiting for ${mq.waiting ?? "the next check"}.`;
+    if (mq) lines.push(`\n${merges.summary(mq, mq.state === "running" ? "" : mq.state === "stopped" ? `The merges stopped: ${mq.reason}.` : "The merges are done.").trim()}`);
     if (task?.workspace && existsSync(task.workspace) && !running.has(issue.id)) {
       const rows = await branchRows(issue, task.workspace);
       lines.push(rows.length ? branchesFooter(rows, { multiRepo: new Set(rows.map((r) => r.repo)).size > 1 }) : "\nNo branches yet.");

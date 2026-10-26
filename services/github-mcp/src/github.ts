@@ -3,16 +3,20 @@
 // that token and those requests is `guard`: every request goes through it, and it allows a fixed
 // list of read endpoints plus the writes the user asks for: a comment on an issue or pull request, a
 // new issue, and (D-42) adding that issue to an organization project with a status, through the
-// GraphQL documents fixed in `GRAPHQL`. Never call fetch with the token anywhere else, and never add
-// a route or a GraphQL document without checking what it does.
+// GraphQL documents fixed in `GRAPHQL`; and (D-46) closing or reopening an issue, its labels and
+// assignees, a review on a pull request, and re-running failed CI jobs. Never call fetch with the
+// token anywhere else, and never add a route or a GraphQL document without checking what it does.
 import { readFileSync } from "node:fs";
 
 const API = "https://api.github.com";
 const NAME = "[A-Za-z0-9_.-]{1,100}";
 const NUM = "[1-9][0-9]{0,9}";
+const RUN = "[1-9][0-9]{0,15}";
+/** A label name in a path, percent-encoded: no slashes. */
+const LABEL = "[^/]{1,300}";
 
 /** Requests the token may make. Anything else is refused before it leaves the process. */
-export const ROUTES: { method: "GET" | "POST"; path: RegExp }[] = [
+export const ROUTES: { method: Method; path: RegExp }[] = [
   { method: "GET", path: /^\/user$/ },
   { method: "GET", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}$`) },
   { method: "GET", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}/comments$`) },
@@ -20,11 +24,30 @@ export const ROUTES: { method: "GET" | "POST"; path: RegExp }[] = [
   { method: "GET", path: new RegExp(`^/repos/${NAME}/${NAME}/pulls/${NUM}/reviews$`) },
   { method: "GET", path: new RegExp(`^/repos/${NAME}/${NAME}/labels$`) },
   { method: "GET", path: /^\/search\/issues$/ },
+  { method: "GET", path: new RegExp(`^/repos/${NAME}/${NAME}/actions/runs$`) },
+  { method: "GET", path: new RegExp(`^/repos/${NAME}/${NAME}/actions/runs/${RUN}$`) },
   // The writes, in the user's allowed organizations: a comment, a new issue (D-42), and GraphQL,
   // which `guard` limits to the documents in GRAPHQL.
   { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}/comments$`) },
   { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/issues$`) },
   { method: "POST", path: /^\/graphql$/ },
+  // D-46: close or reopen an issue (`guard` allows only state fields in the body), add or remove
+  // labels and assignees, review a pull request, re-run a workflow run's failed jobs.
+  { method: "PATCH", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}$`) },
+  { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}/labels$`) },
+  { method: "DELETE", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}/labels/${LABEL}$`) },
+  { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}/assignees$`) },
+  { method: "DELETE", path: new RegExp(`^/repos/${NAME}/${NAME}/issues/${NUM}/assignees$`) },
+  { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/pulls/${NUM}/reviews$`) },
+  { method: "POST", path: new RegExp(`^/repos/${NAME}/${NAME}/actions/runs/${RUN}/rerun-failed-jobs$`) },
+];
+
+type Method = "GET" | "POST" | "PATCH" | "DELETE";
+
+/** Body fields each write may carry: an issue edit can only change its state, a review only its verdict and text. */
+const BODY_FIELDS: { path: RegExp; method: Method; fields: string[] }[] = [
+  { method: "PATCH", path: /\/issues\/[0-9]+$/, fields: ["state", "state_reason"] },
+  { method: "POST", path: /\/pulls\/[0-9]+\/reviews$/, fields: ["event", "body", "commit_id"] },
 ];
 
 /** The only GraphQL the token may send (D-42): read an organization project, add an issue to it, set its status. */
@@ -41,6 +64,9 @@ export class GitHubAuthError extends Error {}
 export function guard(method: string, path: string, body?: unknown): void {
   if (!ROUTES.some((r) => r.method === method && r.path.test(path))) throw new GitHubRefused(`refused a GitHub request that isn't allowed: ${method} ${path}`);
   if (path === "/graphql" && !GRAPHQL_DOCS.has(String((body as { query?: unknown } | undefined)?.query))) throw new GitHubRefused("refused a GraphQL request that isn't one of the fixed documents");
+  const limit = BODY_FIELDS.find((b) => b.method === method && b.path.test(path));
+  if (limit && Object.keys((body as object | undefined) ?? {}).some((k) => !limit.fields.includes(k))) throw new GitHubRefused(`refused a GitHub request with fields that aren't allowed: ${method} ${path}`);
+  if (method === "POST" && /\/reviews$/.test(path) && !["APPROVE", "REQUEST_CHANGES", "COMMENT"].includes(String((body as { event?: unknown } | undefined)?.event))) throw new GitHubRefused("refused a review without a verdict");
 }
 
 export interface Ref {
@@ -103,7 +129,7 @@ export class GitHub {
     }
   }
 
-  async request<T>(method: "GET" | "POST", path: string, opts: { query?: Record<string, string | number>; body?: unknown } = {}): Promise<T> {
+  async request<T>(method: Method, path: string, opts: { query?: Record<string, string | number>; body?: unknown } = {}): Promise<T> {
     guard(method, path, opts.body);
     const url = new URL(path, API);
     // ".." passes the name pattern but URL resolution would move the path.
@@ -128,7 +154,9 @@ export class GitHub {
       // GitHub answers 404 for private repositories the token can't see.
       throw new Error(`GitHub ${res.status} for ${method} ${url.pathname}${res.status === 404 ? " (not found, or the user has no access)" : ""}: ${detail.slice(0, 200)}`);
     }
-    return (await res.json()) as T;
+    // DELETE …/labels answers with the remaining labels; some writes answer 201/204 with nothing.
+    const text = await res.text();
+    return (text ? JSON.parse(text) : {}) as T;
   }
 
   async whoami(): Promise<{ login: string }> {
@@ -214,6 +242,96 @@ export class GitHub {
     return { url: c.html_url, id: c.id };
   }
 
+  private writable(ref: Ref, what: string): void {
+    if (!this.canComment(ref)) throw new GitHubRefused(`${what} is limited to ${[...this.commentOrgs].join(", ") || "no organizations"}; ${ref.owner}/${ref.repo} is read-only`);
+  }
+
+  /** The repository's labels with their exact names, for matching what the user wrote. */
+  private async labels(owner: string, name: string): Promise<string[]> {
+    const existing: string[] = [];
+    for (let page = 1; page <= 10; page++) {
+      const batch = await this.request<{ name: string }[]>("GET", `/repos/${owner}/${name}/labels`, { query: { per_page: 100, page } });
+      existing.push(...batch.map((l) => l.name));
+      if (batch.length < 100) break;
+    }
+    return existing;
+  }
+
+  /**
+   * Changes an issue (D-46): close or reopen it, add or remove labels and assignees. Pull requests
+   * take labels and assignees, but closing one isn't done here. Labels must already exist. Checks
+   * everything before the first write, and reports each change it made.
+   */
+  async updateIssue(ref: Ref, input: { state?: "open" | "closed"; reason?: "completed" | "not_planned"; addLabels?: string[]; removeLabels?: string[]; addAssignees?: string[]; removeAssignees?: string[] }): Promise<unknown> {
+    this.writable(ref, "changing issues");
+    const base = `/repos/${ref.owner}/${ref.repo}/issues/${ref.number}`;
+    const issue = await this.request<GhIssue>("GET", base);
+    if (input.state && issue.pull_request) throw new GitHubRefused("pull requests aren't closed or reopened from here");
+    const current = issue.labels.map((l) => (typeof l === "string" ? l : l.name));
+    let add: string[] = [];
+    if (input.addLabels?.length) {
+      const existing = await this.labels(ref.owner, ref.repo);
+      const missing = input.addLabels.filter((l) => !existing.some((e) => e.toLowerCase() === l.trim().toLowerCase()));
+      if (missing.length) throw new GitHubRefused(`${ref.owner}/${ref.repo} has no label ${missing.map((m) => `"${m}"`).join(", ")}; its labels: ${existing.slice(0, 40).join(", ") || "(none)"}`);
+      add = input.addLabels.map((l) => existing.find((e) => e.toLowerCase() === l.trim().toLowerCase())!);
+    }
+    const remove = (input.removeLabels ?? []).map((l) => current.find((c) => c.toLowerCase() === l.trim().toLowerCase())).filter((l): l is string => Boolean(l));
+    const done: string[] = [];
+    if (add.length) await this.request("POST", `${base}/labels`, { body: { labels: add } }), done.push(`added labels ${add.join(", ")}`);
+    for (const l of remove) await this.request("DELETE", `${base}/labels/${encodeURIComponent(l)}`), done.push(`removed label ${l}`);
+    if (input.addAssignees?.length) await this.request("POST", `${base}/assignees`, { body: { assignees: input.addAssignees } }), done.push(`assigned ${input.addAssignees.join(", ")}`);
+    if (input.removeAssignees?.length) await this.request("DELETE", `${base}/assignees`, { body: { assignees: input.removeAssignees } }), done.push(`unassigned ${input.removeAssignees.join(", ")}`);
+    if (input.state && input.state !== issue.state) {
+      await this.request("PATCH", base, { body: { state: input.state, ...(input.state === "closed" ? { state_reason: input.reason ?? "completed" } : {}) } });
+      done.push(input.state === "closed" ? `closed as ${(input.reason ?? "completed").replace("_", " ")}` : "reopened");
+    }
+    const after = await this.request<GhIssue>("GET", base);
+    return { url: after.html_url, state: after.state, labels: after.labels.map((l) => (typeof l === "string" ? l : l.name)), assignees: after.assignees?.map((a) => a.login), done: done.length ? done : ["nothing to change"] };
+  }
+
+  /** Submits a review on a pull request as the user (D-46): approve, request changes, or comment. */
+  async review(ref: Ref, event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT", body: string): Promise<{ url: string; id: number; state: string }> {
+    this.writable(ref, "reviewing");
+    const base = `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`;
+    const pr = await this.request<GhPull & { state: string; user?: GhUser; head: { sha: string } }>("GET", base);
+    if (pr.state !== "open") throw new GitHubRefused(`${ref.owner}/${ref.repo}#${ref.number} isn't open`);
+    if (event !== "APPROVE" && !body.trim()) throw new GitHubRefused("a review that requests changes or comments needs text");
+    // Reviewed at the head we looked at: if someone pushes meanwhile, GitHub refuses rather than approving unseen commits.
+    const r = await this.request<{ id: number; html_url: string; state: string }>("POST", `${base}/reviews`, { body: { event, commit_id: pr.head.sha, ...(body.trim() ? { body } : {}) } });
+    return { url: r.html_url, id: r.id, state: r.state };
+  }
+
+  /**
+   * Re-runs the failed jobs of a pull request's latest workflow runs, or of one workflow run (D-46).
+   * Only runs that finished as failed (or were cancelled or timed out) are touched.
+   */
+  async rerunFailed(input: { pr?: Ref; run?: { owner: string; repo: string; id: number } }): Promise<unknown> {
+    type Run = { id: number; name: string; html_url: string; status: string; conclusion: string | null; head_sha: string; workflow_id: number; created_at: string };
+    const failed = (r: Run) => r.status === "completed" && ["failure", "cancelled", "timed_out", "startup_failure"].includes(r.conclusion ?? "");
+    let owner: string, repo: string, runs: Run[];
+    if (input.run) {
+      ({ owner, repo } = input.run);
+      this.writable({ owner, repo, number: 1 }, "re-running CI");
+      runs = [await this.request<Run>("GET", `/repos/${owner}/${repo}/actions/runs/${input.run.id}`)];
+    } else if (input.pr) {
+      ({ owner, repo } = input.pr);
+      this.writable(input.pr, "re-running CI");
+      const pr = await this.request<GhPull & { head: { sha: string } }>("GET", `/repos/${owner}/${repo}/pulls/${input.pr.number}`);
+      const all = (await this.request<{ workflow_runs: Run[] }>("GET", `/repos/${owner}/${repo}/actions/runs`, { query: { head_sha: pr.head.sha, per_page: 100 } })).workflow_runs;
+      // The latest run of each workflow: an older failure that already passed on a re-run doesn't count.
+      const latest = new Map<number, Run>();
+      for (const r of all) if (!latest.has(r.workflow_id) || latest.get(r.workflow_id)!.created_at < r.created_at) latest.set(r.workflow_id, r);
+      runs = [...latest.values()];
+    } else throw new Error("give a pull request or a workflow run URL");
+    const targets = runs.filter(failed);
+    const rerun: { name: string; url: string }[] = [];
+    for (const r of targets) {
+      await this.request("POST", `/repos/${owner}/${repo}/actions/runs/${r.id}/rerun-failed-jobs`);
+      rerun.push({ name: r.name, url: r.html_url });
+    }
+    return { repo: `${owner}/${repo}`, rerun, not_failed: runs.filter((r) => !failed(r)).map((r) => ({ name: r.name, status: r.status, conclusion: r.conclusion })) };
+  }
+
   private async graphql<T>(doc: keyof typeof GRAPHQL, variables: Record<string, unknown>): Promise<T> {
     const res = await this.request<{ data?: T; errors?: { message: string }[] }>("POST", "/graphql", { body: { query: GRAPHQL[doc], variables } });
     if (res.errors?.length || !res.data) throw new Error(`GitHub GraphQL: ${res.errors?.map((e) => e.message).join("; ").slice(0, 300) ?? "no data"}`);
@@ -261,12 +379,7 @@ export class GitHub {
     // GitHub would create a missing label; only use the repository's own, with their exact names.
     let labels: string[] = [];
     if (input.labels?.length) {
-      const existing: string[] = [];
-      for (let page = 1; page <= 10; page++) {
-        const batch = await this.request<{ name: string }[]>("GET", `/repos/${owner}/${name}/labels`, { query: { per_page: 100, page } });
-        existing.push(...batch.map((l) => l.name));
-        if (batch.length < 100) break;
-      }
+      const existing = await this.labels(owner, name);
       const missing: string[] = [];
       labels = input.labels.flatMap((l) => {
         const hit = existing.find((e) => e.toLowerCase() === l.trim().toLowerCase());

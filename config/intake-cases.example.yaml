@@ -7,7 +7,7 @@
 # Fields: id, why (optional), title, description (task text), own_description (true when you wrote
 # the task: the description is part of the request), comment (your newest comment),
 # context {known_repo, previous_mode, busy, has_work}, expect {action, mode, repo, references,
-# engine, model, primer}. An expected value can be a list of acceptable values, or null for "unset".
+# engine, model, primer, gapMinutes}. An expected value can be a list of acceptable values, or null for "unset".
 
 - id: target and reference repo
   title: New balance gateway
@@ -144,3 +144,28 @@
   comment: Find out from the code and answer here.
   context: { known_repo: 0xPolygon/example-gateway }
   expect: { action: run, mode: [answer, investigate], engine: null }
+
+- id: merge approved PRs from the task
+  why: merging existing PRs is the merge queue (D-46), not an agent run
+  title: Merge the config PRs
+  description: |-
+    Work through the following approved PRs. Merge them one by one, giving at least 15 mins of time in between.
+    Monitor CI status after every merge to make sure everything is clean on master. If you get stuck, notify me.
+
+    Service A: https://github.com/0xPolygon/example-infra/pull/101
+    Service B: https://github.com/0xPolygon/example-infra/pull/102
+  own_description: true
+  comment: ""
+  expect: { action: merge, gapMinutes: 15 }
+
+- id: carry on with the merges
+  title: Merge the config PRs
+  comment: Fixed the flaky check, carry on
+  context: { known_repo: 0xPolygon/example-infra }
+  expect: { action: merge }
+
+- id: review before merging is a run
+  title: Merge the config PRs
+  comment: Can you check whether https://github.com/0xPolygon/example-infra/pull/103 is safe to merge?
+  context: { known_repo: 0xPolygon/example-infra }
+  expect: { action: run, mode: [answer, investigate] }

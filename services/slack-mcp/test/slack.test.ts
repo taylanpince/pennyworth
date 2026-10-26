@@ -2,17 +2,28 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { allowedTools, DEFAULT_ALLOWLIST, isAllowed } from "../src/policy.js";
+import { allowedTools, DEFAULT_ALLOWLIST, DRAFT_TOOL, isAllowed, upstreamArgs } from "../src/policy.js";
 import { parseTokenResponse, READ_SCOPES, TokenStore, writeScopes } from "../src/tokens.js";
 
 const tool = (name: string) => ({ name, inputSchema: { type: "object" as const }, annotations: { readOnlyHint: false } });
 
 describe("slack-mcp policy", () => {
-  it("exposes only allowlisted read tools, annotated read-only", () => {
+  it("exposes only allowlisted read tools, annotated read-only, and the draft tool as a write", () => {
     const upstream = ["slack_search_public_and_private", "slack_read_thread", "slack_send_message", "slack_send_message_draft", "slack_add_reaction", "slack_create_canvas"].map(tool);
     const out = allowedTools(upstream, new Set(DEFAULT_ALLOWLIST));
-    expect(out.map((t) => t.name)).toEqual(["slack_search_public_and_private", "slack_read_thread"]);
-    expect(out.every((t) => t.annotations?.readOnlyHint === true && t.annotations?.openWorldHint === false)).toBe(true);
+    expect(out.map((t) => t.name)).toEqual(["slack_search_public_and_private", "slack_read_thread", "slack_send_message_draft"]);
+    expect(out.filter((t) => t.name !== DRAFT_TOOL).every((t) => t.annotations?.readOnlyHint === true && t.annotations?.openWorldHint === false)).toBe(true);
+    expect(out.find((t) => t.name === DRAFT_TOOL)?.annotations).toMatchObject({ readOnlyHint: false, openWorldHint: false });
+  });
+
+  it("allows drafts by exact name only, with only their documented arguments", () => {
+    const allow = new Set([...DEFAULT_ALLOWLIST, "slack_send_message_draft_and_send", "Slack_Send_Message_Draft"]);
+    expect(isAllowed(DRAFT_TOOL, allow)).toBe(true);
+    expect(isAllowed("slack_send_message_draft_and_send", allow)).toBe(false);
+    expect(isAllowed("Slack_Send_Message_Draft", allow)).toBe(false);
+    expect(isAllowed(DRAFT_TOOL, new Set())).toBe(false);
+    expect(upstreamArgs(DRAFT_TOOL, { channel_id: "C1", message: "hi", thread_ts: "1.2" })).toEqual({ channel_id: "C1", message: "hi", thread_ts: "1.2" });
+    expect(() => upstreamArgs(DRAFT_TOOL, { channel_id: "C1", message: "hi", send: true })).toThrow(/send/);
   });
 
   it("never allows mutating tools even if allowlisted", () => {

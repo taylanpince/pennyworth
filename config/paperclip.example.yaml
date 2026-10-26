@@ -116,6 +116,8 @@ agents:
     timeout_sec: 1200
     mcp_servers: [slack, paperclip_tasks]
     enabled_tools:
+      # Reads only: drafts stay with the Assistant (D-46).
+      slack: [slack_search_public, slack_search_public_and_private, slack_search_channels, slack_search_users, slack_read_channel, slack_read_thread, slack_read_user_profile, slack_list_user_channels]
       paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status]
 
   telegram-scout:
@@ -164,7 +166,10 @@ agents:
       # knowledge_*: reference docs mounted from KNOWLEDGE_BASES (D-38).
       ops_mcp: [obsidian_search, obsidian_read, obsidian_read_document_map, meeting_note_correct, knowledge_list, knowledge_index, knowledge_search, knowledge_read]
       glean: [search, read_document, employee_search, meeting_lookup, code_search, chat]
-      github: [github_whoami, github_issue_read, github_search_issues, github_issue_comment, github_issue_create]
+      # Reads, plus slack_send_message_draft: a draft for the user to send, only when asked (D-46).
+      slack: [slack_search_public, slack_search_public_and_private, slack_search_channels, slack_search_users, slack_read_channel, slack_read_thread, slack_read_user_profile, slack_list_user_channels, slack_send_message_draft]
+      # Writes only when the user asks, in GITHUB_COMMENT_ORGS (D-39, D-42, D-46).
+      github: [github_whoami, github_issue_read, github_search_issues, github_issue_comment, github_issue_create, github_issue_update, github_pr_review, github_rerun_failed]
       google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
       # task_create_engineer_task: Engineer sub-tasks that wait for the user's go-ahead (D-24).
       # task_schedule, task_recurring: board moves on a date and recurring tasks (D-25).

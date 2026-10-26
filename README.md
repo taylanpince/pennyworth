@@ -29,7 +29,7 @@ host (Linux, systemd user services)
     ├── paperclip              127.0.0.1:3100 only; Codex agents (read-only sandbox, no shell)
     ├── ops-mcp                no Internet route; SQLite state; the only Obsidian writer; reference docs (read-only)
     ├── google-workspace-mcp   Calendar, Drive, Docs, Gmail: read-only scopes, GET requests only
-    ├── slack-mcp              read-only proxy to Slack's official MCP server
+    ├── slack-mcp              proxy to Slack's official MCP server: reads, plus drafts you send yourself
     ├── telegram-mcp           your own Telegram session, reads only; new messages arrive live
     ├── primer-mcp             proxy to your organization's Primer: read documents, publish when you ask
     ├── glean-mcp              proxy to your organization's Glean: company-wide search, reads only
@@ -228,7 +228,7 @@ The Assistant can search your organization's **Glean** (Slack, Drive, Confluence
 
 ### GitHub issues and pull requests
 
-The Assistant reads GitHub issues and pull requests, including private ones you can see, with their comments and reviews. Ask it to **post** and it comments on the issue as you: "post it" after a draft, or "post an update on the ticket". Ask it to **open a ticket** and it files a new issue as you, with labels, optionally on an organization project board in a column: "open this on the waas board (link), label `waas`, in Triage". Comments and issues go only to repositories and projects in `GITHUB_COMMENT_ORGS` (`.env`), and it can't close, relabel, edit or merge anything ([D-39, D-42](docs/DECISIONS.md)).
+The Assistant reads GitHub issues and pull requests, including private ones you can see, with their comments and reviews. Ask it to **post** and it comments on the issue as you: "post it" after a draft, or "post an update on the ticket". Ask it to **open a ticket** and it files a new issue as you, with labels, optionally on an organization project board in a column: "open this on the waas board (link), label `waas`, in Triage". It also **closes, labels and assigns** issues, **reviews** a PR with the verdict you give ("approve it"), and **re-runs failed CI** when you ask. All of it goes only to repositories and projects in `GITHUB_COMMENT_ORGS` (`.env`); it can't edit issue text or merge ([D-39, D-42, D-46](docs/DECISIONS.md)). Ask it to merge PRs and it hands that to an Engineer task (below).
 
 - **Setup:** `scripts/bootstrap.sh`, then `scripts/github-auth.sh` (copies `gh auth token` into the secrets directory), then `docker compose up -d github-mcp`. Re-run `scripts/github-auth.sh` after `gh auth login`.
 
@@ -252,6 +252,8 @@ Publishing takes the exact word, as a comment on its own:
 
 Repositories outside your orgs are read-only (D-35): their branches are listed but never published.
 
+**Merging PRs:** give an Engineer task a list of approved PRs ("merge these one by one, at least 15 minutes apart, watch CI on master") and the runner merges them itself, in code, no agent involved ([D-46](docs/DECISIONS.md)). Before each merge, the PR must be approved with green checks, mergeable, and its base branch green. An approved draft is marked ready first. After each merge it waits for the base branch's CI and the gap, and comments as it goes. Anything red, unapproved, conflicting or stuck for 90 minutes stops the queue with a comment; "carry on" resumes, "stop" stops. Settings: `merges.gap_minutes` and `merges.timeout_minutes` in `config/runner.yaml`.
+
 Agents can't push or write to GitHub themselves: `gh` is wrapped read-only, pushes are disabled in the runner's clones, and a pre-push hook and an ssh wrapper both refuse them. Only *your* comments are instructions.
 
 Engine credentials live in `~/.config/pennyworth/` (0600): `openrouter_key` for OpenRouter, and `claude_oauth_token` from `claude setup-token` for Claude Code. Claude Code runs in a runner-owned home with no settings, plugins or connectors, no MCP servers but read-only Primer, a fixed tool allowlist, and `codex sandbox` around the whole process.
@@ -265,7 +267,7 @@ scripts/slack-auth.sh              # once: open the printed URL and approve
 node scripts/paperclip-setup.mjs   # activates the Slack scan routine
 ```
 
-The `slack-mcp` sidecar holds your user token, refreshes it (Slack rotates refresh tokens), and exposes **only** read tools. Send, draft, schedule, react, canvas and list tools are never listed, and are refused if called. Consent asks only for read and search scopes.
+The `slack-mcp` sidecar holds your user token, refreshes it (Slack rotates refresh tokens), and exposes read tools plus one write: saving a **draft** in your Drafts & Sent, in a channel, DM or thread, for you to edit and send from Slack ([D-46](docs/DECISIONS.md)). Only the Assistant can draft, and only when you ask ("draft a reply in that thread"). Send, schedule, react, canvas and list tools are never listed, and are refused if called. Consent asks only for read and search scopes, but Slack may grant the app's other scopes too, so the proxy's allowlist is what stops sending.
 
 The Slack Scout creates two kinds of tasks, each with a permalink and a `source:slack:<channel>:<ts>` marker so nothing is duplicated:
 
