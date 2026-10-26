@@ -2,7 +2,7 @@ import pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { RecurringSchema, ScheduleSchema, changeRecurring, claimDue, scheduleMove } from "../src/automation.js";
 import type { Issue, Label, Paperclip } from "../src/paperclip.js";
-import { describeRule, isOccurrence, makeRule, nextOccurrence, previousOccurrence, upcoming, zonedInstant, type Cadence, type Rule } from "../src/recurrence.js";
+import { addDays, describeRule, isOccurrence, makeRule, nextOccurrence, previousOccurrence, upcoming, zonedInstant, type Cadence, type Rule } from "../src/recurrence.js";
 import { Store, localDate } from "../src/store.js";
 
 const TZ = "Europe/Madrid";
@@ -120,6 +120,21 @@ describe("scheduled moves", () => {
     expect(s.placements().get(issue().id)?.bucket).toBe("today");
     expect(() => scheduleMove(s, issue({ status: "done" }), parse({ date: today }), TZ)).toThrow(/closed/);
     expect(() => ScheduleSchema.parse({ date: "next tuesday" })).toThrow();
+  });
+
+  it("parks the task in a column until its date (Snooze)", () => {
+    const s = new Store(":memory:");
+    const later = addDays(localDate(TZ), 3);
+    s.move(issue().id, "today");
+    expect(scheduleMove(s, issue(), ScheduleSchema.parse({ date: later, park: "backlog" }), TZ)).toEqual({
+      scheduled: { date: later, bucket: "today", position: "top" },
+      movedNow: false,
+    });
+    expect(s.placements().get(issue().id)?.bucket).toBe("backlog");
+    expect(s.schedules().get(issue().id)?.date).toBe(later);
+    expect(s.applySchedules(later)).toEqual([issue().id]);
+    expect(s.placements().get(issue().id)?.bucket).toBe("today");
+    expect(() => ScheduleSchema.parse({ date: later, park: "nowhere" })).toThrow();
   });
 });
 

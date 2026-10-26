@@ -29,6 +29,8 @@ export const ScheduleSchema = z.union([
       date: z.string().regex(DATE, "date must be YYYY-MM-DD"),
       bucket: z.enum(BUCKETS).default("today"),
       position: z.enum(["top", "bottom"]).default("top"),
+      // Where the task waits until then (Snooze parks it in Backlog); left where it is when absent.
+      park: z.enum(BUCKETS).optional(),
     })
     .strict(),
   z.object({ clear: z.literal(true) }).strict(),
@@ -40,7 +42,7 @@ export interface ScheduleView {
   position: "top" | "bottom";
 }
 
-/** Schedule (or clear) a move. A date of today moves the task right away. */
+/** Schedule (or clear) a move, parking the task in a column until then if asked. A date of today moves the task right away. */
 export function scheduleMove(store: Store, issue: Issue, input: z.infer<typeof ScheduleSchema>, tz: string): { scheduled: ScheduleView | null; movedNow: boolean } {
   if ("clear" in input) {
     store.unschedule(issue.id);
@@ -55,6 +57,8 @@ export function scheduleMove(store: Store, issue: Issue, input: z.infer<typeof S
     store.move(issue.id, input.bucket, input.position);
     return { scheduled: null, movedNow: true };
   }
+  // Parking is a move by hand, which drops any earlier schedule, so it goes first.
+  if (input.park) store.move(issue.id, input.park);
   store.schedule(issue.id, input.date, input.bucket, input.position);
   return { scheduled: { date: input.date, bucket: input.bucket, position: input.position }, movedNow: false };
 }

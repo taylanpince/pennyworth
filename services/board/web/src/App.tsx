@@ -214,6 +214,26 @@ export function App() {
     }
   }
 
+  /** Snooze: into Backlog now, back on top of Today on `date` (D-25). Undo puts it back where it was. */
+  async function snoozeCard(id: string, date: string) {
+    const cur = itemsRef.current;
+    const from = bucketOf(id);
+    if (cur && from) {
+      const card = { ...cur[from].find((c) => c.id === id)!, scheduled: { date, bucket: "today" as Bucket }, carried: undefined };
+      hold();
+      setItems(from === "backlog" ? { ...cur, backlog: cur.backlog.map((c) => (c.id === id ? card : c)) } : { ...cur, [from]: cur[from].filter((c) => c.id !== id), backlog: [card, ...cur.backlog] });
+    }
+    try {
+      await api.schedule(id, { date, bucket: "today", park: "backlog" });
+      const day = new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+      toast(`Snoozed until ${day}`, from ? { label: "Undo", run: () => void api.move(id, from).then(() => refresh(true)) } : undefined);
+      void refresh(true);
+    } catch (e) {
+      toast(`Couldn't snooze: ${(e as Error).message}`);
+      void refresh(true);
+    }
+  }
+
   async function reorder(id: string, delta: number) {
     const cur = itemsRef.current;
     const b = bucketOf(id);
@@ -536,6 +556,7 @@ export function App() {
               onOpen={openCard}
               onDone={markDone}
               onMove={(c, to) => void moveCard(c.id, to)}
+              onSnooze={(c, date) => void snoozeCard(c.id, date)}
               onAdd={(title) => addTask(title, b)}
               onCarried={b === "today" ? (action) => void carriedAction(action) : undefined}
               addRef={b === "triage" ? addRef : undefined}
@@ -585,6 +606,7 @@ export function App() {
           onClose={() => go("#/")}
           onChanged={() => void refresh(true)}
           onMove={(id, b) => moveCard(id, b)}
+          onSnooze={(id, date) => snoozeCard(id, date)}
           toast={toast}
         />
       )}
@@ -654,13 +676,14 @@ interface ColumnProps {
   onOpen: (c: Card) => void;
   onDone: (c: Card) => void;
   onMove: (c: Card, b: Bucket) => void;
+  onSnooze: (c: Card, date: string) => void;
   onAdd: (title: string) => Promise<void>;
   onCarried?: (action: "keep" | "tomorrow" | "later") => void;
   addRef?: React.RefObject<HTMLInputElement | null>;
   timezone: string;
 }
 
-function Column({ bucket, cards, total, board, selected, dragDisabled, onOpen, onDone, onMove, onAdd, onCarried, addRef, timezone }: ColumnProps) {
+function Column({ bucket, cards, total, board, selected, dragDisabled, onOpen, onDone, onMove, onSnooze, onAdd, onCarried, addRef, timezone }: ColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: bucket });
   const [adding, setAdding] = useState(bucket === "triage");
   const [title, setTitle] = useState("");
@@ -733,7 +756,7 @@ function Column({ bucket, cards, total, board, selected, dragDisabled, onOpen, o
         )}
         <SortableContext id={bucket} items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           {cards.map((c) => (
-            <SortableCard key={c.id} card={c} assignees={board.assignees} selected={c.id === selected} disabled={dragDisabled} onOpen={onOpen} onDone={onDone} onMove={onMove} current={bucket} />
+            <SortableCard key={c.id} card={c} assignees={board.assignees} selected={c.id === selected} disabled={dragDisabled} onOpen={onOpen} onDone={onDone} onMove={onMove} onSnooze={onSnooze} timezone={timezone} current={bucket} />
           ))}
         </SortableContext>
         {!cards.length && <p className="empty">{total ? "No matches." : bucket === "triage" ? "All sorted." : "Nothing here."}</p>}

@@ -3,7 +3,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api } from "./api";
 import { BUCKETS, BUCKET_NAMES, type Assignee, type Board, type Bucket, type Card, type CrewMember, type CrewState, type Working } from "./types";
-import { SOURCE_NAMES, STATUS_BADGE, agentShort, ago, elapsed, shortDate, shortName } from "./util";
+import { SOURCE_NAMES, STATUS_BADGE, addDays, agentShort, ago, elapsed, shortDate, shortName, snoozeOptions, todayIn } from "./util";
 
 /** A crew member's portrait (D-45), or a coloured letter for you and agents without one. */
 export function Avatar({ assignee, size }: { assignee: Assignee | undefined; size?: number }) {
@@ -110,10 +110,13 @@ interface CardProps {
   onOpen: (card: Card) => void;
   onDone?: (card: Card) => void;
   onMove?: (card: Card, bucket: Bucket) => void;
+  /** Snooze into Backlog until a date; needs the board's timezone for the presets. */
+  onSnooze?: (card: Card, date: string) => void;
+  timezone?: string;
   current?: Bucket;
 }
 
-export function CardView({ card, assignees, selected, overlay, closed, onOpen, onDone, onMove, current }: CardProps) {
+export function CardView({ card, assignees, selected, overlay, closed, onOpen, onDone, onMove, onSnooze, timezone, current }: CardProps) {
   const assignee = assignees.find((a) => a.key === card.assignee);
   const executor = card.executor && [card.executor.model, card.executor.effort].filter(Boolean).join(" · ");
   return (
@@ -152,6 +155,7 @@ export function CardView({ card, assignees, selected, overlay, closed, onOpen, o
       {card.unread && <span className="dot" title="New activity" />}
       {!overlay && !closed && (onDone || onMove) && (
         <div className="card-actions" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+          {onSnooze && timezone && !card.recurring && <SnoozeMenu timezone={timezone} onPick={(d) => onSnooze(card, d)} />}
           {onMove && <MoveMenu current={current} onPick={(b) => onMove(card, b)} />}
           {onDone && (
             <button className="icon-btn" title="Done (e)" aria-label="Mark done" onClick={() => onDone(card)}>
@@ -216,6 +220,62 @@ export function MoveMenu({ current, onPick, label }: { current?: Bucket; onPick:
   );
 }
 
+/** Snooze: park the task in Backlog and bring it back on top of Today on a date (D-25). */
+export function SnoozeMenu({ timezone, onPick, label }: { timezone: string; onPick: (date: string) => void; label?: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [date, setDate] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
+  const today = todayIn(timezone);
+  const pick = (d: string) => {
+    setOpen(false);
+    onPick(d);
+  };
+  return (
+    <div className="menu-wrap" ref={ref}>
+      <button
+        className={label ? "btn" : "icon-btn"}
+        title="Snooze: back on top of Today on…"
+        aria-label="Snooze"
+        onClick={() => (setOpen(!open), setPicking(false), setDate(""))}
+      >
+        {label ?? <ClockIcon />}
+      </button>
+      {open && (
+        <div className="menu" role="menu">
+          <div className="menu-head">Back on top of Today</div>
+          {snoozeOptions(today).map((o) => (
+            <button key={o.label} role="menuitem" onClick={() => pick(o.date)}>
+              <span>{o.label}</span>
+              <span className="menu-hint">{dayDate(o.date)}</span>
+            </button>
+          ))}
+          {picking ? (
+            <form className="menu-date" onSubmit={(e) => (e.preventDefault(), date && pick(date))}>
+              <input type="date" autoFocus min={addDays(today, 1)} value={date} onChange={(e) => setDate(e.target.value)} aria-label="Date" />
+              <button type="submit" className="btn" disabled={!date}>
+                Snooze
+              </button>
+            </form>
+          ) : (
+            <button role="menuitem" onClick={() => setPicking(true)}>
+              <span>Pick a date…</span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const dayDate = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+
 export const CheckIcon = () => (
   <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
     <path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
@@ -224,6 +284,12 @@ export const CheckIcon = () => (
 export const MoveIcon = () => (
   <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
     <path d="M3 8h9M9 4.5L12.5 8 9 11.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+export const ClockIcon = () => (
+  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+    <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.5" />
+    <path d="M8 5v3.2l2.2 1.4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
 export const CloseIcon = () => (

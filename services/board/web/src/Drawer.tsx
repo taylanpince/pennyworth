@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { Avatar, Chips, CloseIcon, CrewAvatar, MoveMenu, memberIssue } from "./components";
+import { Avatar, Chips, CloseIcon, CrewAvatar, MoveMenu, SnoozeMenu, memberIssue } from "./components";
 import { Markdown } from "./markdown";
 import { BUCKETS, BUCKET_NAMES, WEEKDAYS, type Assignee, type Board, type Bucket, type Cadence, type CommentView, type CrewState, type IssueView, type Label, type Models, type Update, type Weekday } from "./types";
-import { PRIORITIES, PRIORITY_NAMES, ago, elapsed, runTime, shortName, when } from "./util";
+import { PRIORITIES, PRIORITY_NAMES, ago, elapsed, runTime, shortName, todayIn, when } from "./util";
 
 interface Props {
   refId: string;
@@ -13,10 +13,12 @@ interface Props {
   onClose: () => void;
   onChanged: () => void;
   onMove: (id: string, bucket: Bucket) => Promise<void>;
+  /** Into Backlog now, back on top of Today on the date. */
+  onSnooze: (id: string, date: string) => Promise<void>;
   toast: (text: string, action?: { label: string; run: () => void }) => void;
 }
 
-export function Drawer({ refId, focus, board, onClose, onChanged, onMove, toast }: Props) {
+export function Drawer({ refId, focus, board, onClose, onChanged, onMove, onSnooze, toast }: Props) {
   const [issue, setIssue] = useState<IssueView | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -82,7 +84,7 @@ export function Drawer({ refId, focus, board, onClose, onChanged, onMove, toast 
         {!issue ? (
           <div className="drawer-loading">{error ? `Couldn't load ${refId}: ${error}` : "Loading…"}</div>
         ) : (
-          <IssueBody issue={issue} focus={focus} board={board} busy={busy} update={update} setStatus={setStatus} onClose={onClose} onMove={onMove} reload={load} onChanged={onChanged} toast={toast} setIssue={setIssue} />
+          <IssueBody issue={issue} focus={focus} board={board} busy={busy} update={update} setStatus={setStatus} onClose={onClose} onMove={onMove} onSnooze={onSnooze} reload={load} onChanged={onChanged} toast={toast} setIssue={setIssue} />
         )}
       </aside>
     </div>
@@ -98,6 +100,7 @@ interface BodyProps {
   setStatus: (s: "todo" | "in_progress" | "done" | "cancelled") => Promise<void>;
   onClose: () => void;
   onMove: (id: string, bucket: Bucket) => Promise<void>;
+  onSnooze: Props["onSnooze"];
   reload: () => Promise<void>;
   onChanged: () => void;
   toast: Props["toast"];
@@ -110,7 +113,7 @@ type Member = IssueView["crew"][number];
  * The task (D-45): an Overview (description, files, the crew, and the team chat that goes to the
  * Assistant) and a tab per agent with a direct chat. Settings live behind Details.
  */
-function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMove, reload, onChanged, toast, setIssue }: BodyProps) {
+function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMove, onSnooze, reload, onChanged, toast, setIssue }: BodyProps) {
   const closed = issue.status === "done" || issue.status === "cancelled";
   const editable = issue.editable;
   const mine = issue.assignee === "me";
@@ -139,6 +142,16 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
         </button>
         <span className="ident">{issue.identifier}</span>
         <span className="spacer" />
+        {editable && !closed && !issue.recurring && !issue.parent && (
+          <SnoozeMenu
+            timezone={board.timezone}
+            label="Snooze"
+            onPick={(date) => {
+              setBucket("backlog");
+              void onSnooze(issue.id, date).then(reload);
+            }}
+          />
+        )}
         {editable && !closed && !issue.recurring && !issue.parent && (
           <MoveMenu
             current={bucket ?? undefined}
@@ -958,7 +971,6 @@ export { Avatar };
 
 // ---------------------------------------------------------------- scheduled moves and recurring tasks (D-25)
 
-const todayIn = (tz: string) => new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 const longDate = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 const cap = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
 

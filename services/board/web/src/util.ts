@@ -71,3 +71,28 @@ export function shortDate(d: string): string {
 export function runTime(iso: string, timeZone: string): string {
   return new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone });
 }
+
+/** The date `n` days after a YYYY-MM-DD date. */
+export function addDays(d: string, n: number): string {
+  const t = new Date(`${d}T00:00:00Z`);
+  t.setUTCDate(t.getUTCDate() + n);
+  return t.toISOString().slice(0, 10);
+}
+
+/** Today's YYYY-MM-DD in the board's timezone. */
+export const todayIn = (timeZone: string) => new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+
+/**
+ * Snooze's presets from `today`: tomorrow, in 2 days, Friday (when it's later than that) and next
+ * Monday, each date offered once.
+ */
+export function snoozeOptions(today: string): { label: string; date: string }[] {
+  const dow = new Date(`${today}T00:00:00Z`).getUTCDay();
+  const options = [
+    { label: "Tomorrow", date: addDays(today, 1) },
+    { label: "In 2 days", date: addDays(today, 2) },
+    ...(dow >= 1 && dow <= 2 ? [{ label: "Later this week", date: addDays(today, 5 - dow) }] : []),
+    { label: "Next week", date: addDays(today, (8 - dow) % 7 || 7) },
+  ];
+  return options.filter((o, i) => options.findIndex((x) => x.date === o.date) === i);
+}

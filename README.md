@@ -185,6 +185,7 @@ Keyboard: `j`/`k` and `h`/`l` (or arrows) to move, `Enter` to open, `e` done, `1
 
 **On a date, or on repeat:**
 - **Bring back** in a task's sheet puts it on top of Today (or another column) on a date.
+- **Snooze** (the clock on a card, or in the task view) parks a task in Backlog and brings it back on top of Today: tomorrow, in 2 days, later this week (Friday, on Mondays and Tuesdays), next week (Monday) or a date you pick.
 - **Repeats** makes it a recurring task: weekly, every N weeks, monthly on a date or on a weekday such as the first Monday, at a time (07:00 by default). Each run, the Assistant follows the task's description. It reads the Slack channels, documents, meeting notes and GitHub repositories the description names, for the period since the last run, and puts the result on top of your Today as a new task, ready to paste. Recurring tasks live under **Recurring**, with Run now, Pause and Stop.
 - Both also work in plain words in a comment: "bring this back next Tuesday", "make this repeat every Monday at 8".
 
