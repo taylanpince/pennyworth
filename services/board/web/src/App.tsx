@@ -20,14 +20,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CrewView } from "./Agents";
 import { PairRequired, api, type Session } from "./api";
 import { CardView, GleanBanner, GoogleBanner, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
-import { Drawer } from "./Drawer";
+import { CrewPicker, Drawer } from "./Drawer";
 import { Markdown } from "./markdown";
 import { PairScreen, PhonePanel } from "./Pairing";
 import { BUCKETS, BUCKET_NAMES, type Board, type Bucket, type Card } from "./types";
 import { matches } from "./util";
 
 type Items = Record<Bucket, Card[]>;
-type Route = { kind: "board" } | { kind: "task"; ref: string } | { kind: "brief" } | { kind: "help" } | { kind: "phone" } | { kind: "pair"; code: string };
+type Route = { kind: "board" } | { kind: "task"; ref: string; focus?: string } | { kind: "brief" } | { kind: "help" } | { kind: "phone" } | { kind: "pair"; code: string };
 
 const HINTS: Record<Bucket, string> = {
   triage: "New tasks land here",
@@ -72,7 +72,11 @@ class MouseOrPenSensor extends PointerSensor {
 
 function parseRoute(): Route {
   const h = decodeURIComponent(location.hash.replace(/^#\/?/, ""));
-  if (h.startsWith("t/")) return { kind: "task", ref: h.slice(2) };
+  // #/t/PEN-12 opens a task; #/t/PEN-12/PEN-15 opens it on the agent working in PEN-15 (D-45).
+  if (h.startsWith("t/")) {
+    const [ref = "", focus] = h.slice(2).split("/");
+    return { kind: "task", ref, ...(focus ? { focus } : {}) };
+  }
   if (h === "brief") return { kind: "brief" };
   if (h === "help") return { kind: "help" };
   if (h === "phone") return { kind: "phone" };
@@ -131,6 +135,7 @@ export function App() {
     } catch {}
   }, []);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [creating, setCreating] = useState(false);
   const mobile = useMedia("(max-width: 860px)");
   const holdUntil = useRef(0); // ignore polls briefly after a local change, so cards don't jump back
   const itemsRef = useRef<Items | null>(null);
@@ -343,6 +348,7 @@ export function App() {
       const el = e.target as HTMLElement;
       const typing = el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable;
       if (e.key === "Escape") {
+        if (creating) return setCreating(false);
         if (typing) return el.blur();
         if (route.kind !== "board") return go("#/");
         if (query) return setQuery("");
@@ -368,7 +374,7 @@ export function App() {
       const p = pos();
       const k = e.key;
       if (k === "/") return e.preventDefault(), searchRef.current?.focus();
-      if (k === "c" || k === "n") return e.preventDefault(), setView("board"), mobile && setTab("triage"), setTimeout(() => addRef.current?.focus(), 0);
+      if (k === "c" || k === "n") return e.preventDefault(), setCreating(true);
       if (k === "b") return go("#/brief");
       if (k === "?") return go("#/help");
       if (k === "d") return setShowDone((s) => !s);
@@ -436,7 +442,7 @@ export function App() {
 
   const active = activeId ? BUCKETS.flatMap((b) => items[b]).find((c) => c.id === activeId) : undefined;
   // Agents waiting on you (D-45): a question or result to read, a stuck run, or a proposal to approve.
-  const waiting = [...BUCKETS.flatMap((b) => items[b]), ...board.recurring].flatMap((c) => (c.crew ?? []).filter((m) => m.state === "needs" || m.state === "failed" || m.state === "proposed"));
+  const waiting = [...BUCKETS.flatMap((b) => items[b]), ...board.recurring].flatMap((c) => (c.crew ?? []).filter((m) => m.state === "needs" || m.state === "failed" || m.state === "proposed").map((m) => `${c.identifier}/${memberIssue(m)}`));
   const counts = Object.fromEntries(BUCKETS.map((b) => [b, items[b].length])) as Record<Bucket, number>;
   const openCard = (c: Card) => {
     setSelected(c.id);
@@ -454,6 +460,9 @@ export function App() {
           <input ref={searchRef} type="search" placeholder="Search  /" value={query} onChange={(e) => setQuery(e.target.value)} />
         </div>
         <span className="spacer" />
+        <button className="btn primary" onClick={() => setCreating(true)} title="New task (c)">
+          {mobile ? <PlusIcon /> : "New task"}
+        </button>
         {!mobile && (
           <button className={`btn${view === "agents" ? " on" : ""}`} onClick={() => setView(view === "agents" ? "board" : "agents")} title="The crew and what they're on (a)">
             {board.agentsActive > 0 && <span className="live-dot" />}
@@ -462,7 +471,7 @@ export function App() {
           </button>
         )}
         {waiting.length > 0 && (
-          <a className="btn" href={`#/t/${memberIssue(waiting[0]!)}`} title="Open the next agent waiting on you">
+          <a className="btn" href={`#/t/${waiting[0]}`} title="Open the next agent waiting on you">
             Needs you <span className="btn-count needs">{waiting.length}</span>
           </a>
         )}
@@ -571,6 +580,7 @@ export function App() {
         <Drawer
           key={route.ref}
           refId={route.ref}
+          focus={route.focus}
           board={board}
           onClose={() => go("#/")}
           onChanged={() => void refresh(true)}
@@ -598,6 +608,19 @@ export function App() {
         </div>
       )}
       {route.kind === "help" && <Help />}
+      {creating && (
+        <NewTask
+          board={board}
+          onClose={() => setCreating(false)}
+          onCreated={(identifier, agent) => {
+            setCreating(false);
+            toast(agent ? `Added ${identifier} · ${agent} is on it` : `Added ${identifier} to Triage`);
+            if (mobile) setTab("triage"), setView("board");
+            void refresh(true);
+          }}
+          toast={toast}
+        />
+      )}
       {route.kind === "phone" && <PhonePanel onClose={() => go("#/")} />}
 
       <div className="toasts" aria-live="polite">
@@ -727,7 +750,7 @@ function Help() {
     ["e", "Done"],
     ["1 – 5", "Move to Triage, Today, Tomorrow, Later, Backlog"],
     ["J / K  ⇧↓ ⇧↑", "Move down / up in the column"],
-    ["c", "New task (lands in Triage)"],
+    ["c", "New task, for you or someone in the crew (lands in Triage)"],
     ["/", "Search"],
     ["b", "Today's brief"],
     ["d", "Show recently done"],
@@ -752,6 +775,69 @@ function Help() {
         </dl>
         <p className="muted small">Drag cards to rank them; Tomorrow moves into Today at the start of the next workday, below what's left over. Open a task to bring it back on a date or make it repeat.</p>
       </div>
+    </div>
+  );
+}
+
+/**
+ * A new task (D-45): just a todo for you, or someone from the crew starts on it with your
+ * instructions. Either way it's your task, in Triage.
+ */
+function NewTask({ board, onClose, onCreated, toast }: { board: Board; onClose: () => void; onCreated: (identifier: string, agent?: string) => void; toast: (text: string) => void }) {
+  const [title, setTitle] = useState("");
+  const [pick, setPick] = useState<string | null>(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const crew = board.assignees.filter((a) => a.kind !== "me");
+  const agent = crew.find((a) => a.key === pick);
+  const name = agent ? (agent.persona?.name ?? agent.name) : undefined;
+  async function create() {
+    const t = title.trim();
+    if (!t || busy) return;
+    setBusy(true);
+    try {
+      const task = await api.create(t, "triage");
+      if (agent) await api.addAgent(task.id, agent.key, text.trim() || t);
+      onCreated(task.identifier, name);
+    } catch (e) {
+      toast(`Couldn't add: ${(e as Error).message}`);
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="drawer-backdrop center" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
+      <form
+        className="new-task"
+        role="dialog"
+        aria-label="New task"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void create();
+        }}
+      >
+        <h2>New task</h2>
+        <input className="new-title" autoFocus value={title} placeholder="What needs doing?" onChange={(e) => setTitle(e.target.value)} />
+        <CrewPicker crew={crew} pick={pick} setPick={setPick} me />
+        {agent && (
+          <textarea
+            value={text}
+            placeholder={`Instructions for ${name}: links, repositories, what to report back. Leave empty to use the title.`}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.preventDefault(), void create();
+            }}
+          />
+        )}
+        <div className="row-end">
+          <span className="muted small new-where">Lands in Triage</span>
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="btn primary" disabled={!title.trim() || busy}>
+            {agent ? `Create and start ${name}` : "Create"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

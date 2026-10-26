@@ -166,6 +166,17 @@ export class Paperclip {
     return this.list(OPEN);
   }
 
+  /** A task's sub-tasks, open and closed. The list filter isn't trusted, so it's checked here too. */
+  async children(parentId: string): Promise<Issue[]> {
+    const q = new URLSearchParams({ parentId, status: `${OPEN},done,cancelled`, limit: "200" });
+    return (await this.request<Issue[]>("GET", `/api/companies/${this.companyId}/issues?${q}`)).filter((i) => i.parentId === parentId);
+  }
+
+  /** The newest comment on a task, for the crew's one-line summaries; cached briefly. */
+  latestComment(id: string): Promise<Comment | undefined> {
+    return this.cached(`latest:${id}`, 10_000, async () => (await this.comments(id)).at(-1));
+  }
+
   closedSince(since: string): Promise<Issue[]> {
     return this.list("done,cancelled", since, "100");
   }

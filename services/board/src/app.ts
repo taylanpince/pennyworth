@@ -6,8 +6,8 @@ import type { Logger } from "pino";
 import { z } from "zod";
 import { RunnerReportSchema, agentsView, runTasks, workingOn, type RunContext, type RunnerReport } from "./activity.js";
 import { RecurringSchema, RunStateSchema, ScheduleSchema, changeRecurring, claimDue, recurringView, scheduleMove } from "./automation.js";
-import { BadRequest, CreateSchema, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
-import { foldedChildren } from "./crew.js";
+import { AddAgentSchema, BadRequest, CreateSchema, HandOverSchema, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
+import { crewOf, foldedChildren, handOverText, summaryOf } from "./crew.js";
 import { inNetworks } from "./config.js";
 import { INLINE_TYPES, MAX_UPLOAD_BODY, UploadSchema, decode, fileType, fileViews, isPdf, pdfText, safeName } from "./files.js";
 import { GleanAuthFailed, type GleanAuth } from "./glean.js";
@@ -158,14 +158,60 @@ export function createApp(opts: AppOptions): Server {
     }
   }
 
+  /**
+   * Put an agent on a task: a sub-task assigned to it, created as the user so the runner takes the
+   * description as the user's request (D-45). An agent already on the task gets the instructions as a
+   * comment on its part instead: one part per agent.
+   */
+  async function addToCrew(ctx: Awaited<ReturnType<typeof context>>, parent: Issue, agent: Assignee, instructions: string, executor: { model?: string; effort?: string }) {
+    const existing = (await pc.children(parent.id)).find((k) => k.assigneeAgentId === agent.key && !["done", "cancelled"].includes(k.status));
+    if (existing) {
+      await pc.addComment(existing.id, displayText(instructions));
+      log.info({ issue: parent.identifier, part: existing.identifier, agent: agent.name }, "instructions to the crew");
+      return existing;
+    }
+    const assign = paperclipUpdate(
+      { ...parent, assigneeAgentId: null, assigneeAdapterOverrides: null },
+      { assignee: agent.key, ...(agent.kind === "engineer" && executor.model ? { model: executor.model } : {}), ...(agent.kind === "engineer" && executor.effort ? { effort: executor.effort } : {}) },
+      ctx,
+    );
+    // Every part carries the task's title, which Paperclip would take for a duplicate of the first one.
+    const part = await pc.createIssue({
+      title: parent.title,
+      description: displayText(instructions),
+      status: "todo",
+      priority: parent.priority,
+      parentId: parent.id,
+      allowDuplicate: true,
+      ...assign,
+    });
+    if ((part as Issue & { deduplicated?: boolean }).deduplicated) throw new HttpError(409, `Paperclip returned ${part.identifier} instead of a new task`);
+    store.markSeen(part.id, new Date(Date.now() + 5_000).toISOString());
+    log.info({ issue: parent.identifier, part: part.identifier, agent: agent.name }, "agent joined");
+    return part;
+  }
+
   async function issueView(ref: string) {
     const { ctx, issue, assigned } = await ownIssue(ref);
-    const [comments, busy, files, parent] = await Promise.all([
+    const [comments, busy, files, parent, kids] = await Promise.all([
       pc.comments(issue.id),
       working(ctx),
       pc.attachments(issue.id).catch(() => []),
       issue.parentId ? pc.issueSummary(issue.parentId).catch(() => undefined) : undefined,
+      // The crew works in sub-tasks of the user's task (D-45).
+      issue.assigneeUserId === ctx.me ? pc.children(issue.id).catch(() => []) : Promise.resolve([] as Issue[]),
     ]);
+    const crew = crewOf(issue, kids, { assignees: ctx.assignees, seen: (id) => store.seenAt(id), working: busy.map, jobs: latestJobs(shared.runner) });
+    // Each crew member's latest word, when there's one issue to read it from (a fan-out shows its count instead).
+    const said = Object.fromEntries(
+      await Promise.all(
+        crew.map(async (m) => {
+          const c = m.issues.length === 1 ? await pc.latestComment(m.issues[0]!.id).catch(() => undefined) : undefined;
+          const view = c && commentView(c, ctx.me, ctx.agents);
+          return [m.agent, view && view.author.kind !== "me" ? { text: summaryOf(c.body), at: c.createdAt } : null];
+        }),
+      ),
+    );
     store.markSeen(issue.id);
     const placement = store.placements().get(issue.id);
     const rec = store.recurring(issue.id);
@@ -184,6 +230,7 @@ export function createApp(opts: AppOptions): Server {
       files: fileViews(files, ctx.me),
       // An agent's sub-task links back to the task it works on (D-45).
       parent: parent ? { identifier: parent.identifier, title: parent.title } : null,
+      crew: crew.map((m) => ({ ...m, said: said[m.agent] ?? null })),
     };
   }
 
@@ -393,6 +440,14 @@ export function createApp(opts: AppOptions): Server {
         const patch = paperclipUpdate(issue, update, ctx);
         if (Object.keys(patch).length) await pc.updateIssue(issue.id, patch);
         log.info({ issue: issue.identifier, fields: Object.keys(patch) }, "task updated");
+        // Done or cancelled closes the crew's open parts too, except one an agent is busy with (D-45).
+        if ((update.status === "done" || update.status === "cancelled") && issue.assigneeUserId === ctx.me) {
+          const [kids, busy] = await Promise.all([pc.children(issue.id), working(ctx)]);
+          for (const k of kids) {
+            if (["done", "cancelled"].includes(k.status) || busy.map.has(k.identifier) || !ctx.assignees.some((a) => a.kind !== "me" && a.key === k.assigneeAgentId)) continue;
+            await pc.updateIssue(k.id, { status: update.status });
+          }
+        }
         return issueView(issue.id);
       },
     },
@@ -406,6 +461,43 @@ export function createApp(opts: AppOptions): Server {
         // Hidden markers are machine-only: the runner ignores comments that carry its marker.
         await pc.addComment(issue.id, displayText(text));
         log.info({ issue: issue.identifier }, "comment added");
+        return issueView(issue.id);
+      },
+    },
+    {
+      // Bring an agent onto one of your tasks (D-45): a sub-task assigned to it, with your instructions.
+      method: "POST",
+      path: /^\/api\/issues\/([^/]+)\/agents$/,
+      handle: async (m, body) => {
+        const { ctx, issue } = await ownIssue(decodeURIComponent(m[1]!));
+        if (issue.assigneeUserId !== ctx.me) throw new HttpError(403, "agents join your own tasks");
+        const input = parse(AddAgentSchema, body);
+        const agent = ctx.assignees.find((a) => a.key === input.agent && a.kind !== "me");
+        if (!agent) throw new HttpError(400, "unknown agent");
+        await addToCrew(ctx, issue, agent, input.instructions, { model: input.model, effort: input.effort });
+        return issueView(issue.id);
+      },
+    },
+    {
+      // A stuck agent's part goes to another (D-45): the user's instructions, plus a note that someone tried first.
+      method: "POST",
+      path: /^\/api\/issues\/([^/]+)\/handover$/,
+      handle: async (m, body) => {
+        const { ctx, issue } = await ownIssue(decodeURIComponent(m[1]!));
+        if (issue.assigneeUserId !== ctx.me) throw new HttpError(403, "only your own tasks");
+        const { from, to } = parse(HandOverSchema, body);
+        if (!REF.test(from)) throw new HttpError(400, "bad task reference");
+        const part = await pc.issue(from);
+        if (part.parentId !== issue.id) throw new HttpError(400, "that isn't part of this task");
+        // Only the user's own words travel as instructions: an agent's proposal needs approving first.
+        if (!part.createdByUserId || part.createdByAgentId) throw new HttpError(400, "these instructions came from an agent, not from you: add the agent with your own instead");
+        const fromAgent = ctx.assignees.find((a) => a.key === part.assigneeAgentId);
+        const agent = ctx.assignees.find((a) => a.key === to && a.kind !== "me");
+        if (!agent || !fromAgent || agent.key === fromAgent.key) throw new HttpError(400, "pick another agent");
+        await addToCrew(ctx, issue, agent, handOverText(displayText(part.description), fromAgent.persona?.name ?? fromAgent.name), {});
+        // A status change wakes nobody: a comment here would read as an instruction to the runner.
+        await pc.updateIssue(part.id, { status: "cancelled" });
+        log.info({ issue: issue.identifier, from: part.identifier, to: agent.name }, "handed over");
         return issueView(issue.id);
       },
     },

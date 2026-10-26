@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { Avatar, Chips, CloseIcon, MoveMenu } from "./components";
+import { Avatar, Chips, CloseIcon, CrewAvatar, MoveMenu, memberIssue } from "./components";
 import { Markdown } from "./markdown";
-import { BUCKETS, BUCKET_NAMES, WEEKDAYS, type Assignee, type Board, type Bucket, type Cadence, type CommentView, type IssueView, type Label, type Models, type Update, type Weekday } from "./types";
-import { PRIORITIES, PRIORITY_NAMES, ago, runTime, shortName, when } from "./util";
+import { BUCKETS, BUCKET_NAMES, WEEKDAYS, type Assignee, type Board, type Bucket, type Cadence, type CommentView, type CrewState, type IssueView, type Label, type Models, type Update, type Weekday } from "./types";
+import { PRIORITIES, PRIORITY_NAMES, ago, elapsed, runTime, shortName, when } from "./util";
 
 interface Props {
   refId: string;
+  /** An agent's part of the task to open on (D-45). */
+  focus?: string;
   board: Board;
   onClose: () => void;
   onChanged: () => void;
@@ -14,7 +16,7 @@ interface Props {
   toast: (text: string, action?: { label: string; run: () => void }) => void;
 }
 
-export function Drawer({ refId, board, onClose, onChanged, onMove, toast }: Props) {
+export function Drawer({ refId, focus, board, onClose, onChanged, onMove, toast }: Props) {
   const [issue, setIssue] = useState<IssueView | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -23,11 +25,17 @@ export function Drawer({ refId, board, onClose, onChanged, onMove, toast }: Prop
   const load = useCallback(async () => {
     try {
       const v = await api.issue(refId);
-      if (live.current) setIssue(v), setError("");
+      if (!live.current) return;
+      // An agent's part of a task opens as that agent's tab on the task (D-45).
+      if (v.parent && board.assignees.some((a) => a.kind !== "me" && a.key === v.assignee)) {
+        location.replace(`#/t/${v.parent.identifier}/${v.identifier}`);
+        return;
+      }
+      setIssue(v), setError("");
     } catch (e) {
       if (live.current) setError((e as Error).message);
     }
-  }, [refId]);
+  }, [refId, board.assignees]);
 
   useEffect(() => {
     live.current = true;
@@ -70,7 +78,7 @@ export function Drawer({ refId, board, onClose, onChanged, onMove, toast }: Prop
         {!issue ? (
           <div className="drawer-loading">{error ? `Couldn't load ${refId}: ${error}` : "Loading…"}</div>
         ) : (
-          <IssueBody issue={issue} board={board} busy={busy} update={update} setStatus={setStatus} onClose={onClose} onMove={onMove} reload={load} onChanged={onChanged} toast={toast} />
+          <IssueBody issue={issue} focus={focus} board={board} busy={busy} update={update} setStatus={setStatus} onClose={onClose} onMove={onMove} reload={load} onChanged={onChanged} toast={toast} setIssue={setIssue} />
         )}
       </aside>
     </div>
@@ -79,6 +87,7 @@ export function Drawer({ refId, board, onClose, onChanged, onMove, toast }: Prop
 
 interface BodyProps {
   issue: IssueView;
+  focus?: string;
   board: Board;
   busy: boolean;
   update: (u: Update, note?: string) => Promise<void>;
@@ -88,30 +97,35 @@ interface BodyProps {
   reload: () => Promise<void>;
   onChanged: () => void;
   toast: Props["toast"];
+  setIssue: (v: IssueView) => void;
 }
 
-function IssueBody({ issue, board, busy, update, setStatus, onClose, onMove, reload, onChanged, toast }: BodyProps) {
+type Member = IssueView["crew"][number];
+
+/**
+ * The task (D-45): an Overview (description, files, the crew, and the team chat that goes to the
+ * Assistant) and a tab per agent with a direct chat. Settings live behind Details.
+ */
+function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMove, reload, onChanged, toast, setIssue }: BodyProps) {
   const closed = issue.status === "done" || issue.status === "cancelled";
   const editable = issue.editable;
-  const assignee = board.assignees.find((a) => a.key === issue.assignee);
+  const mine = issue.assignee === "me";
   const [bucket, setBucket] = useState<Bucket | null>(issue.bucket);
   useEffect(() => setBucket(issue.bucket), [issue.bucket]);
-
-  // Open on the latest comment, and follow new ones while the reader is at the end (or just replied).
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const atEnd = useRef(true);
-  const seen = useRef<string | undefined>(undefined);
-  const latest = issue.comments.at(-1);
-  useLayoutEffect(() => {
-    const el = scrollRef.current;
-    const last = el?.querySelector<HTMLElement>(".thread > .comment:last-child");
-    if (!el || !last || latest?.id === seen.current) return;
-    const first = seen.current === undefined;
-    seen.current = latest?.id;
-    if (!first && !atEnd.current && latest?.author.kind !== "me") return;
-    const top = last.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
-    el.scrollTop = last.offsetHeight > el.clientHeight - 24 ? top - 12 : el.scrollHeight;
-  }, [latest]);
+  const focused = focus && issue.crew.find((m) => m.issues.some((i) => i.identifier === focus))?.agent;
+  const [tab, setTab] = useState<string>(focused || "overview");
+  useEffect(() => {
+    if (focused) setTab(focused);
+  }, [focused]);
+  const [details, setDetails] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const member = issue.crew.find((m) => m.agent === tab);
+  const pick = (t: string) => {
+    setTab(t);
+    setAdding(false);
+    history.replaceState(null, "", t === "overview" ? `#/t/${issue.identifier}` : `#/t/${issue.identifier}/${memberIssue(issue.crew.find((m) => m.agent === t)!)}`);
+  };
+  const who = (key: string) => board.assignees.find((a) => a.key === key);
 
   return (
     <>
@@ -120,27 +134,24 @@ function IssueBody({ issue, board, busy, update, setStatus, onClose, onMove, rel
           <CloseIcon />
         </button>
         <span className="ident">{issue.identifier}</span>
-        <span className="head-chips">
-          <Chips card={issue} />
-        </span>
         <span className="spacer" />
-        {editable && !closed && !issue.recurring && (
-          <>
-            <MoveMenu
-              current={bucket ?? undefined}
-              label={bucket ? BUCKET_NAMES[bucket] : "Move to"}
-              onPick={(b) => {
-                setBucket(b);
-                void onMove(issue.id, b);
-              }}
-            />
-            <button className="btn" disabled={busy} onClick={() => void setStatus("cancelled")}>
-              Cancel task
-            </button>
-            <button className="btn primary" disabled={busy} onClick={() => void setStatus("done")}>
-              Done
-            </button>
-          </>
+        {editable && !closed && !issue.recurring && !issue.parent && (
+          <MoveMenu
+            current={bucket ?? undefined}
+            label={bucket ? BUCKET_NAMES[bucket] : "Move to"}
+            onPick={(b) => {
+              setBucket(b);
+              void onMove(issue.id, b);
+            }}
+          />
+        )}
+        <button className={`btn${details ? " on" : ""}`} onClick={() => setDetails(!details)} title="Priority, labels, schedule, repeat">
+          Details
+        </button>
+        {editable && !closed && (
+          <button className="btn primary" disabled={busy} onClick={() => void setStatus("done")}>
+            Done
+          </button>
         )}
         {editable && closed && (
           <button className="btn primary" disabled={busy} onClick={() => void update({ status: "todo" }, `${issue.identifier} reopened`)}>
@@ -153,87 +164,430 @@ function IssueBody({ issue, board, busy, update, setStatus, onClose, onMove, rel
           Part of <a href={`#/t/${issue.parent.identifier}`}>{issue.parent.identifier}{issue.parent.title ? `: ${issue.parent.title}` : ""}</a>
         </div>
       )}
-      {issue.working && (
-        <div className={`working-bar${issue.working.queued ? " queued" : ""}`}>
-          {issue.working.queued
-            ? `Queued for ${issue.working.agent}: it starts when a slot frees up.`
-            : `${issue.working.agent} is working on this${issue.working.since ? ` (started ${new Date(issue.working.since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})` : ""}.`}
-        </div>
-      )}
-
-      <div className="drawer-scroll" ref={scrollRef} onScroll={(e) => (atEnd.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 80)}>
+      <div className="task-top">
         <Title issue={issue} editable={editable} save={(title) => update({ title })} />
-
-        <section className="props">
-          <Prop name="Assignee">
-            <select disabled={!editable || busy} value={issue.assignee ?? ""} onChange={(e) => void update({ assignee: e.target.value }, assigneeNote(board.assignees.find((a) => a.key === e.target.value)))}>
-              {!issue.assignee && <option value="">Someone else</option>}
-              {board.assignees.map((a) => (
-                <option key={a.key} value={a.key}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          </Prop>
-          {assignee?.kind === "engineer" && <Executor issue={issue} assignee={assignee} disabled={!editable || busy} update={update} />}
-          <Prop name="Priority">
-            <select disabled={!editable || busy} value={issue.priority} onChange={(e) => void update({ priority: e.target.value as Update["priority"] })}>
-              {PRIORITIES.map((p) => (
-                <option key={p} value={p}>
-                  {PRIORITY_NAMES[p]}
-                </option>
-              ))}
-            </select>
-          </Prop>
-          {!closed && (
-            <Prop name="Status">
-              <select disabled={!editable || busy || !["todo", "in_progress"].includes(issue.status)} value={issue.status} onChange={(e) => void update({ status: e.target.value as "todo" })}>
-                <option value="todo">To do</option>
-                <option value="in_progress">In progress</option>
-                {!["todo", "in_progress"].includes(issue.status) && <option value={issue.status}>{issue.status.replace("_", " ")}</option>}
-              </select>
-            </Prop>
+        <div className="head-chips">
+          <Chips card={{ ...issue, working: null, status: issue.crew.length ? "todo" : issue.status }} />
+          {issue.priority !== "medium" && (
+            <button className={`chip prio-${issue.priority}`} onClick={() => setDetails(true)}>
+              {PRIORITY_NAMES[issue.priority]}
+            </button>
           )}
-          <Prop name="Labels">
-            <Labels all={board.labels} selected={issue.labelIds} disabled={!editable || busy} save={(labelIds) => update({ labelIds })} />
-          </Prop>
-          {editable && !closed && !issue.recurring && (
-            <Prop name="Bring back">
-              <BringBack issue={issue} board={board} done={() => (void reload(), onChanged())} toast={toast} />
-            </Prop>
+          {issue.scheduled && (
+            <button className="chip" onClick={() => setDetails(true)}>
+              ↑ {BUCKET_NAMES[issue.scheduled.bucket]} {longDate(issue.scheduled.date)}
+            </button>
           )}
-          {editable && !closed && (issue.recurring || issue.assignee === "me") && (
-            <Prop name="Repeats">
-              <Repeats issue={issue} board={board} done={() => (void reload(), onChanged())} toast={toast} />
-            </Prop>
+          {issue.recurring && (
+            <button className="chip" onClick={() => setDetails(true)}>
+              ↻ {issue.recurring.summary}
+            </button>
           )}
-          <Prop name="Created">
-            <span className="muted">{when(issue.createdAt)}</span>
-          </Prop>
-        </section>
-
-        <Description issue={issue} prefix={board.prefix} editable={editable} save={(description) => update({ description })} />
-
-        <Files issue={issue} />
-
-        <Thread issue={issue} assignee={assignee} prefix={board.prefix} />
+        </div>
       </div>
-
-      {editable && <Composer issue={issue} reload={reload} toast={toast} />}
+      {(issue.crew.length > 0 || (mine && editable && !closed)) && (
+        <nav className="task-tabs" aria-label="The crew on this task">
+          <button className={`task-tab${tab === "overview" ? " on" : ""}`} onClick={() => pick("overview")}>
+            Overview
+          </button>
+          {issue.crew.map((m) => (
+            <button key={m.agent} className={`task-tab${tab === m.agent ? " on" : ""}`} onClick={() => pick(m.agent)}>
+              <CrewAvatar member={m} assignee={who(m.agent)} size={20} />
+              {shortName(who(m.agent))}
+              {m.issues.length > 1 && <span className="fan">{m.finished ?? 0}/{m.issues.length}</span>}
+            </button>
+          ))}
+          {mine && editable && !closed && (
+            <button className="task-tab add" onClick={() => (setAdding(!adding), setDetails(false))}>
+              + Add agent
+            </button>
+          )}
+        </nav>
+      )}
+      <div className="task-body">
+        <div className="task-main">
+          {adding && (
+            <AddAgent
+              issue={issue}
+              board={board}
+              onCancel={() => setAdding(false)}
+              onAdded={(v, agent) => {
+                setIssue(v);
+                setAdding(false);
+                onChanged();
+                pick(agent);
+                toast(`${shortName(who(agent))} is on it`);
+              }}
+              toast={toast}
+            />
+          )}
+          {member ? (
+            <AgentPane key={member.agent} task={issue} member={member} focus={focus} board={board} reload={reload} onChanged={onChanged} toast={toast} />
+          ) : (
+            <Overview issue={issue} board={board} editable={editable} update={update} reload={reload} toast={toast} pick={pick} onAdd={() => setAdding(true)} />
+          )}
+        </div>
+        {details && (
+          <aside className="task-details">
+            <div className="details-head">
+              <h3>Details</h3>
+              <button className="icon-btn subtle" aria-label="Close details" onClick={() => setDetails(false)}>
+                <CloseIcon />
+              </button>
+            </div>
+            <section className="props">
+              <Prop name="Priority">
+                <select disabled={!editable || busy} value={issue.priority} onChange={(e) => void update({ priority: e.target.value as Update["priority"] })}>
+                  {PRIORITIES.map((p) => (
+                    <option key={p} value={p}>
+                      {PRIORITY_NAMES[p]}
+                    </option>
+                  ))}
+                </select>
+              </Prop>
+              <Prop name="Labels">
+                <Labels all={board.labels} selected={issue.labelIds} disabled={!editable || busy} save={(labelIds) => update({ labelIds })} />
+              </Prop>
+              {editable && !closed && !issue.recurring && !issue.parent && (
+                <Prop name="Bring back">
+                  <BringBack issue={issue} board={board} done={() => (void reload(), onChanged())} toast={toast} />
+                </Prop>
+              )}
+              {editable && !closed && (issue.recurring || mine) && (
+                <Prop name="Repeats">
+                  <Repeats issue={issue} board={board} done={() => (void reload(), onChanged())} toast={toast} />
+                </Prop>
+              )}
+              <Prop name="Created">
+                <span className="muted">{when(issue.createdAt)}</span>
+              </Prop>
+            </section>
+            {editable && !closed && (
+              <button className="btn details-cancel" disabled={busy} onClick={() => void setStatus("cancelled")}>
+                Cancel task
+              </button>
+            )}
+          </aside>
+        )}
+      </div>
     </>
   );
+}
+
+/** The task itself: what it's about, its files, who's on it, and the team chat (the Assistant reads it). */
+function Overview({ issue, board, editable, update, reload, toast, pick, onAdd }: { issue: IssueView; board: Board; editable: boolean; update: (u: Update) => Promise<void>; reload: () => Promise<void>; toast: Props["toast"]; pick: (t: string) => void; onAdd: () => void }) {
+  const mine = issue.assignee === "me";
+  const closed = issue.status === "done" || issue.status === "cancelled";
+  const assistant = board.assignees.find((a) => a.kind === "assistant");
+  // The overview opens at the top, on what the task is about; it follows the chat only once you're there.
+  const scroll = useFollow(issue.comments, false);
+  return (
+    <>
+      <div className="drawer-scroll" {...scroll}>
+        <Description issue={issue} prefix={board.prefix} editable={editable} save={(description) => update({ description })} />
+        <Files issue={issue} />
+        {issue.crew.length > 0 ? (
+          <section className="crew-rows">
+            {issue.crew.map((m) => {
+              const a = board.assignees.find((x) => x.key === m.agent);
+              return (
+                <button key={m.agent} className="crew-row" onClick={() => pick(m.agent)}>
+                  <CrewAvatar member={m} assignee={a} size={28} />
+                  <span className="crew-row-text">
+                    <span>
+                      <b>{shortName(a)}</b> <span className={`pill pill-${m.state}`}>{STATE_PILLS[m.state]}{m.issues.length > 1 ? ` · ${m.finished ?? 0}/${m.issues.length}` : ""}</span>
+                    </span>
+                    {m.said && <span className="crew-said">{m.said.text}</span>}
+                  </span>
+                  {m.said && <span className="muted small">{ago(m.said.at)}</span>}
+                </button>
+              );
+            })}
+          </section>
+        ) : (
+          mine &&
+          editable &&
+          !closed && (
+            <div className="crew-empty">
+              <span>Nobody's on this yet. It's yours, or hand it to someone.</span>
+              <button className="btn" onClick={onAdd}>
+                + Add agent
+              </button>
+            </div>
+          )
+        )}
+        {(mine || !issue.crew.length) && <Thread issue={issue} board={board} prefix={board.prefix} title={mine && assistant ? "Team chat" : "Activity"} />}
+      </div>
+      {editable && (mine || !issue.crew.length) && (
+        <Composer issue={issue} reload={reload} toast={toast} to={mine && assistant ? { assignee: assistant, label: `${shortName(assistant)} reads this and brings in whoever's needed` } : undefined} />
+      )}
+    </>
+  );
+}
+
+const STATE_PILLS: Record<CrewState, string> = { needs: "needs you", failed: "stuck", proposed: "proposed", working: "working", queued: "queued", done: "done" };
+const ENGINE_NAMES: Record<string, string> = { codex: "Codex", claude: "Claude Code", openrouter: "OpenRouter" };
+
+/** One agent's part of the task: who they are, where they stand, and a direct chat with them. */
+function AgentPane({ task, member, focus, board, reload, onChanged, toast }: { task: IssueView; member: Member; focus?: string; board: Board; reload: () => Promise<void>; onChanged: () => void; toast: Props["toast"] }) {
+  const agent = board.assignees.find((a) => a.key === member.agent);
+  const name = shortName(agent);
+  const [selected, setSelected] = useState(() => member.issues.find((i) => i.identifier === focus)?.identifier ?? memberIssue(member));
+  const self = selected === task.identifier;
+  const [part, setPart] = useState<IssueView | null>(self ? task : null);
+  const [busy, setBusy] = useState(false);
+  const live = useRef(true);
+  const load = useCallback(async () => {
+    try {
+      const v = await api.issue(selected);
+      if (live.current) setPart(v);
+    } catch {}
+  }, [selected]);
+  useEffect(() => {
+    live.current = true;
+    if (self) {
+      setPart(task);
+      return;
+    }
+    setPart(null);
+    void load();
+    const t = setInterval(() => document.visibilityState === "visible" && void load(), 6000);
+    return () => {
+      live.current = false;
+      clearInterval(t);
+    };
+  }, [load, self, task]);
+  const scroll = useFollow(part?.comments ?? []);
+  const sub = member.issues.find((i) => i.identifier === selected);
+  const state = sub?.state ?? member.state;
+  const fan = member.issues.length > 1;
+  // "Hand to Ada": the careful one, unless it's Ada who got stuck.
+  const engineers = board.assignees.filter((a) => a.kind === "engineer" && a.key !== member.agent);
+  const next = engineers.find((a) => a.engine === "claude") ?? engineers[0];
+
+  async function act(run: () => Promise<unknown>, note: string) {
+    setBusy(true);
+    try {
+      await run();
+      toast(note);
+      onChanged();
+      await Promise.all([reload(), self ? Promise.resolve() : load()]);
+    } catch (e) {
+      toast(`Couldn't do that: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="drawer-scroll" {...scroll}>
+        <div className="agent-head">
+          <CrewAvatar member={{ state, since: member.since }} assignee={agent} size={44} />
+          <div>
+            <div className="agent-name">
+              {name} <span className={`pill pill-${state}`}>{STATE_PILLS[state]}</span>
+            </div>
+            <div className="muted small">{agent?.kind === "assistant" ? "Assistant · research and drafts" : `Engineer · ${ENGINE_NAMES[agent?.engine ?? ""] ?? agent?.name}`}</div>
+            {agent?.persona?.voice && <div className="agent-voice">{agent.persona.voice}</div>}
+          </div>
+        </div>
+        {fan && (
+          <section className="fan-list">
+            <div className="fan-head">
+              <b>
+                {member.finished ?? 0} of {member.issues.length} finished
+              </b>
+              {member.issues.some((i) => i.state === "proposed") && (
+                <button className="btn primary" disabled={busy} onClick={() => void act(() => api.comment(task.id, "Go."), `Starting ${name}'s tasks`)}>
+                  Approve all
+                </button>
+              )}
+            </div>
+            {member.issues.map((i) => (
+              <button key={i.id} className={`fan-row${i.identifier === selected ? " on" : ""}`} onClick={() => setSelected(i.identifier)}>
+                <span className={`pill pill-${i.state}`}>{STATE_PILLS[i.state]}</span>
+                <span className="fan-title">{i.title}</span>
+                <span className="ident">{i.identifier}</span>
+              </button>
+            ))}
+          </section>
+        )}
+        {state === "proposed" && part && (
+          <div className="crew-banner proposed">
+            <span>
+              <b>Proposed for this task.</b> {name} starts once you approve; the instructions are below.
+            </span>
+            <span className="spacer" />
+            <button className="btn" disabled={busy} onClick={() => void act(() => api.update(part.id, { status: "cancelled" }), `Dismissed ${name}`)}>
+              Dismiss
+            </button>
+            <button className="btn primary" disabled={busy} onClick={() => void act(() => api.comment(part.id, "Approved."), `${name} is starting`)}>
+              Approve
+            </button>
+          </div>
+        )}
+        {state === "failed" && part && (
+          <div className="crew-banner failed">
+            <b>{name} got stuck.</b>
+            <span className="spacer" />
+            <button className="btn" disabled={busy} onClick={() => void act(() => api.comment(part.id, "Try again."), `${name} is trying again`)}>
+              Try again
+            </button>
+            {next && task.assignee === "me" && !self && (
+              <button className="btn primary" disabled={busy} onClick={() => void act(() => api.handOver(task.id, part.id, next.key), `${shortName(next)} picked it up`)}>
+                Hand to {shortName(next)}
+              </button>
+            )}
+          </div>
+        )}
+        {part?.working && (
+          <div className={`working-line${part.working.queued ? " queued" : ""}`}>
+            {part.working.queued ? `Queued: ${name} starts when a slot frees up.` : `${name} is working on this${part.working.since ? ` · ${elapsed(part.working.since)}` : ""}.`}
+          </div>
+        )}
+        {part && agent?.kind === "engineer" && <ModelLine part={part} agent={agent} toast={toast} reload={self ? reload : load} />}
+        {part && !self && part.description && (
+          <details className="instructions" open={!part.comments.length}>
+            <summary>Instructions</summary>
+            <Markdown text={part.description} prefix={board.prefix} />
+          </details>
+        )}
+        {part && !self && <Files issue={part} />}
+        {part ? <Thread issue={part} board={board} prefix={board.prefix} agent={agent} title="Chat" /> : <p className="muted">Loading…</p>}
+      </div>
+      {part && part.editable && <Composer issue={part} reload={self ? reload : load} toast={toast} to={agent ? { assignee: agent, label: `Direct to ${name}` } : undefined} />}
+    </>
+  );
+}
+
+/** An Engineer's model and effort for this part, out of the way until needed (D-20). */
+function ModelLine({ part, agent, toast, reload }: { part: IssueView; agent: Assignee; toast: Props["toast"]; reload: () => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const label = [part.executor?.model ?? agent.defaultModel?.replace(/^openrouter\//, "") ?? "default model", part.executor?.effort && `${part.executor.effort} effort`].filter(Boolean).join(" · ");
+  const update = async (u: Update) => {
+    try {
+      await api.update(part.id, u);
+      await reload();
+    } catch (e) {
+      toast(`Couldn't save: ${(e as Error).message}`);
+    }
+  };
+  return (
+    <div className="model-line">
+      <span className="muted small">{label}</span>
+      <button className="link-btn" onClick={() => setOpen(!open)}>
+        {open ? "Done" : "Change"}
+      </button>
+      {open && (
+        <section className="props">
+          <Executor issue={part} assignee={agent} disabled={false} update={update} />
+        </section>
+      )}
+    </div>
+  );
+}
+
+/** Bring someone onto the task with instructions: they see the description and what the others found. */
+function AddAgent({ issue, board, onCancel, onAdded, toast }: { issue: IssueView; board: Board; onCancel: () => void; onAdded: (v: IssueView, agent: string) => void; toast: Props["toast"] }) {
+  const crew = board.assignees.filter((a) => a.kind !== "me");
+  const present = new Set(issue.crew.map((m) => m.agent));
+  const [pick, setPick] = useState<string | null>(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function assign() {
+    if (!pick || !text.trim()) return;
+    setBusy(true);
+    try {
+      onAdded(await api.addAgent(issue.id, pick, text.trim()), pick);
+    } catch (e) {
+      toast(`Couldn't add: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="add-agent">
+      <h3>Add someone to this task</h3>
+      <CrewPicker crew={crew} present={present} pick={pick} setPick={setPick} />
+      <textarea
+        autoFocus
+        value={text}
+        placeholder={pick ? `What should ${shortName(crew.find((a) => a.key === pick))} do? They see the description and what the others have found.` : "Pick someone first."}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.preventDefault(), void assign();
+          if (e.key === "Escape") e.stopPropagation(), onCancel();
+        }}
+      />
+      <div className="row-end">
+        <button className="btn" onClick={onCancel}>
+          Cancel
+        </button>
+        <button className="btn primary" disabled={!pick || !text.trim() || busy} onClick={() => void assign()}>
+          {pick ? `Assign to ${shortName(crew.find((a) => a.key === pick))}` : "Assign"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** The crew as big portraits to pick from; someone already on the task can't be picked twice. */
+export function CrewPicker({ crew, present, pick, setPick, me }: { crew: Assignee[]; present?: Set<string>; pick: string | null; setPick: (k: string | null) => void; me?: boolean }) {
+  return (
+    <div className="crew-picker">
+      {me && (
+        <button type="button" className={`pick${!pick ? " on" : ""}`} onClick={() => setPick(null)}>
+          <span className="avatar avatar-me pick-me">Y</span>
+          <b>Just me</b>
+          <span>A todo for you</span>
+        </button>
+      )}
+      {crew.map((a) => (
+        <button key={a.key} type="button" className={`pick${pick === a.key ? " on" : ""}`} disabled={present?.has(a.key)} onClick={() => setPick(a.key)}>
+          <Avatar assignee={a} size={40} />
+          <b>{shortName(a)}</b>
+          <span>{present?.has(a.key) ? "already on it" : a.kind === "assistant" ? "Assistant" : `Engineer · ${ENGINE_NAMES[a.engine ?? ""] ?? ""}`}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Open on the latest comment, and follow new ones while the reader is at the end (or just replied). */
+function useFollow(comments: CommentView[], openAtEnd = true) {
+  const ref = useRef<HTMLDivElement>(null);
+  const atEnd = useRef(openAtEnd);
+  const seen = useRef<string | undefined>(undefined);
+  const latest = comments.at(-1);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const last = el?.querySelector<HTMLElement>(".thread > .comment:last-child");
+    if (!el || !last || latest?.id === seen.current) return;
+    const first = seen.current === undefined;
+    seen.current = latest?.id;
+    if (first ? !openAtEnd : !atEnd.current && latest?.author.kind !== "me") return;
+    const top = last.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+    el.scrollTop = last.offsetHeight > el.clientHeight - 24 ? top - 12 : el.scrollHeight;
+  }, [latest]);
+  return { ref, onScroll: (e: React.UIEvent<HTMLDivElement>) => (atEnd.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 80) };
 }
 
 /** The latest comments stay open; older ones fold into one-line rows that open on a click. */
 const OPEN_COMMENTS = 2;
 
-function Thread({ issue, assignee, prefix }: { issue: IssueView; assignee: Assignee | undefined; prefix: string }) {
+function Thread({ issue, board, agent, prefix, title = "Activity" }: { issue: IssueView; board: Board; agent?: Assignee; prefix: string; title?: string }) {
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const comments = issue.comments;
   const older = comments.slice(0, Math.max(0, comments.length - OPEN_COMMENTS));
   const allOpen = older.every((c) => open.has(c.id));
   const toggle = (id: string) => setOpen((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set([...s, id])));
-  const who = (c: CommentView) => (c.author.kind === "runner" ? `Runner${assignee?.kind === "engineer" ? ` · ${shortName(assignee)}` : ""}` : c.author.name);
+  // Agents by their crew name (D-45); the runner speaks for the Engineer on the task.
+  const who = (c: CommentView) => {
+    if (c.author.kind === "runner") return agent?.kind === "engineer" ? shortName(agent) : "Runner";
+    if (c.author.kind === "agent") return shortName(board.assignees.find((a) => a.name === c.author.name)) || c.author.name;
+    return c.author.name;
+  };
   const time = (c: CommentView) => (
     <span className="muted small" title={new Date(c.createdAt).toLocaleString()}>
       {ago(c.createdAt)}
@@ -242,7 +596,7 @@ function Thread({ issue, assignee, prefix }: { issue: IssueView; assignee: Assig
   return (
     <section className="thread">
       <div className="thread-head">
-        <h3>Activity</h3>
+        <h3>{title}</h3>
         {older.length > 0 && (
           <button className="link-btn" onClick={() => setOpen(allOpen ? new Set() : new Set(older.map((c) => c.id)))}>
             {allOpen ? "Fold earlier" : `Show all ${comments.length}`}
@@ -480,7 +834,7 @@ function Files({ issue }: { issue: IssueView }) {
 /** Paperclip's limit for one file. */
 const MAX_FILE = 10 * 1024 * 1024;
 
-function Composer({ issue, reload, toast }: { issue: IssueView; reload: () => Promise<void>; toast: Props["toast"] }) {
+function Composer({ issue, reload, toast, to }: { issue: IssueView; reload: () => Promise<void>; toast: Props["toast"]; to?: { assignee: Assignee; label: string } }) {
   const key = `draft:${issue.id}`;
   const [text, setText] = useState(() => {
     try {
@@ -538,7 +892,7 @@ function Composer({ issue, reload, toast }: { issue: IssueView; reload: () => Pr
       }}
     >
       <textarea
-        placeholder="Reply… (⌘↵ to send; paste or drop files to attach)"
+        placeholder={`${to ? `Message ${shortName(to.assignee)}…` : "Reply…"} (⌘↵ to send; paste or drop files to attach)`}
         value={text}
         rows={2}
         onChange={(e) => setText(e.target.value)}
@@ -565,7 +919,14 @@ function Composer({ issue, reload, toast }: { issue: IssueView; reload: () => Pr
         </div>
       )}
       <div className="row-end">
-        <span className="muted small">{issue.replyTarget}</span>
+        {to ? (
+          <span className="reply-to muted small">
+            <Avatar assignee={to.assignee} size={16} />
+            {to.label}
+          </span>
+        ) : (
+          <span className="muted small">{issue.replyTarget}</span>
+        )}
         <input
           ref={picker}
           type="file"

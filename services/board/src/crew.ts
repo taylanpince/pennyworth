@@ -9,7 +9,7 @@ export type CrewState = "needs" | "failed" | "proposed" | "working" | "queued" |
 export interface CrewMember {
   agent: string;
   state: CrewState;
-  issues: { id: string; identifier: string; state: CrewState }[];
+  issues: { id: string; identifier: string; title: string; state: CrewState }[];
   /** A fan-out: how many of its issues have finished. */
   finished?: number;
   since?: string | null;
@@ -60,10 +60,11 @@ export function issueState(i: Issue, agent: Assignee, input: CrewInput): CrewSta
   if (!closed && i.status === "todo" && agent.kind === "engineer" && i.createdByAgentId && !i.createdByUserId) return "proposed";
   const job = input.jobs.get(i.identifier);
   if (!closed && job && STUCK.has(job)) return "failed";
+  // Something new to read is the user's turn, even on a part that's closed.
   const activityAt = i.lastActivityAt ?? i.updatedAt;
-  if (!closed && activityAt > input.seen(i.id)) return "needs";
-  // Assigned and not picked up yet: the runner polls, Paperclip wakes the Assistant.
-  if (!closed && i.status === "todo" && !job) return "queued";
+  if (activityAt > input.seen(i.id)) return "needs";
+  // Assigned and not picked up yet (nothing happened since it was made): the runner polls, Paperclip wakes the Assistant.
+  if (!closed && i.status === "todo" && !job && Date.parse(activityAt) - Date.parse(i.createdAt) < 60_000) return "queued";
   return "done";
 }
 
@@ -81,7 +82,7 @@ export function crewOf(card: Issue, children: Issue[], input: CrewInput): CrewMe
     groups.set(agent.key, g);
   }
   const members = [...groups.values()].map(({ agent, issues }): CrewMember => {
-    const states = issues.map((i) => ({ id: i.id, identifier: i.identifier, state: issueState(i, agent, input) }));
+    const states = issues.map((i) => ({ id: i.id, identifier: i.identifier, title: i.title, state: issueState(i, agent, input) }));
     const since = issues.map((i) => input.working.get(i.identifier)?.since).find((s) => s !== undefined);
     return {
       agent: agent.key,
@@ -95,6 +96,28 @@ export function crewOf(card: Issue, children: Issue[], input: CrewInput): CrewMe
 }
 
 const assistantKey = (list: Assignee[]) => list.find((a) => a.kind === "assistant")?.key;
+
+/** One line of an agent's latest comment, for the crew rows on a task. */
+export function summaryOf(body: string, max = 180): string {
+  const text = body
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/```[\s\S]*?```/g, " … ")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^#+\s*(Summary|Answer)\s*$/gim, "")
+    .replace(/[#>*_`~|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+/**
+ * What the new agent is told when a stuck agent's part goes to them: the user's original
+ * instructions, and that someone tried first. The earlier attempt's notes reach them as context
+ * (never as instructions), so only the user's own words are passed on here.
+ */
+export function handOverText(instructions: string, from: string): string {
+  return `${instructions.trim()}\n\n${from} worked on this first and got stuck; their notes are on the task.`;
+}
 
 /** States that wait on the user: the board's "Needs you". */
 export const NEEDS_USER: ReadonlySet<CrewState> = new Set(["needs", "failed", "proposed"]);

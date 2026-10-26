@@ -48,7 +48,7 @@ export function crewLine(crew: CrewMember[], assignees: Assignee[]): { text: str
   return undefined;
 }
 
-function CrewRow({ crew, assignees }: { crew: CrewMember[]; assignees: Assignee[] }) {
+function CrewRow({ card, crew, assignees }: { card: Card; crew: CrewMember[]; assignees: Assignee[] }) {
   const line = crewLine(crew, assignees);
   return (
     <div className="card-crew">
@@ -56,7 +56,7 @@ function CrewRow({ crew, assignees }: { crew: CrewMember[]; assignees: Assignee[
         {crew.map((m) => (
           <a
             key={m.agent}
-            href={`#/t/${memberIssue(m)}`}
+            href={`#/t/${card.identifier}/${memberIssue(m)}`}
             className="crew-link"
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
@@ -123,7 +123,7 @@ export function CardView({ card, assignees, selected, overlay, closed, onOpen, o
       onClick={() => onOpen(card)}
     >
       <div className="card-title">{card.title}</div>
-      {card.crew && <CrewRow crew={card.crew} assignees={assignees} />}
+      {card.crew && <CrewRow card={card} crew={card.crew} assignees={assignees} />}
       <div className="card-meta">
         <span className="ident">{card.identifier}</span>
         <Chips card={card.crew ? { ...card, working: undefined } : card} />

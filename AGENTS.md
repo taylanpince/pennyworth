@@ -133,6 +133,8 @@ scripts/verify-security.sh                         # also scans for secrets; run
   - Agents can't set `blocked` (needs `unblockDescriptor`) or `in_review` (needs a review path), which triggers "disposition required" spam. The bridge only allows todo, in_progress, done and cancelled; agents finish with `task_handoff` or `done`.
   - `in_progress` requires an assignee.
   - `idempotencyKey` deduplication expires after **7 days**. The bridge's `task_create` also checks open issues for the marker comment (`<!-- source:… -->`).
+  - **Paperclip also deduplicates by title:** a new issue whose title matches an open sibling made in the last 48 hours comes back as that sibling (`deduplicated: true`, `recent_open_title`). Crew parts all carry the task's title, so the board creates them with `allowDuplicate: true` (D-45). Check `deduplicated` whenever you create issues with repeated titles.
+  - **A run's ending:** only `in_progress` counts as "missing disposition" when an agent's run ends; `todo` assigned to the agent is fine. Comments wake the assignee unless the issue is done or cancelled. That's why an agent's own part of a task (D-45) is handed off as `todo` and never closed by the agent.
 - **Codex and MCP delivery:**
   - The tool gateway **drops MCP annotations**, so Codex would refuse every write tool (approval policy "never"). MCP servers are therefore written directly into `/paperclip/.codex/config.toml` with `default_tools_approval_mode = "approve"` (by `paperclip-setup.mjs`).
   - Paperclip copies that file into each managed Codex home **only once**, so the setup script also patches existing homes.

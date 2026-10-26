@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assignees, buildBoard } from "../src/board.js";
-import { crewOf, foldedChildren, issueState, mostUrgent, type CrewInput } from "../src/crew.js";
+import { crewOf, foldedChildren, handOverText, issueState, mostUrgent, summaryOf, type CrewInput } from "../src/crew.js";
 import type { Agent, Issue } from "../src/paperclip.js";
 
 const ME = "user-1";
@@ -44,7 +44,7 @@ describe("folding sub-tasks into their card (D-45)", () => {
     const done = issue({ parentId: parent.id, assigneeAgentId: "a-ada", status: "done" });
     const board = buildBoard({ open: [parent], closed: [done], placements: new Map(), seen: new Map(), installedAt: SEEN, assignees: list, crew: { working: new Map(), jobs: new Map() } });
     expect(board.done).toEqual([]);
-    expect(board.buckets.triage[0]!.crew).toEqual([{ agent: "a-ada", state: "done", issues: [{ id: done.id, identifier: done.identifier, state: "done" }] }]);
+    expect(board.buckets.triage[0]!.crew).toEqual([{ agent: "a-ada", state: "done", issues: [{ id: done.id, identifier: done.identifier, title: "t", state: "done" }] }]);
   });
 });
 
@@ -63,9 +63,15 @@ describe("an agent's state", () => {
     expect(issueState(i, ada, input({ jobs: new Map([[i.identifier, "timeout"]]) }))).toBe("failed");
     expect(issueState(i, ada, input({ jobs: new Map([[i.identifier, "done"]]) }))).toBe("done");
   });
+  it("queued only until someone touches it: an agent waiting on you after a reply isn't queued", () => {
+    const fresh = issue({ assigneeAgentId: "a-ada", createdAt: "2026-10-26T10:00:00Z", lastActivityAt: "2026-10-26T10:00:05Z" });
+    expect(issueState(fresh, ada, input())).toBe("queued");
+    expect(issueState({ ...fresh, lastActivityAt: "2026-10-26T10:30:00Z" }, ada, input())).toBe("done");
+  });
   it("needs you: something new you haven't read", () => {
     expect(issueState(issue({ assigneeAgentId: "a-ada", status: "in_review", lastActivityAt: "2026-10-26T12:00:00Z" }), ada, input())).toBe("needs");
-    expect(issueState(issue({ assigneeAgentId: "a-ada", status: "done", lastActivityAt: "2026-10-26T12:00:00Z" }), ada, input())).toBe("done");
+    expect(issueState(issue({ assigneeAgentId: "a-ada", status: "done", lastActivityAt: "2026-10-26T12:00:00Z" }), ada, input())).toBe("needs");
+    expect(issueState(issue({ assigneeAgentId: "a-ada", status: "done" }), ada, input())).toBe("done");
   });
 });
 
@@ -91,5 +97,15 @@ describe("the crew of a card", () => {
   it("most urgent first: you, then stuck, then to approve", () => {
     expect(mostUrgent(["working", "failed", "proposed"])).toBe("failed");
     expect(mostUrgent([])).toBe("done");
+  });
+});
+
+describe("words between the crew and the board", () => {
+  it("sums up an agent's comment in one line", () => {
+    expect(summaryOf("## Summary\n\nFixed the **flaky** test in [board](https://x/y).\n\n```\nlog\n```\n<!-- pennyworth-runner -->")).toBe("Fixed the flaky test in board. …");
+    expect(summaryOf("a".repeat(300)).length).toBe(180);
+  });
+  it("hands over the user's instructions with a note, never the stuck agent's text", () => {
+    expect(handOverText("Fix the flaky e2e test.\n", "Linus")).toBe("Fix the flaky e2e test.\n\nLinus worked on this first and got stuck; their notes are on the task.");
   });
 });

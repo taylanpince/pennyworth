@@ -298,4 +298,17 @@ export const CreateSchema = z
   })
   .strict();
 
+/** Bring an agent onto one of your tasks with instructions (D-45). */
+export const AddAgentSchema = z
+  .object({
+    agent: z.string().min(1).max(64),
+    instructions: z.string().trim().min(1).max(30_000),
+    model: z.string().trim().max(120).optional(),
+    effort: z.string().trim().max(20).optional(),
+  })
+  .strict();
+
+/** Give a stuck agent's part of a task to another agent (D-45). */
+export const HandOverSchema = z.object({ from: z.string().min(1).max(64), to: z.string().min(1).max(64) }).strict();
+
 export class BadRequest extends Error {}

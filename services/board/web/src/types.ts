@@ -52,7 +52,7 @@ export type CrewState = "needs" | "failed" | "proposed" | "working" | "queued" |
 export interface CrewMember {
   agent: string;
   state: CrewState;
-  issues: { id: string; identifier: string; state: CrewState }[];
+  issues: { id: string; identifier: string; title: string; state: CrewState }[];
   finished?: number;
   since?: string | null;
 }
@@ -188,6 +188,8 @@ export interface IssueView extends Omit<Card, "scheduled" | "recurring" | "worki
   comments: CommentView[];
   files: FileView[];
   parent: TaskRef | null;
+  /** The agents on this task, with each one's latest word (D-45). */
+  crew: (CrewMember & { said: { text: string; at: string } | null })[];
 }
 
 /** A file on a task (D-43). */
