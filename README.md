@@ -129,8 +129,10 @@ Then drop a transcript into your transcripts folder, or have a Meet call that pr
 | Slack Scout | every 30 min in work hours | Slack read/search; Paperclip task search/create/update/close |
 | Telegram Scout | every 30 min in work hours | Telegram read (your chats) and mention candidates; Paperclip task search/create/update/close |
 | Inbox Agent | every 30 min in work hours: one task per Gmail thread labelled `pennyworth` (archived or not), closed when the label is removed | Gmail read/search; Paperclip task search/create/update/close |
-| Assistant | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; Glean search; reference docs; Primer read + publish when asked; GitHub issues/PRs read + comment and open issues when asked; notes read + meeting-note corrections; cached web search; Paperclip tasks |
-| Engineer · Codex / · Claude / · OpenRouter | never woken: assignment targets for the runner | none (the runner does the work) |
+| Assistant (Alfred) | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; Glean search; reference docs; Primer read + publish when asked; GitHub issues/PRs read + comment and open issues when asked; notes read + meeting-note corrections; cached web search; Paperclip tasks |
+| Engineer · Codex (Grace) / · Claude (Ada) / · OpenRouter (Linus) | never woken: assignment targets for the runner | none (the runner does the work) |
+
+The agents you assign are your crew: each has a name, a portrait and a one-line voice (`persona` in `config/paperclip.yaml`, D-45). Naming one in a comment ("let Ada do it") picks that Engineer.
 
 Each agent sees only the MCP servers and tools listed for it in `config/paperclip.yaml` (`mcp_servers`, `enabled_tools`); everything else is disabled in its Codex arguments. Schedules live there too. Run a routine on demand with **Run now** in Paperclip.
 
@@ -173,7 +175,7 @@ Drag cards to rank or move them (on a phone, use a card's arrow). Open a card to
 
 **Files as context:** **Attach** in a task's reply box (or paste or drop files there; on a phone, photos too) adds documents, logs, screenshots or notes to the task, up to 10 MB each. With a reply, the reply names them ("Attached: `spec.pdf`"), so the Assistant or the Engineer reads them with your request; without one, they wait on the task for the next request. The Assistant reads text, images, and PDFs through a text version the board makes; Engineer jobs find them in the workspace under `.pennyworth/files/`, sub-tasks with their parent's files too ([D-43](docs/DECISIONS.md)). Other formats (Word, Excel) are stored and handed to Engineer jobs, but the Assistant can't read them: attach a PDF instead.
 
-**Agents** (key `a`; on a phone, the first tab) switches to who is working on what: every agent run in progress with the tasks it works on, how long it has been running and its latest message, the Engineer jobs running or queued on this machine, and what finished in the last 12 hours (scans on request). On the board itself, a card an agent is working on carries a pulsing badge with the agent and elapsed time ("Assistant · 3m", "Codex · 12m"), or "Engineer queued". The status *In progress* alone doesn't mean anything is running.
+**Crew** (key `a`; on a phone, the first tab) switches to who is working on what: a tile for each crew member (Alfred, Grace, Ada, Linus) with the tasks they're on now, their queue and what they finished in the last 12 hours, then the background agents' runs (scans on request). On the board itself, a card an agent is working on carries a pulsing badge with the agent and elapsed time ("Assistant · 3m", "Codex · 12m"), or "Engineer queued". The status *In progress* alone doesn't mean anything is running.
 
 Keyboard: `j`/`k` and `h`/`l` (or arrows) to move, `Enter` to open, `e` done, `1`–`5` to move to Triage…Backlog, `J`/`K` to rank, `c` new task, `/` search, `b` brief, `r` recurring, `?` for the rest.
 

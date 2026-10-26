@@ -60,7 +60,10 @@ export function resolveOpenRouterModel(name, models) {
   return /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._:-]*$/.test(n) ? n : undefined;
 }
 
-export function intakePrompt({ user, title, description, instructions, latest, candidates, models, openrouter = [], known, previousMode, busy, hasWork, lastResult }) {
+/** The Engineers by name (D-45): naming one picks its engine ("let Ada do it" → claude). */
+const crewLine = (crew) => (crew.length ? `; or the engine of an Engineer they name: ${crew.map((c) => `${c.name} → "${c.engine}"`).join(", ")}` : "");
+
+export function intakePrompt({ user, title, description, instructions, latest, candidates, models, openrouter = [], crew = [], known, previousMode, busy, hasWork, lastResult }) {
   return `You read ${user}'s request to a coding agent and extract its settings as JSON. Do not do the task itself and do not run any tools.
 
 Fields:
@@ -79,7 +82,7 @@ Fields:
   - "investigate": research, a report, a spec, a plan or a review. No files change.
   - "implement": code or files to be written or changed now (fix, add, implement, update, change…).
   "answer" is for an actual question. A report that something is broken (an error, a failing build, test or deploy, pasted logs) without a question asks for it to be fixed: "implement". Otherwise, if unsure whether changes are wanted, do not pick "implement". A bare follow-up such as "continue", "go on" or "try again" keeps the previous mode${previousMode ? ` (it was "${previousMode}")` : ""}. But a go-ahead ("go ahead", "do it", "yes, apply them", "sounds good, make the changes") right after a report or plan that proposes changes (see the last result below) is "implement".
-- engine: "openrouter" if they ask for OpenRouter or opencode, or name a model from the OpenRouter list below (GLM, DeepSeek, Kimi, Qwen…); "claude" if they ask for Claude or Claude Code; "codex" if they name Codex; otherwise "".
+- engine: "openrouter" if they ask for OpenRouter or opencode, or name a model from the OpenRouter list below (GLM, DeepSeek, Kimi, Qwen…); "claude" if they ask for Claude or Claude Code; "codex" if they name Codex${crewLine(crew)}; otherwise "".
 - model: a model they name, mapped to a known model: a Codex model (e.g. "astra"); for Claude, "opus", "sonnet", "haiku", "fable" or a full claude-… id; for OpenRouter, the id from the list (e.g. "deepseek" → the DeepSeek model listed first), or the full provider/model id they wrote. Otherwise "" (also for "use OpenRouter" alone).
 - primer: true if ${user} wants the result as a Primer document: the request asks to publish, put or share it on Primer, or for a Primer report or doc (Primer is the organization's document host). A Primer link given only to read is not that. Otherwise false.
 - question: only if repo is "" and the task has no repository yet, one short plain-language question asking which repository to use. Otherwise "".
@@ -161,9 +164,9 @@ export async function askCodex(cfg, prompt, schema) {
 }
 
 /** Run the intake call. Resolves with validated settings; rejects on failure (callers fall back). */
-export async function readRequest({ cfg, user, title, description, instructions, latest, candidates, openrouter = [], known, previousMode, busy, hasWork, lastResult }) {
+export async function readRequest({ cfg, user, title, description, instructions, latest, candidates, openrouter = [], crew = [], known, previousMode, busy, hasWork, lastResult }) {
   const models = codexModels();
-  const raw = await askCodex(cfg, intakePrompt({ user, title, description, instructions, latest, candidates, models, openrouter, known, previousMode, busy, hasWork, lastResult }), INTAKE_SCHEMA);
+  const raw = await askCodex(cfg, intakePrompt({ user, title, description, instructions, latest, candidates, models, openrouter, crew, known, previousMode, busy, hasWork, lastResult }), INTAKE_SCHEMA);
   return validateIntake(raw, { candidates, models, openrouter });
 }
 

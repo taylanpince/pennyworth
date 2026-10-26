@@ -15,6 +15,14 @@ export interface Assignee {
   engine?: "codex" | "claude" | "openrouter";
   defaultModel?: string;
   efforts?: string[];
+  /** The crew member's name, voice and portrait (D-45). */
+  persona?: Persona;
+}
+
+export interface Persona {
+  name: string;
+  voice: string;
+  avatar: string;
 }
 
 export interface Card {
@@ -52,6 +60,7 @@ export interface Session {
   id: string;
   source: "agent" | "runner";
   agent: string;
+  agentId: string | null;
   state: "working" | "queued";
   startedAt: string | null;
   doing?: string;
@@ -66,6 +75,7 @@ export interface Finished {
   id: string;
   source: "agent" | "runner";
   agent: string;
+  agentId: string | null;
   status: string;
   startedAt: string | null;
   finishedAt: string | null;

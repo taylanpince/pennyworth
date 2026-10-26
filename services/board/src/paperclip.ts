@@ -12,7 +12,7 @@ export interface Agent {
   status: string;
   adapterType: string;
   adapterConfig?: Record<string, unknown>;
-  metadata?: { setupKey?: string; models?: unknown } | null;
+  metadata?: { setupKey?: string; models?: unknown; persona?: unknown } | null;
 }
 
 export interface Issue {

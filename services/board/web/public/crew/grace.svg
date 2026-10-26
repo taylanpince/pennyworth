@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><title>Grace</title>
+<rect width="64" height="64" fill="#24324f"/>
+<path d="M11 64c2-12 10-18 21-18s19 6 21 18z" fill="#0f1729"/>
+<path d="M16 58h7M41 58h7" stroke="#d9b45a" stroke-width="2.2"/>
+<path d="M27 46l5 7 5-7" fill="#f6efe2"/>
+<rect x="28" y="37" width="8" height="9" rx="3" fill="#e2c7ad"/>
+<ellipse cx="32" cy="28" rx="9.5" ry="11.5" fill="#efd9c3"/>
+<g fill="#e9e6df"><circle cx="23" cy="20" r="4.5"/><circle cx="29" cy="16" r="5"/><circle cx="36" cy="16" r="5"/><circle cx="42" cy="21" r="4.5"/><circle cx="21.5" cy="26" r="3.6"/><circle cx="43" cy="27" r="3.6"/></g>
+<circle cx="28.5" cy="28.5" r="1.2" fill="#17201f"/><circle cx="35.5" cy="28.5" r="1.2" fill="#17201f"/>
+<path d="M29 34c2 1.4 4 1.4 6 0" fill="none" stroke="#b5776a" stroke-width="1.2" stroke-linecap="round"/>
+</svg>

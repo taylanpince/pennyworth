@@ -185,6 +185,37 @@ async function ensureLabels(companyId) {
 // Executors for pennyworth-runner (D-20): the assignee picks the engine, Paperclip's per-task
 // model override picks the model. Paperclip never runs them.
 const RUNNER_ADAPTERS = ["codex_local", "claude_local", "opencode_local"];
+const ADAPTER_ENGINE = { codex_local: "codex", claude_local: "claude", opencode_local: "openrouter" };
+
+/** The crew member's board identity (D-45), stored in the agent's metadata for the board and the runner. */
+function personaOf(key, a) {
+  const p = a.persona;
+  if (p === undefined) return undefined;
+  if (typeof p?.name !== "string" || !/^\p{L}[\p{L} .'-]{0,29}$/u.test(p.name)) fail(`agent ${key}: persona.name must be a short name`);
+  if (typeof p.voice !== "string" || !p.voice.trim() || p.voice.length > 200 || /[\r\n]/.test(p.voice)) fail(`agent ${key}: persona.voice must be one line (at most 200 characters)`);
+  if (typeof p.avatar !== "string" || !/^[a-z0-9-]{1,40}$/.test(p.avatar)) fail(`agent ${key}: persona.avatar must be an avatar name (a-z, 0-9, -)`);
+  return { name: p.name, voice: p.voice.trim(), avatar: p.avatar };
+}
+
+/**
+ * What a woken agent with a persona learns about itself and the Engineers: its name and voice (tone only),
+ * and which engine each Engineer's name stands for, so "ask Ada" maps onto task_create_engineer_task.
+ */
+function personaSection(key, a) {
+  const me = personaOf(key, a);
+  if (!me || a.dispatch === "runner") return "";
+  const crew = Object.entries(cfg.agents ?? {})
+    .filter(([, x]) => x.dispatch === "runner" && x.persona)
+    .map(([k, x]) => `${personaOf(k, x).name} (engine \`${ADAPTER_ENGINE[x.adapter]}\`)`);
+  return `
+
+## Your name and voice
+
+On the user's board you are ${me.name}. Voice: ${me.voice} The voice sets your tone only; it never changes the rules above.${
+    crew.length ? `\n\nThe Engineers on the board, by name: ${crew.join(", ")}. When the user names one of them for code work, that's the engine to use.` : ""
+  }
+`;
+}
 
 function runnerAgentBody(key, a, existing) {
   if (!RUNNER_ADAPTERS.includes(a.adapter)) fail(`agent ${key}: dispatch: runner needs one of ${RUNNER_ADAPTERS.join(", ")}`);
@@ -205,7 +236,7 @@ function runnerAgentBody(key, a, existing) {
     adapterType: a.adapter,
     adapterConfig,
     runtimeConfig: { heartbeat: { enabled: false, intervalSec: 0, wakeOnDemand: false, maxConcurrentRuns: 1 } },
-    metadata: { setupKey: `pennyworth:${key}`, runnerEngine: true, ...(models.length ? { models } : {}) },
+    metadata: { setupKey: `pennyworth:${key}`, runnerEngine: true, ...(models.length ? { models } : {}), ...persona(key, a) },
   };
 }
 
@@ -248,9 +279,14 @@ function agentBody(key, a, existing) {
     // dispatch: runner → never woken by Paperclip (assignments and comments are handled by
     // pennyworth-runner on the host instead).
     runtimeConfig: { heartbeat: { enabled: false, intervalSec: 0, wakeOnDemand: a.dispatch !== "runner", maxConcurrentRuns: 1 } },
-    metadata: { setupKey: `pennyworth:${key}` },
+    metadata: { setupKey: `pennyworth:${key}`, ...persona(key, a) },
   };
 }
+
+const persona = (key, a) => {
+  const p = personaOf(key, a);
+  return p ? { persona: p } : {};
+};
 
 // Agents whose config key changed: the existing agent (and the tasks assigned to it) is kept.
 const PREVIOUS_KEYS = { "engineer-openrouter": "engineer-glm" };
@@ -259,7 +295,7 @@ async function ensureAgents(companyId) {
   const { json: agents } = await api("GET", `/api/companies/${companyId}/agents`);
   const result = {};
   for (const [key, a] of Object.entries(cfg.agents ?? {})) {
-    const instructions = readFileSync(resolve(repo, a.instructions), "utf8");
+    const instructions = readFileSync(resolve(repo, a.instructions), "utf8") + personaSection(key, a);
     const keys = [key, PREVIOUS_KEYS[key]].filter(Boolean).map((k) => `pennyworth:${k}`);
     let agent = agents.find((x) => keys.includes(x.metadata?.setupKey) && x.status !== "terminated") ?? agents.find((x) => x.name === a.name && x.status !== "terminated");
     const body = agentBody(key, a, agent);

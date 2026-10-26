@@ -72,6 +72,36 @@ describe("agentsView", () => {
   });
 });
 
+describe("who is behind a session (D-45)", () => {
+  const crew = [
+    ...agents,
+    { id: "e-codex", name: "Engineer · Codex", status: "idle", adapterType: "codex_local", metadata: { setupKey: "pennyworth:engineer" } },
+    { id: "e-claude", name: "Engineer · Claude", status: "idle", adapterType: "claude_local", metadata: { setupKey: "pennyworth:engineer-claude" } },
+  ] as Agent[];
+  const runner = {
+    at: ago(1),
+    running: [{ issueId: "11111111-1111-1111-1111-111111111111", identifier: "PEN-900", engine: "Codex (gpt-5.5, high effort)", startedAt: ago(10) }],
+    queued: [{ issueId: "22222222-2222-2222-2222-222222222222", identifier: "PEN-901" }],
+    recent: [
+      { issueId: "33333333-3333-3333-3333-333333333333", identifier: "PEN-899", engine: "Claude Code (opus)", status: "done", startedAt: ago(50), finishedAt: ago(40) },
+      { issueId: "44444444-4444-4444-4444-444444444444", identifier: "PEN-898", engine: "OpenRouter deepseek/x", status: "done", startedAt: ago(50), finishedAt: ago(45) },
+    ],
+  };
+  it("maps runner jobs onto their Engineer, a queued one by its task's assignee", async () => {
+    const resolve = async (id: string | null) => ({ run: null, tasks: [], assigneeAgentId: id === "22222222-2222-2222-2222-222222222222" ? "e-claude" : null });
+    const live = [{ id: "r1", status: "running", agentId: "a-assistant", issueId: null, startedAt: ago(3), createdAt: ago(3) }] as LiveRun[];
+    const view = await agentsView({ live, past: [], runner, agents: crew, resolve, now: NOW });
+    expect(view.sessions.map((s) => [s.agent, s.agentId])).toEqual([
+      ["Assistant", "a-assistant"],
+      ["Engineer · Codex (gpt-5.5, high effort)", "e-codex"],
+      ["Engineer · Claude", "e-claude"],
+    ]);
+    // No OpenRouter Engineer here: the job keeps its name, without an agent.
+    expect(view.finished.map((f) => f.agentId)).toEqual(["e-claude", null]);
+    expect(view.sessions[0]).not.toHaveProperty("assigneeAgentId");
+  });
+});
+
 describe("runner report", () => {
   it("accepts the runner's shape and nothing else", () => {
     expect(RunnerReportSchema.safeParse({ running: [], queued: [], recent: [] }).success).toBe(true);

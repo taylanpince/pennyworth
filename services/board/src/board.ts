@@ -23,13 +23,29 @@ export interface Assignee {
   /** Models offered for this Engineer (config/paperclip.yaml `models`), besides Paperclip's list. */
   models?: string[];
   efforts?: string[];
+  /** The crew member's name, voice and avatar (D-45), from config/paperclip.yaml via setup. */
+  persona?: Persona;
+}
+
+export interface Persona {
+  name: string;
+  voice: string;
+  /** A portrait bundled with the board: /crew/<avatar>.svg. */
+  avatar: string;
+}
+
+const PersonaSchema = z.object({ name: z.string().min(1).max(30), voice: z.string().max(200), avatar: z.string().regex(/^[a-z0-9-]{1,40}$/) });
+
+export function personaOf(agent: Agent): Persona | undefined {
+  const p = PersonaSchema.safeParse(agent.metadata?.persona);
+  return p.success ? { name: p.data.name, voice: p.data.voice, avatar: p.data.avatar } : undefined;
 }
 
 export function assignees(agents: Agent[]): Assignee[] {
   const live = agents.filter((a) => a.status !== "terminated");
   const out: Assignee[] = [{ key: "me", kind: "me", name: "You" }];
   const assistant = live.find((a) => a.metadata?.setupKey === "pennyworth:assistant");
-  if (assistant) out.push({ key: assistant.id, kind: "assistant", name: assistant.name });
+  if (assistant) out.push({ key: assistant.id, kind: "assistant", name: assistant.name, ...withPersona(assistant) });
   const engineers = live.filter((a) => /^pennyworth:engineer(-|$)/.test(a.metadata?.setupKey ?? "") && ADAPTER_ENGINE[a.adapterType]);
   const order: Engine[] = ["codex", "claude", "openrouter"];
   engineers.sort((a, b) => order.indexOf(ADAPTER_ENGINE[a.adapterType]!) - order.indexOf(ADAPTER_ENGINE[b.adapterType]!));
@@ -37,10 +53,15 @@ export function assignees(agents: Agent[]): Assignee[] {
     const engine = ADAPTER_ENGINE[a.adapterType]!;
     const model = typeof a.adapterConfig?.model === "string" ? a.adapterConfig.model : "";
     const models = Array.isArray(a.metadata?.models) ? a.metadata.models.filter((m): m is string => typeof m === "string") : [];
-    out.push({ key: a.id, kind: "engineer", name: a.name, engine, adapterType: a.adapterType, defaultModel: model || undefined, ...(models.length ? { models } : {}), efforts: EFFORTS[engine] });
+    out.push({ key: a.id, kind: "engineer", name: a.name, engine, adapterType: a.adapterType, defaultModel: model || undefined, ...(models.length ? { models } : {}), efforts: EFFORTS[engine], ...withPersona(a) });
   }
   return out;
 }
+
+const withPersona = (a: Agent) => {
+  const persona = personaOf(a);
+  return persona ? { persona } : {};
+};
 
 export function assigneeKey(issue: Issue, list: Assignee[]): string | null {
   if (issue.assigneeAgentId) return list.some((a) => a.key === issue.assigneeAgentId) ? issue.assigneeAgentId : null;

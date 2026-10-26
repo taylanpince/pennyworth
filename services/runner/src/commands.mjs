@@ -142,6 +142,21 @@ export function openrouterModels(engineers) {
   return [...new Set(ids.filter((m) => typeof m === "string" && m.startsWith("openrouter/")).map((m) => m.slice("openrouter/".length)))];
 }
 
+/** The Engineer's board identity for an engine (D-45): name and voice, when setup gave it one. */
+export function personaFor(kind, engineers) {
+  const p = engineers.find((a) => ADAPTER_ENGINE[a.adapterType] === kind)?.metadata?.persona;
+  return typeof p?.name === "string" && p.name ? { name: p.name, voice: typeof p.voice === "string" ? p.voice : "" } : undefined;
+}
+
+/** The Engineers' names and the engines they stand for ("Ada" → claude), for the intake. */
+export function crewNames(engineers) {
+  return engineers.flatMap((a) => {
+    const engine = ADAPTER_ENGINE[a.adapterType];
+    const name = a.metadata?.persona?.name;
+    return engine && typeof name === "string" && name ? [{ name, engine }] : [];
+  });
+}
+
 /** Claude Code model names: the aliases (opus, sonnet, haiku, fable) or a full `claude-…` id. */
 export function isClaudeModel(model) {
   return /^(opus|sonnet|haiku|fable|claude-[a-z0-9.-]+)(\[1m\])?$/i.test(String(model ?? "").trim());

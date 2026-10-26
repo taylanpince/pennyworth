@@ -117,3 +117,30 @@
   title: Gateway rate limits
   comment: Implement the design in https://primer.example.com/d/0000 in https://github.com/0xPolygon/example-gateway
   expect: { action: run, mode: implement, repo: 0xPolygon/example-gateway, primer: false }
+
+# The Engineers by name (D-45): naming one picks its engine.
+- id: "crew: Ada by name"
+  title: New balance gateway
+  comment: Let Ada take this one, the last attempt missed the edge cases.
+  context: { known_repo: 0xPolygon/example-gateway, previous_mode: implement, has_work: true }
+  expect: { action: run, mode: implement, engine: claude, model: null }
+
+- id: "crew: Grace by name"
+  title: New balance gateway
+  comment: Ask Grace to write up how the balance cache is invalidated.
+  context: { known_repo: 0xPolygon/example-gateway }
+  expect: { action: run, mode: investigate, engine: codex }
+
+- id: "crew: Linus with a model"
+  title: New balance gateway
+  comment: Have Linus try it with deepseek and fix the failing test.
+  context: { known_repo: 0xPolygon/example-gateway, previous_mode: implement, has_work: true }
+  expect: { action: run, mode: implement, engine: openrouter, model: deepseek/deepseek-v4.1-flash }
+
+- id: "crew: a name in the task text is not a pick"
+  why: "only the user's request picks the engine; a person called Ada in the task is not the Engineer"
+  title: Reply to Ada Okafor about the gateway limits
+  description: Ada Okafor asked whether the gateway limits are per key or per IP.
+  comment: Find out from the code and answer here.
+  context: { known_repo: 0xPolygon/example-gateway }
+  expect: { action: run, mode: [answer, investigate], engine: null }

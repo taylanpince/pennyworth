@@ -5,8 +5,11 @@ import { api } from "./api";
 import { BUCKETS, BUCKET_NAMES, type Assignee, type Board, type Bucket, type Card, type Working } from "./types";
 import { SOURCE_NAMES, STATUS_BADGE, agentShort, ago, elapsed, shortDate, shortName } from "./util";
 
-export function Avatar({ assignee }: { assignee: Assignee | undefined }) {
+/** A crew member's portrait (D-45), or a coloured letter for you and agents without one. */
+export function Avatar({ assignee, size }: { assignee: Assignee | undefined; size?: number }) {
   if (!assignee) return null;
+  const style = size ? { width: size, height: size } : undefined;
+  if (assignee.persona) return <img className="avatar portrait" src={`/crew/${assignee.persona.avatar}.svg`} alt="" title={assignee.persona.name} style={style} draggable={false} />;
   const tone = assignee.kind === "me" ? "me" : assignee.kind === "assistant" ? "assistant" : assignee.engine ?? "agent";
   const letter = assignee.kind === "me" ? "Y" : shortName(assignee).slice(0, 1).toUpperCase();
   return (

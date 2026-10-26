@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { findRepos, mentionedRepos, readOnlyRefusal, normalizeRepo, parseCommand, repoAllowed, resolveEngine, resolveMode, resolveShells } from "../src/commands.mjs";
+import { crewNames, findRepos, personaFor, mentionedRepos, readOnlyRefusal, normalizeRepo, parseCommand, repoAllowed, resolveEngine, resolveMode, resolveShells } from "../src/commands.mjs";
 import { buildCommand, inDevshells } from "../src/engines.mjs";
 import { commitMessage, firstPrompt, followUpPrompt, latestReport, prTitle, stripCommitLine } from "../src/prompt.mjs";
 import { diskName, plan, syncFiles } from "../src/files.mjs";
@@ -1052,5 +1052,27 @@ describe("publishing a task's document to Primer (D-44)", async () => {
     assert.doesNotMatch(firstPrompt(base), /## Primer/);
     assert.match(firstPrompt({ ...base, primer: {} }), /## Primer[\s\S]*\.pennyworth\/primer\.md[\s\S]*a new document the first time/);
     assert.match(followUpPrompt({ ...base, primer: { url: "https://primer.example/d/x" } }), /new version of https:\/\/primer\.example\/d\/x/);
+  });
+});
+
+describe("the crew (D-45)", () => {
+  const engineers = [
+    { adapterType: "codex_local", metadata: { persona: { name: "Grace", voice: "Fast and terse.", avatar: "grace" } } },
+    { adapterType: "claude_local", metadata: { persona: { name: "Ada", voice: "Careful.", avatar: "ada" } } },
+    { adapterType: "opencode_local", metadata: {} },
+  ];
+  it("maps names onto engines, for the intake", async () => {
+    const { intakePrompt } = await import("../src/intake.mjs");
+    assert.deepEqual(crewNames(engineers), [{ name: "Grace", engine: "codex" }, { name: "Ada", engine: "claude" }]);
+    const p = intakePrompt({ user: "Taylan", title: "t", description: "", instructions: "let Ada do it", candidates: [], models: [], crew: crewNames(engineers) });
+    assert.match(p, /Engineer they name: Grace → "codex", Ada → "claude"/);
+    assert.doesNotMatch(intakePrompt({ user: "Taylan", title: "t", description: "", instructions: "x", candidates: [], models: [] }), /Engineer they name/);
+  });
+  it("gives the Engineer its name and voice", () => {
+    const base = { user: "Taylan", task: { identifier: "PEN-18", title: "t", description: "" }, workspace: "/w", repos: [{ slug: "a/b", path: "/w/b", base: "main", writable: true }], mode: "investigate", shells: ["llm"], instructions: "look" };
+    assert.deepEqual(personaFor("claude", engineers), { name: "Ada", voice: "Careful." });
+    assert.equal(personaFor("openrouter", engineers), undefined);
+    assert.match(firstPrompt({ ...base, persona: personaFor("claude", engineers) }), /^You are Ada, one of Pennyworth's engineering agents[\s\S]*Your voice: Careful\. It sets the tone/);
+    assert.match(firstPrompt(base), /^You are Pennyworth's engineering agent, working/);
   });
 });

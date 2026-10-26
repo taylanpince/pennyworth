@@ -33,7 +33,7 @@ export const PRIORITY_NAMES: Record<string, string> = { critical: "Urgent", high
 export function shortName(a: Assignee | undefined): string {
   if (!a) return "";
   if (a.kind === "me") return "You";
-  return a.name.replace(/^Engineer · /, "");
+  return a.persona?.name ?? a.name.replace(/^Engineer · /, "");
 }
 
 export const STATUS_BADGE: Record<string, { text: string; tone: string } | undefined> = {

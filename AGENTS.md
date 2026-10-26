@@ -27,11 +27,12 @@ host (NixOS, user taylan)
                              files attached as context go to Paperclip's attachments, PDFs with a text version (D-43);
                              :3121 on the LAN (pennyworth.local, paired devices from the home subnet only, D-23)
                              :3122 internal API (bearer token): scheduled moves and recurring tasks for the bridge and the runner (D-25),
-                             and the runner's job activity for the Agents view (D-34)
+                             and the runner's job activity for the Crew view (D-34, D-45)
 services/paperclip-tasks-mcp  stdio MCP bridge (mounted into paperclip) for task updates by agents
 ```
 
-Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`:
+Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`. The ones you assign have a persona on the board (D-45): name, one-line voice and portrait.
+
 
 | Agent | Purpose |
 |---|---|
@@ -40,8 +41,8 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`:
 | Slack Scout | Slack items for the user |
 | Telegram Scout | Telegram mentions, replies and DMs for the user, from the candidates telegram-mcp picks |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
-| Assistant | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, notes, reference docs, cached web, files attached to tasks), publishing to Primer, commenting on or opening GitHub issues when asked, acting on the user's replies (including scheduling a task or making it recurring), and running recurring tasks |
-| Engineer · Codex / · Claude / · OpenRouter | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20) |
+| Assistant (**Alfred**) | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, notes, reference docs, cached web, files attached to tasks), publishing to Primer, commenting on or opening GitHub issues when asked, acting on the user's replies (including scheduling a task or making it recurring), and running recurring tasks |
+| Engineer · Codex (**Grace**) / · Claude (**Ada**) / · OpenRouter (**Linus**) | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20) |
 
 ## Everyday commands
 
@@ -145,6 +146,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
   - A routine run creates a `todo` issue for the agent and wakes it.
   - `{{date}}` and `{{timestamp}}` are built-in routine variables. Other `{{vars}}` need defaults; setup adds them.
   - Use `always_enqueue` for dispatch routines (Process task replies), so runs aren't coalesced away.
+  - **Personas live in agent metadata** (`persona`, D-45), set by setup. The board and the runner read them from there; never key anything on a persona name (Paperclip names and setup keys stay the identity). A woken agent's voice is appended to its instructions by setup, so edit `persona` in the YAML, not the prompt file.
 
 ### Google
 

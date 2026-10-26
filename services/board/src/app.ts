@@ -135,12 +135,15 @@ export function createApp(opts: AppOptions): Server {
     if (!issue) return { run: null, tasks: [] };
     const tasks = runTasks(issue, prefix);
     for (const t of tasks) t.title ??= (await refCache(t.identifier).catch(() => null))?.title;
-    return { run: { identifier: issue.identifier, title: issue.title }, tasks };
+    return { run: { identifier: issue.identifier, title: issue.title }, tasks, assigneeAgentId: issue.assigneeAgentId };
   }
 
   async function activity(ctx: { agents: Awaited<ReturnType<typeof pc.agents>>; prefix: string }, withPast: boolean) {
     const [live, past] = await Promise.all([pc.liveRuns(), withPast ? pc.recentRuns(30) : Promise.resolve([])]);
-    return agentsView({ live, past, runner: shared.runner, agents: ctx.agents, resolve: (id) => runContext(id, ctx.prefix) });
+    const view = await agentsView({ live, past, runner: shared.runner, agents: ctx.agents, resolve: (id) => runContext(id, ctx.prefix) });
+    // Runner jobs report only their identifier; the Crew view names the task.
+    if (withPast) for (const t of [...view.sessions, ...view.finished].flatMap((x) => x.tasks)) t.title ??= (await refCache(t.identifier).catch(() => null))?.title;
+    return view;
   }
 
   /** Who is working on which task. Never fails the board: without it, cards just show no activity. */

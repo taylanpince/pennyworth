@@ -43,6 +43,8 @@ export interface Session {
   id: string;
   source: "agent" | "runner";
   agent: string;
+  /** The Paperclip agent behind it: the run's agent, or the Engineer of a runner job's engine. */
+  agentId: string | null;
   state: "working" | "queued";
   startedAt: string | null;
   /** Paperclip's status line for the run ("Receiving agent output"), or the runner's mode and repo. */
@@ -62,6 +64,7 @@ export interface Finished {
   id: string;
   source: "agent" | "runner";
   agent: string;
+  agentId: string | null;
   status: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -87,6 +90,8 @@ export function runTasks(issue: Pick<Issue, "identifier" | "title" | "descriptio
 export interface RunContext {
   run: TaskRef | null;
   tasks: TaskRef[];
+  /** Who the run's task is assigned to: tells which Engineer a queued runner job is for. */
+  assigneeAgentId?: string | null;
 }
 
 const isLive = (status: string) => status === "running" || status === "queued";
@@ -104,38 +109,42 @@ export async function agentsView(input: {
   const name = (id: string, fallback?: string) => input.agents.find((a) => a.id === id)?.name ?? fallback ?? "Agent";
   const sessions: Session[] = [];
   for (const r of input.live) {
-    const ctx = await input.resolve(r.issueId);
+    const { run, tasks } = await input.resolve(r.issueId);
     sessions.push({
       id: r.id,
       source: "agent",
       agent: name(r.agentId, r.agentName),
+      agentId: r.agentId,
       state: r.status === "queued" ? "queued" : "working",
       startedAt: r.startedAt ?? r.createdAt,
       doing: r.currentStatusMessage ?? undefined,
       tool: r.currentToolName ?? undefined,
       said: r.lastAssistantSnippet ? r.lastAssistantSnippet.slice(0, 400) : undefined,
       quiet: r.outputSilence?.level !== undefined && r.outputSilence.level !== "ok",
-      ...ctx,
+      run,
+      tasks,
     });
   }
   const runner = input.runner;
   const fresh = runner && now - Date.parse(runner.at) < RUNNER_STALE_MS ? runner : undefined;
   const ref = (j: { identifier: string }) => ({ run: { identifier: j.identifier }, tasks: [{ identifier: j.identifier }] });
   for (const j of fresh?.running ?? []) {
-    sessions.push({ id: `runner:${j.issueId}`, source: "runner", agent: engineerName(j), state: "working", startedAt: j.startedAt, doing: jobDoing(j), ...ref(j) });
+    sessions.push({ id: `runner:${j.issueId}`, source: "runner", agent: engineerName(j), agentId: engineerOf(j.engine, input.agents), state: "working", startedAt: j.startedAt, doing: jobDoing(j), ...ref(j) });
   }
   for (const j of fresh?.queued ?? []) {
-    sessions.push({ id: `runner:queued:${j.issueId}`, source: "runner", agent: "Engineer", state: "queued", startedAt: null, doing: "Waiting for a free slot", ...ref(j) });
+    const agentId = (await input.resolve(j.issueId)).assigneeAgentId ?? null;
+    sessions.push({ id: `runner:queued:${j.issueId}`, source: "runner", agent: (agentId && name(agentId, "Engineer")) || "Engineer", agentId, state: "queued", startedAt: null, doing: "Waiting for a free slot", ...ref(j) });
   }
 
   const finished: Finished[] = [];
   for (const r of input.past) {
     if (isLive(r.status) || !r.finishedAt || now - Date.parse(r.finishedAt) > FINISHED_WINDOW_MS) continue;
-    finished.push({ id: r.id, source: "agent", agent: name(r.agentId), status: r.status, startedAt: r.startedAt, finishedAt: r.finishedAt, detail: r.error ?? undefined, ...(await input.resolve(r.issueId)) });
+    const { run, tasks } = await input.resolve(r.issueId);
+    finished.push({ id: r.id, source: "agent", agent: name(r.agentId), agentId: r.agentId, status: r.status, startedAt: r.startedAt, finishedAt: r.finishedAt, detail: r.error ?? undefined, run, tasks });
   }
   for (const j of runner?.recent ?? []) {
     if (!j.finishedAt || now - Date.parse(j.finishedAt) > FINISHED_WINDOW_MS) continue;
-    finished.push({ id: `runner:${j.issueId}:${j.startedAt}`, source: "runner", agent: engineerName(j), status: j.status ?? "finished", startedAt: j.startedAt, finishedAt: j.finishedAt, detail: jobDoing(j), ...ref(j) });
+    finished.push({ id: `runner:${j.issueId}:${j.startedAt}`, source: "runner", agent: engineerName(j), agentId: engineerOf(j.engine, input.agents), status: j.status ?? "finished", startedAt: j.startedAt, finishedAt: j.finishedAt, detail: jobDoing(j), ...ref(j) });
   }
   finished.sort((a, b) => String(b.finishedAt).localeCompare(String(a.finishedAt)));
   return { sessions, finished: finished.slice(0, 25), runner: { reportedAt: runner?.at ?? null, stale: !fresh } };
@@ -151,6 +160,14 @@ export function workingOn(sessions: Session[]): Map<string, { agent: string; sin
     }
   }
   return out;
+}
+
+/** The Engineer for a runner job, from the engine label it reports ("Claude Code (opus)", "Codex", "OpenRouter …"). */
+const LABEL_ADAPTER: [RegExp, string][] = [[/^Codex\b/, "codex_local"], [/^Claude Code\b/, "claude_local"], [/^OpenRouter\b/, "opencode_local"]];
+function engineerOf(label: string | undefined, agents: Agent[]): string | null {
+  const adapter = LABEL_ADAPTER.find(([re]) => re.test(label ?? ""))?.[1];
+  const agent = adapter && agents.find((a) => a.adapterType === adapter && /^pennyworth:engineer(-|$)/.test(a.metadata?.setupKey ?? "") && a.status !== "terminated");
+  return agent ? agent.id : null;
 }
 
 const engineerName = (j: RunnerJob) => (j.engine ? `Engineer · ${j.engine}` : "Engineer");

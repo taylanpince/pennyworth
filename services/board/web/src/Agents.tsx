@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { PairRequired, api } from "./api";
-import type { Agents, Finished, Session, TaskRef } from "./types";
+import { Avatar } from "./components";
+import type { Agents, Assignee, Finished, Session, TaskRef } from "./types";
 import { ago, elapsed } from "./util";
 
 const STATUS: Record<string, { text: string; tone: "ok" | "bad" | "meh" }> = {
@@ -15,8 +16,11 @@ const STATUS: Record<string, { text: string; tone: "ok" | "bad" | "meh" }> = {
   interrupted: { text: "Interrupted", tone: "meh" },
 };
 
-/** The board's other view: which agents are running now, on which tasks, and what finished lately. */
-export function AgentsView({ query, onPairing }: { query: string; onPairing: () => void }) {
+/**
+ * The board's other view (D-34, D-45): the crew you assign work to, one tile each with what they're on,
+ * their queue and what they finished lately; then the background agents' runs (scans, briefs).
+ */
+export function CrewView({ query, crew, onPairing }: { query: string; crew: Assignee[]; onPairing: () => void }) {
   const [data, setData] = useState<Agents | null>(null);
   const [error, setError] = useState("");
   const [now, setNow] = useState(Date.now());
@@ -46,30 +50,38 @@ export function AgentsView({ query, onPairing }: { query: string; onPairing: () 
     const hay = [x.agent, x.run?.identifier, x.run?.title, ...x.tasks.flatMap((t) => [t.identifier, t.title])].join(" ").toLowerCase();
     return query.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
   };
-  const working = data.sessions.filter((s) => s.state === "working" && match(s));
-  const queued = data.sessions.filter((s) => s.state === "queued" && match(s));
+  const members = crew.filter((a) => a.kind !== "me");
+  const isCrew = (x: { agentId: string | null }) => members.some((m) => m.key === x.agentId);
+  const working = data.sessions.filter((s) => s.state === "working" && !isCrew(s) && match(s));
+  const queued = data.sessions.filter((s) => s.state === "queued" && !isCrew(s) && match(s));
   // Scans and other runs that touched none of your tasks only on request: they'd bury the rest.
-  const finishedAll = data.finished.filter(match);
+  const finishedAll = data.finished.filter((f) => !isCrew(f) && match(f));
   const finished = scans ? finishedAll : finishedAll.filter((f) => f.tasks.length);
   const hiddenScans = finishedAll.length - finished.length;
 
   return (
     <main className="agents">
       {error && <div className="offline">Offline: {error}. Retrying…</div>}
+      {data.runner.stale && (
+        <p className="agents-note">
+          {data.runner.reportedAt ? `The runner last reported ${ago(data.runner.reportedAt, now)} ago, so Engineer jobs may be missing.` : "The runner hasn't reported yet, so Engineer jobs aren't shown."}
+        </p>
+      )}
+      <div className="crew-tiles">
+        {members.map((m) => (
+          <CrewTile key={m.key} member={m} sessions={data.sessions.filter((s) => s.agentId === m.key && match(s))} finished={data.finished.filter((f) => f.agentId === m.key && f.tasks.length && match(f))} now={now} />
+        ))}
+      </div>
       <section>
         <header className="agents-head">
-          <h2>Working now</h2>
+          <h2>Background</h2>
           <span className="count">{working.length}</span>
+          <span className="hint">Scouts, the brief and meeting notes bring work in</span>
         </header>
-        {data.runner.stale && (
-          <p className="agents-note">
-            {data.runner.reportedAt ? `The runner last reported ${ago(data.runner.reportedAt, now)} ago, so Engineer jobs may be missing.` : "The runner hasn't reported yet, so Engineer jobs aren't shown."}
-          </p>
-        )}
         {working.map((s) => (
           <SessionRow key={s.id} s={s} now={now} />
         ))}
-        {!working.length && <p className="empty">No agent is working right now.</p>}
+        {!working.length && <p className="empty">Nothing running in the background.</p>}
       </section>
       {queued.length > 0 && (
         <section>
@@ -99,6 +111,71 @@ export function AgentsView({ query, onPairing }: { query: string; onPairing: () 
         {!finished.length && <p className="empty">{hiddenScans ? "No work on your tasks finished lately; only scans." : "Nothing finished lately."}</p>}
       </section>
     </main>
+  );
+}
+
+const ENGINE_NAMES: Record<string, string> = { codex: "Codex", claude: "Claude Code", openrouter: "OpenRouter" };
+
+function role(m: Assignee): string {
+  if (m.kind === "assistant") return "Assistant · research and drafts";
+  const model = m.defaultModel?.replace(/^openrouter\//, "");
+  return `Engineer · ${ENGINE_NAMES[m.engine ?? ""] ?? m.name}${model ? ` · ${model}` : ""}`;
+}
+
+/** One crew member: who they are, what they're on now, their queue, and what they finished lately. */
+function CrewTile({ member, sessions, finished, now }: { member: Assignee; sessions: Session[]; finished: Finished[]; now: number }) {
+  const on = sessions.filter((s) => s.state === "working");
+  const queued = sessions.filter((s) => s.state === "queued");
+  return (
+    <section className={`crew-tile${on.length ? " busy" : ""}`}>
+      <header className="crew-head">
+        <span className="crew-portrait">
+          <Avatar assignee={member} size={52} />
+        </span>
+        <div>
+          <h2>{member.persona?.name ?? member.name}</h2>
+          <div className="muted small">{role(member)}</div>
+        </div>
+      </header>
+      {member.persona?.voice && <p className="crew-voice">{member.persona.voice}</p>}
+      <h3>On it now{on.length ? ` · ${on.length}` : ""}</h3>
+      {on.map((s) => (
+        <div key={s.id} className="crew-job">
+          <Tasks tasks={s.tasks} fallback={s.run} />
+          <div className="session-doing">
+            {[s.doing, s.tool && `tool: ${s.tool}`].filter(Boolean).join(" · ")}
+            {s.startedAt && <span className="time"> · {elapsed(s.startedAt, now)}</span>}
+          </div>
+          {s.quiet && <div className="session-doing warn">No output for a while.</div>}
+          {s.said && <div className="session-said">{s.said}</div>}
+        </div>
+      ))}
+      {!on.length && <p className="empty">Free</p>}
+      {queued.length > 0 && (
+        <>
+          <h3>Queued · {queued.length}</h3>
+          {queued.map((s) => (
+            <Tasks key={s.id} tasks={s.tasks} fallback={s.run} />
+          ))}
+        </>
+      )}
+      {finished.length > 0 && (
+        <>
+          <h3>Finished lately</h3>
+          {finished.slice(0, 5).map((f) => {
+            const st = STATUS[f.status] ?? { text: f.status, tone: "meh" as const };
+            return (
+              <div key={f.id} className="crew-done" title={f.detail}>
+                <span className={`run-status run-${st.tone}`}>{st.text}</span>
+                <Tasks tasks={f.tasks} fallback={f.run} inline />
+                <span className="spacer" />
+                <span className="time">{f.finishedAt ? ago(f.finishedAt, now) : ""}</span>
+              </div>
+            );
+          })}
+        </>
+      )}
+    </section>
   );
 }
 

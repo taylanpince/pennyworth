@@ -17,7 +17,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AgentsView } from "./Agents";
+import { CrewView } from "./Agents";
 import { PairRequired, api, type Session } from "./api";
 import { CardView, GleanBanner, GoogleBanner, PlusIcon, SortableCard, TelegramBanner } from "./components";
 import { Drawer } from "./Drawer";
@@ -453,9 +453,9 @@ export function App() {
         </div>
         <span className="spacer" />
         {!mobile && (
-          <button className={`btn${view === "agents" ? " on" : ""}`} onClick={() => setView(view === "agents" ? "board" : "agents")} title="Agent sessions (a)">
+          <button className={`btn${view === "agents" ? " on" : ""}`} onClick={() => setView(view === "agents" ? "board" : "agents")} title="The crew and what they're on (a)">
             {board.agentsActive > 0 && <span className="live-dot" />}
-            Agents
+            Crew
             {board.agentsActive > 0 && <span className="btn-count">{board.agentsActive}</span>}
           </button>
         )}
@@ -493,7 +493,7 @@ export function App() {
         <nav className="tabs">
           <button className={view === "agents" ? "on" : ""} onClick={() => setView("agents")}>
             {board.agentsActive > 0 && <span className="live-dot" />}
-            Agents
+            Crew
             {board.agentsActive > 0 && <span className="count">{board.agentsActive}</span>}
           </button>
           {BUCKETS.map((b) => (
@@ -505,7 +505,7 @@ export function App() {
         </nav>
       )}
 
-      {view === "agents" && <AgentsView query={query} onPairing={() => setNeedsPairing(true)} />}
+      {view === "agents" && <CrewView query={query} crew={board.assignees} onPairing={() => setNeedsPairing(true)} />}
       <main className="columns" hidden={view !== "board"}>
         <DndContext sensors={sensors} collisionDetection={collision} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={() => (setActiveId(null), (dragFrom.current = null), void refresh(true))}>
           {visibleBuckets.map((b) => (
@@ -725,7 +725,7 @@ function Help() {
     ["b", "Today's brief"],
     ["d", "Show recently done"],
     ["r", "Show recurring tasks"],
-    ["a", "Agents: who is working on what"],
+    ["a", "Crew: who is working on what"],
     ["⌘↵", "Send reply / save description"],
     ["Esc", "Close"],
   ];

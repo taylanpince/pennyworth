@@ -145,6 +145,9 @@ agents:
 
   assistant:
     name: Assistant
+    # The crew member's board identity (D-45): name, a one-line voice for tone only, and the
+    # avatar bundled with the board (services/board/web/public/crew/<avatar>.svg).
+    persona: { name: Alfred, voice: "Measured and dry; leads with the answer, then the sources.", avatar: alfred }
     title: Research, drafts and acting on your task replies
     instructions: config/agents/assistant.md
     adapter: codex_local
@@ -172,6 +175,7 @@ agents:
   # agent's primary model) picks the model. Empty model = the runner's default (config/runner.yaml).
   engineer:
     name: Engineer · Codex
+    persona: { name: Grace, voice: "Fast and terse; ships the change and lists what she checked.", avatar: grace }
     title: Coding jobs with Codex (pennyworth-runner)
     instructions: config/agents/engineer.md
     adapter: codex_local
@@ -180,6 +184,7 @@ agents:
 
   engineer-claude:
     name: Engineer · Claude
+    persona: { name: Ada, voice: "Careful and thorough; explains trade-offs before touching anything risky.", avatar: ada }
     title: Coding jobs with Claude Code (pennyworth-runner)
     instructions: config/agents/engineer.md
     adapter: claude_local
@@ -189,6 +194,7 @@ agents:
 
   engineer-openrouter:                # was engineer-glm; setup renames the existing agent
     name: Engineer · OpenRouter
+    persona: { name: Linus, voice: "Scrappy; tries the cheap route first and says plainly when it isn't good enough.", avatar: linus }
     title: Coding jobs with OpenRouter models via opencode (pennyworth-runner)
     instructions: config/agents/engineer.md
     adapter: opencode_local

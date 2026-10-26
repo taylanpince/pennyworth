@@ -14,7 +14,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { findRepos, openrouterModels, stripHidden } from "../src/commands.mjs";
+import { crewNames, findRepos, openrouterModels, stripHidden } from "../src/commands.mjs";
 import { loadConfig, REPO_ROOT } from "../src/config.mjs";
 import { readApproval, readRequest } from "../src/intake.mjs";
 
@@ -57,7 +57,7 @@ async function main() {
 
   // The OpenRouter Engineer's models, as setup gives them to the agent (config/paperclip.yaml).
   const pcFile = ["config/paperclip.yaml", "config/paperclip.example.yaml"].map((f) => join(REPO_ROOT, f)).find(existsSync);
-  const engineers = Object.values(parseYaml(readFileSync(pcFile, "utf8")).agents ?? {}).map((a) => ({ adapterType: a.adapter, adapterConfig: { model: a.model }, metadata: { models: a.models } }));
+  const engineers = Object.values(parseYaml(readFileSync(pcFile, "utf8")).agents ?? {}).map((a) => ({ adapterType: a.adapter, adapterConfig: { model: a.model }, metadata: { models: a.models, persona: a.persona } }));
   const openrouter = openrouterModels(engineers);
 
   const repeat = Math.max(1, Number(process.env.EVAL_REPEAT ?? 3));
@@ -80,7 +80,7 @@ async function main() {
         }
         const read = await readRequest({
           cfg, user: cfg.selfName, title: c.title ?? "", description: c.description ?? "", instructions,
-          latest: stripHidden(c.comment ?? "").trim(), candidates, openrouter,
+          latest: stripHidden(c.comment ?? "").trim(), candidates, openrouter, crew: crewNames(engineers),
           known: ctx.known_repo, previousMode: ctx.previous_mode, busy: Boolean(ctx.busy), hasWork: Boolean(ctx.has_work), lastResult: ctx.last_result,
         });
         results.push({ c, read, bad: mismatches(read, c.expect ?? {}) });

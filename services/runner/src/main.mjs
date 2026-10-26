@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { RUNNER_MARKER, isAgentSubtask, ownRequest, findRepos, mentionedRepos, readOnlyRefusal, isClaudeModel, normalizeRepo, openrouterModels, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
+import { RUNNER_MARKER, isAgentSubtask, ownRequest, findRepos, mentionedRepos, readOnlyRefusal, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
 import { syncFiles } from "./files.mjs";
@@ -260,8 +260,9 @@ async function handleRequest(issue, latest) {
   const before = state.task(issue.id);
   const busy = running.has(issue.id) || queue.some((j) => j.issue.id === issue.id);
   const hasWork = await taskHasCommits(before);
-  const openrouter = openrouterModels(await pc.engineerAgents().catch(() => []));
-  const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, latest, candidates, openrouter, known: before.repo, previousMode: before.mode, busy, hasWork, lastResult: await lastResultOf(issue.id).catch(() => undefined) })
+  const engineers = await pc.engineerAgents().catch(() => []);
+  const openrouter = openrouterModels(engineers);
+  const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, latest, candidates, openrouter, crew: crewNames(engineers), known: before.repo, previousMode: before.mode, busy, hasWork, lastResult: await lastResultOf(issue.id).catch(() => undefined) })
     .catch((err) => (log("intake failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }), undefined));
   // Publishing needs something to publish: "build X and prepare a PR" on a fresh task is a run.
   const action = (read?.action === "push" || read?.action === "pr") && !hasWork ? "run" : (read?.action ?? "run");
@@ -536,7 +537,7 @@ async function startJob({ issue, instructions, read, candidates }) {
     const primer = primerRecord(issue.id);
     const prompt = resumed
       ? followUpPrompt({ user: cfg.selfName, mode, instructions, workspace, repos, branches, files, primer })
-      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells, instructions, earlier, files, primer });
+      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells, instructions, earlier, files, primer, persona: personaFor(engine.kind, await pc.engineerAgents().catch(() => [])) });
     const tipsBefore = await branchTips(workspace);
     const helper = repoHelper.register({ issue, workspace });
     let result;

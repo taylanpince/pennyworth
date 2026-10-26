@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { checkRequest } from "../src/app.js";
-import { BadRequest, UpdateSchema, assignees, buildBoard, commentView, keepMarkers, paperclipUpdate, replyTarget } from "../src/board.js";
+import { BadRequest, UpdateSchema, assignees, personaOf, buildBoard, commentView, keepMarkers, paperclipUpdate, replyTarget } from "../src/board.js";
 import type { Agent, Issue, Label } from "../src/paperclip.js";
 import { nextWorkday } from "../src/recurrence.js";
 import { Store, localDate } from "../src/store.js";
@@ -234,5 +234,20 @@ describe("request guard", () => {
     expect(checkRequest(req("POST", { ...ok, origin: "http://evil.example" }), hosts)).toBe("cross-origin");
     expect(checkRequest(req("POST", { ...ok, origin: "null" }), hosts)).toBe("opaque origin");
     expect(checkRequest(req("POST", { ...ok, "sec-fetch-site": "cross-site" }), hosts)).toBe("cross-site");
+  });
+});
+
+describe("personas (D-45)", () => {
+  const agent = (persona: unknown): Agent => ({ id: "00000000-0000-0000-0000-0000000000c1", name: "Engineer · Claude", status: "idle", adapterType: "claude_local", metadata: { setupKey: "pennyworth:engineer-claude", persona } });
+  it("takes a well-formed persona and ignores anything else", () => {
+    expect(personaOf(agent({ name: "Ada", voice: "Careful.", avatar: "ada" }))).toEqual({ name: "Ada", voice: "Careful.", avatar: "ada" });
+    expect(personaOf(agent({ name: "Ada", voice: "Careful.", avatar: "../x" }))).toBeUndefined();
+    expect(personaOf(agent(undefined))).toBeUndefined();
+  });
+  it("puts it on the assignee", () => {
+    const [, ada] = assignees([agent({ name: "Ada", voice: "Careful.", avatar: "ada", extra: "dropped" })]);
+    expect(ada).toMatchObject({ kind: "engineer", name: "Engineer · Claude", persona: { name: "Ada", voice: "Careful.", avatar: "ada" } });
+    expect(ada!.persona).not.toHaveProperty("extra");
+    expect(assignees([agent(undefined)])[1]).not.toHaveProperty("persona");
   });
 });

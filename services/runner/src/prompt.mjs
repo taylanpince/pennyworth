@@ -96,8 +96,10 @@ ${user} reads the result on Primer. Write the complete document in Markdown to \
 `;
 }
 
-export function firstPrompt({ user, task, workspace, repos, branches = [], mode, shells, instructions, earlier = "", files = [], primer }) {
-  return `You are Pennyworth's engineering agent, working for ${user} on Paperclip task ${task.identifier}: "${task.title}".
+export function firstPrompt({ user, task, workspace, repos, branches = [], mode, shells, instructions, earlier = "", files = [], primer, persona }) {
+  return `You are ${persona ? `${persona.name}, one of Pennyworth's engineering agents` : "Pennyworth's engineering agent"}, working for ${user} on Paperclip task ${task.identifier}: "${task.title}".${
+    persona?.voice ? `\n\nYour voice: ${persona.voice} It sets the tone of your reports only; the rules below always apply.` : ""
+  }
 
 ${workspaceSection({ workspace, repos, branches, mode })}
 ## Setup
