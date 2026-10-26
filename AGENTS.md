@@ -176,6 +176,11 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Message IDs have gaps:** small groups and DMs share the account's ID counter. Read "the messages before" with `read_chat_history`, never by ID range. `read_chat_history` returns newest first, up to 50; `get_new_messages` returns the earliest after an ID, oldest first, up to 100.
 - **Content is wrapped** in `<untrusted-telegram-content>` tags by telegram-mcp, and people paste API keys into these chats. The scout prompt forbids copying credentials into tasks. Message text is never written to disk or logged.
 
+### Primer
+
+- **Primer moved hosts on 2026-10-26** (`primer-polygon.up.railway.app` → `primer.polygon.tools`). The old host answers 308, which the MCP client won't follow, so every Primer call failed. The OAuth token survived the move: update `PRIMER_MCP_URL` in `.env` and `token_endpoint`/`resource` in `~/.config/pennyworth/primer/token.json`, then recreate primer-mcp. No new sign-in needed.
+- The new host answers an expired token with `{"error":"unauthenticated"}`; the proxy's auth-failure check must match it, or it doesn't refresh until its 30-minute reconnect.
+
 ### Glean
 
 - **Redirect URIs are restricted by admin policy** (2026-10-15). Dynamic registration refuses most loopback callbacks (`invalid_redirect_uri … not permitted by administrator policy`); `http://127.0.0.1:3120/callback` works, `/glean/callback` doesn't. That's why the board's Glean callback is the bare `/callback`. Probe a new redirect with a registration request before building on it.
