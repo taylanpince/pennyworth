@@ -9,7 +9,8 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { RUNNER_MARKER, isAgentSubtask, isUserPart, ownRequest, findRepos, mentionedRepos, readOnlyRefusal, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
-import { runAgent } from "./engines.mjs";
+import { observes, runAgent } from "./engines.mjs";
+import { gcpSession } from "./gcp.mjs";
 import { syncFiles } from "./files.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureGuardHooks, git, remoteIsEmpty } from "./git.mjs";
 import { codexModels, readApproval, readRequest, resolveModelAlias } from "./intake.mjs";
@@ -601,6 +602,7 @@ class UserError extends Error {}
 
 async function startJob({ issue, instructions, read, candidates }) {
   const controller = new AbortController();
+  let gcp;
   running.set(issue.id, { controller, identifier: issue.identifier, startedAt: new Date().toISOString() });
   reportActivity();
   let jobId;
@@ -618,7 +620,10 @@ async function startJob({ issue, instructions, read, candidates }) {
     let task = await applySettings(issue, before, inferred);
     task = await syncPicker(issue, full, task, Boolean(inferred.engine || inferred.model));
 
-    if (!task.repo) {
+    // Questions and investigations can run without a repository (D-48): logs, metrics and
+    // infrastructure, with pennyworth-repo for any code they turn out to need. Changes need one.
+    const repoless = !task.repo && !candidates.length && (task.mode ?? "investigate") !== "implement";
+    if (!task.repo && !repoless) {
       if (candidates.length === 1) state.updateTask(issue.id, { repo: candidates[0] });
       else {
         state.set(pendingKey, instructions);
@@ -646,11 +651,17 @@ async function startJob({ issue, instructions, read, candidates }) {
     const prNotes = await leaveFinishedPrs(issue, workspace);
     if (prNotes.length) instructions = `(Runner note: ${prNotes.join(" ")} Build on what is there now.)\n\n${instructions}`;
     const repos = await repoInfo(workspace, { naming: mode === "implement" ? issue : undefined });
-    const main = repos.find((r) => r.slug.toLowerCase() === task.repo.toLowerCase()) ?? repos[0];
     // Devshells: the ones chosen for this task earlier, else detected in every repository.
     const detected = [...new Set(repos.flatMap((r) => detectShells(r.path, cfg.devshells.detect)))];
     const shells = task.shells ?? resolveShells({}, detected, instructions, cfg);
     state.updateTask(issue.id, { shells, engine, mode });
+    // Grafana and Google Cloud reads for Claude Code and Codex (D-48): gcloud's devshell, and a
+    // read-only token of the job's own.
+    const runShells = observes(engine.kind) && cfg.gcp.shell && !shells.includes(cfg.gcp.shell) ? [...shells, cfg.gcp.shell] : shells;
+    gcp = observes(engine.kind)
+      ? await gcpSession({ credentialsFile: cfg.gcp.credentialsFile, dir: join(cfg.stateDir, "gcloud", issue.identifier), project: cfg.gcp.projects[0], log: (m, f) => log(m, { issue: issue.identifier, ...f }) })
+      : undefined;
+    if (gcp && gcp.state !== "ok" && gcp.state !== "missing") log("gcp unavailable for the job", { issue: issue.identifier, state: gcp.state, detail: gcp.detail });
 
     const logPath = join(logsDir, `${issue.identifier}-${Date.now()}.log`);
     jobId = state.startJob(issue.id, engineLabel(engine), logPath);
@@ -664,12 +675,12 @@ async function startJob({ issue, instructions, read, candidates }) {
     const historyKey = `history:${issue.id}`;
     const earlier = resumed ? "" : state.get(historyKey) || "";
     state.set(historyKey, `${state.get(historyKey) || ""}\n\n---\n\n${instructions}`.trim().slice(-20_000));
-    const where = repos.map((r) => `\`${r.slug}\``).join(", ");
+    const where = repos.length ? repos.map((r) => `\`${r.slug}\``).join(", ") : "no repository";
     await pc.startWork(
       issue.id,
       mode === "answer"
-        ? `Looking into your question in ${where} with ${engineLabel(engine)}. I'll answer here.`
-        : `${prNotes.length && mode === "implement" ? `${prNotes.join(" ")}\n\n` : ""}${resumed ? "Continuing" : "On it"}: ${mode === "implement" ? "making the changes" : "investigating"} in ${where}, with ${engineLabel(engine)}. I'll post the result here.\n\n_Workspace \`${workspace}\` · shells ${shells.join(", ")}_`,
+        ? `Looking into your question${repos.length ? ` in ${where}` : ""} with ${engineLabel(engine)}. I'll answer here.`
+        : `${prNotes.length && mode === "implement" ? `${prNotes.join(" ")}\n\n` : ""}${resumed ? "Continuing" : "On it"}: ${mode === "implement" ? "making the changes" : "investigating"}${repos.length ? ` in ${where}` : ""}, with ${engineLabel(engine)}. I'll post the result here.\n\n_Workspace \`${workspace}\` · shells ${runShells.join(", ")}${gcp && gcp.state !== "ok" ? ` · Google Cloud: ${gcp.detail}` : ""}_`,
     );
     log("job started", { issue: issue.identifier, repos: repos.map((r) => r.slug), engine: engine.kind, mode, resumed });
 
@@ -683,13 +694,14 @@ async function startJob({ issue, instructions, read, candidates }) {
     const crew = crewCtx && (!resumed || state.get(crewKey) !== crewHash) ? crewCtx : undefined;
     if (crewHash) state.set(crewKey, crewHash);
     const prompt = resumed
-      ? followUpPrompt({ user: cfg.selfName, mode, instructions, workspace, repos, branches, files, primer, crew })
-      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells, instructions, earlier, files, primer, persona: personaFor(engine.kind, await pc.engineerAgents().catch(() => [])), crew });
+      ? followUpPrompt({ user: cfg.selfName, mode, instructions, workspace, repos, branches, files, primer, crew, observe })
+      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells: runShells, instructions, earlier, files, primer, persona: personaFor(engine.kind, await pc.engineerAgents().catch(() => [])), crew, observe });
+    const observe = observes(engine.kind) ? { grafana: existsSync(cfg.grafanaTokenFile), gcp: { state: gcp.state, detail: gcp.detail, projects: cfg.gcp.projects } } : undefined;
     const tipsBefore = await branchTips(workspace);
     const helper = repoHelper.register({ issue, workspace });
     let result;
     try {
-      result = await runAgent({ cfg, engine, shells, worktree: workspace, prompt, sessionId: resumed ? state.task(issue.id).session_id : undefined, logPath, signal: controller.signal, env: helper.env });
+      result = await runAgent({ cfg, engine, shells: runShells, worktree: workspace, prompt, sessionId: resumed ? state.task(issue.id).session_id : undefined, logPath, signal: controller.signal, env: helper.env, gcp });
     } finally {
       helper.done();
     }
@@ -709,7 +721,7 @@ async function startJob({ issue, instructions, read, candidates }) {
     // Agents commit as they go: the run changed something if any branch moved or appeared.
     const committedNow = (await branchTips(workspace)) !== tipsBefore;
     const outcome = runOutcome({ ...result, timeoutMinutes: cfg.timeout_minutes ?? 60, mode, dirty: dirty.length > 0, committed: committedNow });
-    const whereNow = after.map((r) => `\`${r.slug}\``).join(", ");
+    const whereNow = after.length ? after.map((r) => `\`${r.slug}\``).join(", ") : "no repository";
     // Commit what's left uncommitted (implement, finished runs only), put every commit on a properly
     // named branch, and sign the agent's commits.
     const tidy = await tidyBranches(issue, workspace, { commitDirty: mode === "implement" && outcome.finished, message: publicSubject(commitMessage(result.lastMessage, `chore: ${full.title}`)) });
@@ -745,6 +757,7 @@ async function startJob({ issue, instructions, read, candidates }) {
     if (jobId) state.finishJob(jobId, "failed", String(err).slice(0, 500));
     await reportError(issue, err);
   } finally {
+    gcp?.done();
     running.delete(issue.id);
     drainQueue();
     reportActivity();
@@ -877,7 +890,7 @@ async function runCommand(issue, task, command) {
     state.updateTask(issue.id, { session_id: null });
     return void (await pc.comment(issue.id, "Session cleared: the next run starts a fresh agent conversation (the workspace and its branches are kept)."));
   }
-  if (!task?.repo || (!task.workspace && !task.worktree)) {
+  if ((!task?.repo && command !== "cleanup") || (!task?.workspace && !task?.worktree)) {
     return void (await pc.comment(issue.id, `There's nothing to ${command === "pr" ? "open a PR for" : command} yet: no work has been done on this task. Tell me what to build and I'll start; ${command === "pr" ? "**pr**" : "**push**"} works once there are commits.`));
   }
   if (running.has(issue.id)) return void (await pc.comment(issue.id, `Can't ${command} while a run is in progress. Comment **stop** first, or wait for it to finish.`));
@@ -1042,7 +1055,8 @@ async function prepareWorkspace(issue, task, { clone = true } = {}) {
   if (!task.workspace) state.updateTask(issue.id, { workspace });
   if (task.worktree) await moveIntoWorkspace(issue, task, workspace);
   if (clone) {
-    for (const slug of [task.repo, ...rememberRepos(issue.id, [])]) {
+    mkdirSync(workspace, { recursive: true });
+    for (const slug of [task.repo, ...rememberRepos(issue.id, [])].filter(Boolean)) {
       await addRepo(workspace, slug).catch((err) => {
         if (slug === task.repo) throw err;
         log("repository clone failed", { issue: issue.identifier, repo: slug, err: String(err.message ?? err).slice(0, 300) });

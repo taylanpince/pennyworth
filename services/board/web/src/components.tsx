@@ -367,6 +367,38 @@ export function GleanBanner({ glean, canConnect }: { glean: Board["glean"]; canC
 }
 
 /**
+ * Grafana sign-in: a banner when Pennyworth isn't signed in to Grafana yet, or Grafana stopped
+ * accepting its sign-in, with Connect / Reconnect on the laptop (Grafana returns to its loopback address).
+ */
+export function GrafanaBanner({ grafana, canConnect }: { grafana: Board["grafana"]; canConnect: boolean }) {
+  if (!grafana?.configured || (grafana.state !== "missing" && grafana.state !== "expired")) return null;
+  const since = new Date(grafana.since);
+  return (
+    <div className="alert" role="alert">
+      <div className="alert-row">
+        <span>
+          {grafana.state === "missing" ? (
+            <>Grafana isn't connected yet. The Engineers can't read logs and metrics until it is.</>
+          ) : (
+            <>
+              Grafana sign-in stopped working on {since.toLocaleDateString(undefined, { weekday: "long" })} at{" "}
+              {since.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}. The Engineers can't read logs and metrics.
+            </>
+          )}
+        </span>
+        {canConnect ? (
+          <a className="btn" href="/grafana/connect">
+            {grafana.state === "missing" ? "Connect" : "Reconnect"}
+          </a>
+        ) : (
+          <span className="alert-hint">Connect from the board on your computer.</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * Telegram sign-in (D-37): a banner when Pennyworth isn't signed in yet or Telegram ended its session,
  * with a small form (phone, the code Telegram sends, then the 2FA password if the account has one).
  * Only on the laptop's loopback address, like Google's Reconnect.

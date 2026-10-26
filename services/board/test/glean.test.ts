@@ -2,7 +2,7 @@ import type { AddressInfo } from "node:net";
 import pino from "pino";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
-import { GleanAuth } from "../src/glean.js";
+import { GleanAuth, GrafanaAuth } from "../src/mcpauth.js";
 import type { Paperclip } from "../src/paperclip.js";
 import { Store } from "../src/store.js";
 
@@ -85,5 +85,54 @@ describe("Glean sign-in routes", () => {
     const denied = await get(`${localBase}/callback?state=s&error=access_denied`, "127.0.0.1:3120");
     expect(denied.status).toBe(400);
     expect(denied.body).toContain("access_denied");
+  });
+});
+
+describe("Grafana sign-in routes", () => {
+  const seen: { path: string; body: unknown }[] = [];
+  const grafana = new GrafanaAuth("http://grafana", "t", undefined, (async (u: string | URL, init?: RequestInit) => {
+    const path = new URL(String(u)).pathname;
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    seen.push({ path, body });
+    if (path === "/auth/start") return json({ url: "https://mcp.grafana.com/mcp/oauth/authorize?grafana_url=x&state=s" });
+    if (path === "/auth/finish") return body.code === "good" ? json({ ok: true }) : json({ error: "Grafana refused the sign-in: invalid_grant" }, 400);
+    return json({}, 404);
+  }) as typeof fetch);
+  // Grafana alone: Glean's bare /callback must not reach Grafana.
+  const app = createApp({ paperclip: {} as Paperclip, store: new Store(":memory:"), log: pino({ level: "silent" }), staticDir: "/nonexistent", timezone: "UTC", grafana, allowedHosts: ["localhost:3120", "127.0.0.1:3120"], mode: "local" });
+  let base = "";
+  beforeAll(async () => {
+    await new Promise<void>((r) => app.listen(0, "127.0.0.1", r));
+    base = `http://127.0.0.1:${(app.address() as AddressInfo).port}`;
+  });
+  afterAll(() => void app.close());
+  const get = async (path: string) => {
+    const { request } = await import("node:http");
+    return new Promise<{ status: number; location?: string; body: string }>((resolve, reject) => {
+      const r = request(`${base}${path}`, { method: "GET", headers: { host: "localhost:3120" } }, (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => resolve({ status: res.statusCode!, location: res.headers.location, body: data }));
+      });
+      r.on("error", reject);
+      r.end();
+    });
+  };
+
+  it("sends the laptop to Grafana with its own callback, and finishes there", async () => {
+    const r = await get("/grafana/connect");
+    expect(r).toMatchObject({ status: 302, location: expect.stringMatching(/^https:\/\/mcp\.grafana\.com\//) });
+    expect(seen.at(-1)).toEqual({ path: "/auth/start", body: { redirect_uri: "http://localhost:3120/grafana/callback" } });
+    expect(await get("/grafana/callback?state=s&code=good")).toMatchObject({ status: 302, location: "/" });
+    expect(seen.at(-1)).toEqual({ path: "/auth/finish", body: { state: "s", code: "good" } });
+    const bad = await get("/grafana/callback?state=s&code=bad");
+    expect(bad.status).toBe(400);
+    expect(bad.body).toContain("connect Grafana: Grafana refused the sign-in");
+  });
+
+  it("leaves Glean's /callback alone when Glean isn't set up", async () => {
+    const before = seen.length;
+    expect((await get("/callback?state=s&code=good")).status).toBe(404);
+    expect(seen.length).toBe(before);
   });
 });

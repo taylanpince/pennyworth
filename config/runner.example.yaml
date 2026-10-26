@@ -35,6 +35,18 @@ primer:
   url: http://127.0.0.1:3123/mcp/read
   publish_url: http://127.0.0.1:3123/mcp
 
+# Grafana and Google Cloud, read-only, for Claude Code and Codex jobs only (D-48); never OpenRouter.
+# Grafana: grafana-mcp on loopback (token: $PENNYWORTH_SECRETS_DIR/grafana_mcp_token).
+# Google Cloud: scripts/gcloud-auth.sh signs in (again after the 16-hour session); each job gets a
+# one-hour token narrowed to read-only scopes, never the sign-in itself.
+grafana:
+  url: http://127.0.0.1:3124/mcp
+gcp:
+  credentials: ~/.config/pennyworth/gcloud/application_default_credentials.json
+  # Projects jobs are told about (the token can't list projects); the first is gcloud's default.
+  projects: []
+  shell: pulumi                       # the devshell with gcloud, added to every Claude Code and Codex job
+
 # Reads plain-language requests (target repo, reference repos, mode, model) with a short Codex call.
 intake:
   model: ""                           # empty = your Codex default

@@ -34,6 +34,7 @@ host (Linux, systemd user services)
     ├── primer-mcp             proxy to your organization's Primer: read documents, publish when you ask
     ├── glean-mcp              proxy to your organization's Glean: company-wide search, reads only
     ├── github-mcp             GitHub issues and pull requests with your gh token: read; comment or open issues when you ask
+    ├── grafana-mcp            proxy to Grafana Cloud's MCP server, read/query scopes only, for Engineer jobs (127.0.0.1:3124)
     └── board                  127.0.0.1:3120 task board (optional LAN listener for paired phones)
 services/paperclip-tasks-mcp   stdio bridge, mounted into paperclip, for agents' task updates
 ```
@@ -253,11 +254,16 @@ Publishing takes the exact word, as a comment on its own:
 
 Repositories outside your orgs are read-only (D-35): their branches are listed but never published.
 
+**Logs, metrics and infrastructure:** Ada (Claude Code) and Grace (Codex) read Grafana and Google Cloud, read-only, like you do locally with the Grafana MCP and `gcloud` ([D-48](docs/DECISIONS.md)). A question or investigation doesn't need a repository: "why did the bridge API 5xx at 3am?" runs straight against logs and metrics, and the agent clones the code it needs. Linus (OpenRouter) never gets them: those prompts go to third-party providers.
+
+- **Grafana:** set `GRAFANA_URL` in `.env` (e.g. `https://polygonprod.grafana.net`), `docker compose up -d grafana-mcp board`, and press **Connect** in the Grafana banner on the board (`http://127.0.0.1:3120`). Pennyworth asks Grafana for read and query scopes only, so Grafana itself refuses any change; grafana-mcp also exposes only queries and reads.
+- **Google Cloud:** run `scripts/gcloud-auth.sh` (a browser sign-in into Pennyworth's own gcloud directory; your `~/.config/gcloud` is untouched), and list your usual projects under `gcp.projects` in `config/runner.yaml`. Each job gets a one-hour token narrowed to per-API read-only scopes: logs, Monitoring, Compute, the GKE API (not kubectl), Cloud Run, Cloud DNS and Memorystore. Secret Manager, KMS, IAM, Cloud SQL, Storage and BigQuery are out of reach. Your Google Cloud session lasts 16 hours; when it runs out, jobs say so and you run the script again. Jobs can't read either gcloud sign-in.
+
 **Merging PRs:** give an Engineer task a list of approved PRs ("merge these one by one, at least 15 minutes apart, watch CI on master") and the runner merges them itself, in code, no agent involved ([D-46](docs/DECISIONS.md)). Before each merge, the PR must be approved with green checks, mergeable, and its base branch green. An approved draft is marked ready first. After each merge it waits for the base branch's CI and the gap, and comments as it goes. Anything red, unapproved, conflicting or stuck for 90 minutes stops the queue with a comment; "carry on" resumes, "stop" stops. Settings: `merges.gap_minutes` and `merges.timeout_minutes` in `config/runner.yaml`.
 
 Agents can't push or write to GitHub themselves: `gh` is wrapped read-only, pushes are disabled in the runner's clones, and a pre-push hook and an ssh wrapper both refuse them. Only *your* comments are instructions.
 
-Engine credentials live in `~/.config/pennyworth/` (0600): `openrouter_key` for OpenRouter, and `claude_oauth_token` from `claude setup-token` for Claude Code. Claude Code runs in a runner-owned home with no settings, plugins or connectors, no MCP servers but read-only Primer, a fixed tool allowlist, and `codex sandbox` around the whole process.
+Engine credentials live in `~/.config/pennyworth/` (0600): `openrouter_key` for OpenRouter, and `claude_oauth_token` from `claude setup-token` for Claude Code. Claude Code runs in a runner-owned home with no settings, plugins or connectors, no MCP servers but read-only Primer and Grafana, a fixed tool allowlist, and `codex sandbox` around the whole process.
 
 ## Slack
 
@@ -329,7 +335,7 @@ If Workspace policy blocks consent, nothing else breaks: matching reports "calen
 
 | File | Purpose | In git |
 |---|---|---|
-| `.env` | host paths, user IDs, vault folders, reference doc folders, board LAN settings, Slack client ID, Telegram aliases and excluded chats, Primer and Glean endpoints, GitHub comment organizations | no (`.env.example`) |
+| `.env` | host paths, user IDs, vault folders, reference doc folders, board LAN settings, Slack client ID, Telegram aliases and excluded chats, Primer, Glean and Grafana endpoints, GitHub comment organizations | no (`.env.example`) |
 | `config/system.yaml` | ops-mcp: timezone, your names and emails, transcript roots, cutoff, vault roots, thresholds | no (`system.example.yaml`) |
 | `config/routing.yaml` | meeting → note rules | no (`routing.example.yaml`) |
 | `config/paperclip.yaml` | company, labels, agents, routines and schedules, MCP servers, Codex hardening | no (`paperclip.example.yaml`) |
@@ -346,6 +352,7 @@ If Workspace policy blocks consent, nothing else breaks: matching reports "calen
 - ops-mcp is the only vault writer. It sees only the configured vault folders, can't delete or replace notes, and has no Internet route.
 - Agents run Codex with its read-only sandbox; shell, browser, computer-use and app connectors are disabled, and live web search is never combined with private-data tools. Agents act only through ops-mcp, read-only Google and Slack tools, and Paperclip task updates.
 - No component can send email or Slack messages, or write to Calendar, Drive or Docs. Only your exact `push`/`pr` reaches GitHub.
+- Engineer jobs read Grafana and Google Cloud with read-only OAuth scopes (Grafana and Google refuse writes themselves), and can't read either gcloud sign-in ([D-48](docs/DECISIONS.md)).
 - Source content is untrusted: every agent prompt says so, and model output is schema-validated and escaped before it reaches markdown, so it can't forge markers or headings.
 
 `scripts/verify-security.sh` checks the mechanical parts. Known gaps and trade-offs (rootful Docker, direct MCP delivery to Codex) are in [`docs/DECISIONS.md`](docs/DECISIONS.md).

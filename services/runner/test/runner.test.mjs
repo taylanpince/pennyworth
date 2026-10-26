@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { crewNames, findRepos, personaFor, mentionedRepos, readOnlyRefusal, normalizeRepo, parseCommand, repoAllowed, resolveEngine, resolveMode, resolveShells } from "../src/commands.mjs";
 import { buildCommand, inDevshells } from "../src/engines.mjs";
-import { commitMessage, firstPrompt, followUpPrompt, latestReport, prTitle, stripCommitLine } from "../src/prompt.mjs";
+import { commitMessage, firstPrompt, followUpPrompt, latestReport, observeSection, prTitle, stripCommitLine } from "../src/prompt.mjs";
+import { gcpSession, LOGIN_SCOPES, READ_SCOPES, readOnlyToken } from "../src/gcp.mjs";
 import { diskName, plan, syncFiles } from "../src/files.mjs";
 
 const cfg = {
@@ -1100,5 +1101,104 @@ describe("an Engineer's part of a task (D-45)", () => {
     assert.equal(isUserPart({ parentId: "p", createdByUserId: "u", createdByAgentId: "a", assigneeAgentId: "e1" }, engineers), false);
     assert.equal(isUserPart({ parentId: "p", createdByUserId: "u", assigneeAgentId: "x" }, engineers), false);
     assert.equal(isUserPart({ createdByUserId: "u", assigneeAgentId: "e1" }, engineers), false);
+  });
+});
+
+describe("Grafana and Google Cloud for Engineer jobs (D-48)", () => {
+  const setup = () => {
+    const dir = mkdtempSync(join(tmpdir(), "pw-observe-"));
+    for (const [f, v] of [["claude", "tok"], ["or", "ork"], ["grafana", "gtok\n"]]) writeFileSync(join(dir, f), v);
+    mkdirSync(join(dir, "gcloud-user"));
+    const c = { ...cfg, claudeTokenFile: join(dir, "claude"), claudeConfigDir: join(dir, "home"), openrouterKeyFile: join(dir, "or"), grafanaMcpUrl: "http://127.0.0.1:3124/mcp", grafanaTokenFile: join(dir, "grafana"), gcp: { hidden: [join(dir, "gcloud-user"), join(dir, "not-there")] }, sandbox: { extra_writable_roots: [] } };
+    const gcp = { root: join(dir, "job-gcloud"), env: { CLOUDSDK_CONFIG: join(dir, "job-gcloud/config") } };
+    mkdirSync(gcp.root);
+    return { dir, c, gcp };
+  };
+
+  it("gives Grafana and gcloud to Claude Code and Codex, never to OpenRouter", () => {
+    const { c, gcp } = setup();
+    for (const kind of ["codex", "claude"]) {
+      const { argv, env } = buildCommand({ cfg: c, engine: { kind }, worktree: "/w", lastMessageFile: "/x", gcp });
+      assert.equal(env.GRAFANA_MCP_TOKEN, "gtok", kind);
+      assert.equal(env.CLOUDSDK_CONFIG, gcp.env.CLOUDSDK_CONFIG, kind);
+      assert.ok(!argv.some((a) => a.includes("gtok")), `${kind}: token on the command line`);
+      assert.ok(argv.join(" ").includes("http://127.0.0.1:3124/mcp"), kind);
+      assert.ok(argv.some((a) => a.startsWith("sandbox_workspace_write.writable_roots=") && a.includes(gcp.root)), `${kind}: gcloud dir writable`);
+    }
+    const claude = buildCommand({ cfg: c, engine: { kind: "claude" }, worktree: "/w", gcp }).argv;
+    assert.deepEqual(Object.keys(JSON.parse(claude[claude.indexOf("--mcp-config") + 1]).mcpServers), ["grafana"]);
+    const or = buildCommand({ cfg: c, engine: { kind: "openrouter", model: "m" }, worktree: "/w", gcp });
+    assert.equal(or.env.GRAFANA_MCP_TOKEN, undefined);
+    assert.equal(or.env.CLOUDSDK_CONFIG, undefined);
+    assert.ok(!or.env.OPENCODE_CONFIG_CONTENT.includes("3124"));
+    assert.ok(!or.argv.some((a) => a.includes(gcp.root)));
+  });
+
+  it("hides the gcloud sign-ins from every engine with bwrap", () => {
+    const { dir, c } = setup();
+    for (const kind of ["codex", "claude", "openrouter"]) {
+      const { argv } = buildCommand({ cfg: c, engine: { kind, model: "m" }, worktree: "/w", lastMessageFile: "/x" });
+      assert.deepEqual(argv.slice(0, 7), ["bwrap", "--dev-bind", "/", "/", "--tmpfs", join(dir, "gcloud-user"), "--die-with-parent"], kind);
+      assert.ok(!argv.includes(join(dir, "not-there")), kind);
+    }
+  });
+
+  it("only ever asks Google for read-only scopes, and refuses a wider token", async () => {
+    for (const s of READ_SCOPES) assert.match(s, /\.(read|readonly|read-only)$/);
+    // Despite the names, some APIs take these for writes.
+    for (const bad of ["cloud-platform", "cloud-platform.read-only", "devstorage.read_only", "userinfo.email"]) assert.ok(!READ_SCOPES.includes(`https://www.googleapis.com/auth/${bad}`), bad);
+    assert.equal(LOGIN_SCOPES[0], "https://www.googleapis.com/auth/cloud-platform");
+    const dir = mkdtempSync(join(tmpdir(), "pw-gcp-"));
+    const creds = join(dir, "adc.json");
+    writeFileSync(creds, JSON.stringify({ type: "authorized_user", client_id: "c", client_secret: "s", refresh_token: "r" }));
+    const seen = [];
+    let answer = { access_token: "at", expires_in: 3599, scope: READ_SCOPES.join(" ") };
+    let status = 200;
+    const fetchImpl = async (_url, init) => (seen.push(Object.fromEntries(init.body)), new Response(JSON.stringify(answer), { status }));
+    assert.equal((await readOnlyToken(creds, fetchImpl)).token, "at");
+    assert.deepEqual(seen[0].scope.split(" "), READ_SCOPES);
+    answer = { ...answer, scope: [...READ_SCOPES, "https://www.googleapis.com/auth/cloud-platform"].join(" ") };
+    await assert.rejects(readOnlyToken(creds, fetchImpl), (e) => e.state === "refused");
+    status = 400;
+    answer = { error: "invalid_grant", error_description: "reauth related error (rapt_required)" };
+    await assert.rejects(readOnlyToken(creds, fetchImpl), (e) => e.state === "expired" && /16-hour/.test(e.message));
+    await assert.rejects(readOnlyToken(join(dir, "missing.json"), fetchImpl), (e) => e.state === "missing");
+  });
+
+  it("gives a job its own gcloud config pointing at the token file, and removes it afterwards", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pw-gcp-"));
+    const creds = join(dir, "adc.json");
+    writeFileSync(creds, JSON.stringify({ client_id: "c", client_secret: "s", refresh_token: "r" }));
+    const fetchImpl = async () => Response.json({ access_token: "at", expires_in: 3599, scope: READ_SCOPES.join(" ") });
+    const s = await gcpSession({ credentialsFile: creds, dir: join(dir, "job"), project: "proj-a", fetchImpl });
+    assert.equal(s.state, "ok");
+    const props = readFileSync(join(dir, "job/config/configurations/config_default"), "utf8");
+    assert.match(props, /access_token_file = .*job\/token/);
+    assert.match(props, /project = proj-a/);
+    assert.equal(readFileSync(join(dir, "job/token"), "utf8"), "at");
+    assert.equal(statSync(join(dir, "job/token")).mode & 0o777, 0o600);
+    // No variable with TOKEN in its name: Codex drops those from its tool calls.
+    assert.deepEqual(Object.keys(s.env), ["CLOUDSDK_CONFIG"]);
+    s.done();
+    assert.ok(!existsSync(join(dir, "job")));
+    const expired = await gcpSession({ credentialsFile: creds, dir: join(dir, "job2"), fetchImpl: async () => Response.json({ error: "invalid_grant", error_description: "rapt_required" }, { status: 400 }) });
+    assert.equal(expired.state, "expired");
+    assert.doesNotMatch(readFileSync(join(dir, "job2/config/configurations/config_default"), "utf8"), /access_token_file/);
+    expired.done();
+  });
+
+  it("tells the agent what it can reach, and runs without a repository", () => {
+    const ok = observeSection("Taylan", { grafana: true, gcp: { state: "ok", projects: ["proj-a"] } });
+    assert.match(ok, /Loki logs/);
+    assert.match(ok, /gcloud logging read/);
+    assert.match(ok, /proj-a/);
+    assert.match(ok, /Secret Manager/);
+    assert.match(observeSection("Taylan", { grafana: true, gcp: { state: "expired", detail: "the Google Cloud session ended" } }), /isn't available for this run:\*\* the Google Cloud session ended/);
+    assert.doesNotMatch(observeSection("Taylan", { grafana: false, gcp: { state: "missing" } }), /gcloud/);
+    assert.equal(observeSection("Taylan", undefined), "");
+    const p = firstPrompt({ user: "Taylan", task: { identifier: "PEN-1", title: "Why did the API 5xx at 3am?" }, workspace: "/w", repos: [], mode: "investigate", shells: ["llm", "pulumi"], instructions: "look at the logs", observe: { grafana: true, gcp: { state: "ok", projects: [] } } });
+    assert.match(p, /No repository yet/);
+    assert.match(p, /pennyworth-repo/);
+    assert.match(p, /Logs, metrics and infrastructure \(read-only\)/);
   });
 });

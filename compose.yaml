@@ -250,6 +250,37 @@ services:
       - backplane
       - egress
 
+  # Grafana Cloud (GRAFANA_URL) through Grafana's hosted MCP server: reads only, for the runner's
+  # Engineer jobs. Signed in from the board with read and query scopes, never write.
+  grafana-mcp:
+    <<: *hardening
+    build: ./services/grafana-mcp
+    image: pennyworth/grafana-mcp:local
+    user: "${PUID:-1000}:${PGID:-100}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    environment:
+      GRAFANA_URL: "${GRAFANA_URL:-}"
+      GRAFANA_MCP_URL: "${GRAFANA_MCP_URL:-}"
+      GRAFANA_STATE_DIR: /state
+      MCP_TOKEN_FILE: /run/secrets/grafana_mcp_token
+      # The board's sign-in endpoints: state, and starting or finishing a sign-in.
+      GRAFANA_AUTH_TOKEN_FILE: /run/secrets/grafana_auth_token
+    volumes:
+      # Read-write: the registered client and the token pair, refreshed here.
+      - ${PENNYWORTH_SECRETS_DIR}/grafana:/state
+    secrets:
+      - grafana_mcp_token
+      - grafana_auth_token
+    dns: [1.1.1.1, 8.8.8.8]   # see paperclip
+    ports:
+      # Loopback only, for the runner's Engineer jobs on the host: /mcp, bearer token.
+      - "127.0.0.1:3124:8087"
+    networks:
+      - backplane
+      - egress
+
   # GitHub issues and pull requests: read, and comment or open issues in GITHUB_COMMENT_ORGS (D-39, D-42). Holds
   # the user's gh token; services/github-mcp/src/github.ts allows only those requests.
   github-mcp:
@@ -304,6 +335,7 @@ services:
       - google_auth_token   # Google sign-in state and reconnect only (D-36); not the MCP token
       - telegram_auth_token # Telegram sign-in state and sign-in only (D-37); not the MCP token
       - glean_auth_token    # Glean sign-in state and sign-in only (D-38); not the MCP token
+      - grafana_auth_token  # Grafana sign-in state and sign-in only; not the MCP token
     ports:
       - "127.0.0.1:3120:3120"
       # LAN listener; loopback-only unless .env sets BOARD_LAN_BIND=0.0.0.0 (e.g. with BOARD_LAN_PORT=80).
@@ -359,6 +391,10 @@ secrets:
     file: ${PENNYWORTH_SECRETS_DIR}/glean_mcp_token
   glean_auth_token:
     file: ${PENNYWORTH_SECRETS_DIR}/glean_auth_token
+  grafana_mcp_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/grafana_mcp_token
+  grafana_auth_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/grafana_auth_token
   github_mcp_token:
     file: ${PENNYWORTH_SECRETS_DIR}/github_mcp_token
   # The user's gh token (scripts/github-auth.sh), for github-mcp only.

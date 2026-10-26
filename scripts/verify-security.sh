@@ -64,6 +64,15 @@ for c in $containers; do
       [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
         && pass "glean-mcp: only its own token directory mounted" || fail "glean-mcp has unexpected mounts: $mounts"
       ;;
+    *grafana-mcp*)
+      # Loopback only, for the runner's Engineer jobs; bearer token required.
+      [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = '{"8087/tcp":[{"HostIp":"127.0.0.1","HostPort":"3124"}]}' ] \
+        && pass "grafana-mcp: published on 127.0.0.1:3124 only" || fail "grafana-mcp ports are not loopback 3124 only"
+      [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3124/mcp)" = "401" ] \
+        && pass "grafana-mcp: loopback endpoint requires the token" || fail "grafana-mcp: loopback endpoint answers without the token"
+      [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
+        && pass "grafana-mcp: only its own token directory mounted" || fail "grafana-mcp has unexpected mounts: $mounts"
+      ;;
     *github-mcp*)
       [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "github-mcp: no published ports" || fail "github-mcp publishes ports"
       ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -q . \
@@ -133,6 +142,19 @@ pass "primer-mcp exposes reads plus create-document/add-version only; never dele
 glean_tools="$(sed -n 's/^export const READ_TOOLS = \[\(.*\)\];/\1/p' services/glean-mcp/src/policy.ts | tr -d '" ' | tr ',' '\n')"
 bad_glean="$(echo "$glean_tools" | grep -Ev '^(search|read_document|employee_search|meeting_lookup|code_search|chat)$' || true)"
 [ -n "$glean_tools" ] && [ -z "$bad_glean" ] && pass "glean-mcp exposes only search/read tools (services/glean-mcp/src/policy.ts)" || fail "glean-mcp: unexpected tools allowed: $bad_glean"
+# Grafana: signed in with read and query scopes only, and only read tools on the list.
+grafana_scopes="$(sed -n 's/^export const SCOPES = \[\(.*\)\];/\1/p' services/grafana-mcp/src/policy.ts | tr -d '" ')"
+[ "$grafana_scopes" = "grafana:read,grafana:query" ] && pass "grafana-mcp asks for grafana:read and grafana:query only, never write (services/grafana-mcp/src/policy.ts)" || fail "grafana-mcp: unexpected scopes: $grafana_scopes"
+grafana_tools="$(sed -n '/^export const READ_TOOLS = \[/,/^\];/p' services/grafana-mcp/src/policy.ts | grep -oE '^  "[a-z0-9_]+"' | tr -d '" ')"
+bad_grafana="$(echo "$grafana_tools" | grep -Ev '^(query|list|get|search|analyze|diff|check|run_panel_query$|alerting_(rules|silences)_read$)' ; echo "$grafana_tools" | grep -E 'creat|add_|update|delete|remove|manage|exec|write|edit|patch|send|post|resolve|investigation|assistant|handler|gcx|sql' || true)"
+[ -n "$grafana_tools" ] && [ -z "$bad_grafana" ] && pass "grafana-mcp exposes only read/query tools (services/grafana-mcp/src/policy.ts)" || fail "grafana-mcp: unexpected tools allowed: $bad_grafana"
+# Engineer jobs' Google Cloud token (D-48): per-API read-only scopes only. cloud-platform.read-only and
+# devstorage.read_only are accepted for writes by some APIs; userinfo.email would let kubectl act.
+gcp_scopes="$(sed -n '/^export const READ_SCOPES = \[/,/^\];/p' services/runner/src/gcp.mjs | grep -oE '^  "https://www.googleapis.com/auth/[a-z._-]+"' | sed 's|.*/auth/||; s/"//')"
+bad_gcp="$(echo "$gcp_scopes" | grep -Ev '^(logging\.read|monitoring\.read|compute\.readonly|container\.read-only|run\.readonly|redis\.read-only|ndev\.clouddns\.readonly)$' || true)"
+[ -n "$gcp_scopes" ] && [ -z "$bad_gcp" ] && pass "runner: Google Cloud tokens for jobs are per-API read-only scopes (services/runner/src/gcp.mjs)" || fail "runner: unexpected Google Cloud scopes for jobs: $bad_gcp"
+grep -q '"bwrap", "--dev-bind", "/", "/"' services/runner/src/engines.mjs && grep -q 'join(homedir(), ".config/gcloud")' services/runner/src/config.mjs \
+  && pass "runner: jobs can't read the gcloud sign-ins (bwrap tmpfs)" || fail "runner: the gcloud sign-ins aren't hidden from jobs"
 # GitHub: the user's gh token can push and delete; the guard allows fixed reads plus issue comments, new issues,
 # fixed GraphQL documents whose only mutations add an issue to a project and set its status (D-39, D-42), and
 # issue state/labels/assignees, pull request reviews and failed-job re-runs (D-46).

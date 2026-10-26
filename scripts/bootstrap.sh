@@ -56,6 +56,8 @@ gen_secret telegram_auth_token   # the board's Telegram sign-in state and sign-i
 gen_secret primer_mcp_token
 gen_secret glean_mcp_token
 gen_secret glean_auth_token      # the board's Glean sign-in state and sign-in (D-38)
+gen_secret grafana_mcp_token     # the runner's Engineer jobs, on 127.0.0.1:3124
+gen_secret grafana_auth_token    # the board's Grafana sign-in state and sign-in
 gen_secret github_mcp_token
 gen_secret board_internal_token   # the board's internal API (D-25)
 placeholder paperclip_ops_key ""
@@ -66,6 +68,7 @@ mkdir -p "$PENNYWORTH_SECRETS_DIR/slack" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/
 mkdir -p "$PENNYWORTH_SECRETS_DIR/telegram" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/telegram"
 mkdir -p "$PENNYWORTH_SECRETS_DIR/primer" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/primer"
 mkdir -p "$PENNYWORTH_SECRETS_DIR/glean" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/glean"
+mkdir -p "$PENNYWORTH_SECRETS_DIR/grafana" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/grafana"
 
 echo "Config"
 mkdir -p "$config_dir"

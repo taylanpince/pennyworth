@@ -30,6 +30,7 @@ export function loadConfig() {
   const selfName = /^\s*names:\s*\[\s*"([^"]+)"/m.exec(system)?.[1] ?? "the user";
   if (!companyId) throw new Error("paperclip.company_id missing in config/system.yaml (run scripts/paperclip-setup.mjs)");
   const secrets = expand(env.PENNYWORTH_SECRETS_DIR ?? "~/.config/pennyworth");
+  const gcpCredentials = expand(cfg.gcp?.credentials ?? join(secrets, "gcloud/application_default_credentials.json"));
   return {
     ...cfg,
     file,
@@ -47,6 +48,17 @@ export function loadConfig() {
     // The runner itself publishes a task's document there (D-44); jobs never get this endpoint.
     primerPublishUrl: env.PRIMER_RUNNER_PUBLISH_URL ?? cfg.primer?.publish_url ?? "http://127.0.0.1:3123/mcp",
     primerTokenFile: join(secrets, "primer_mcp_token"),
+    // Grafana and Google Cloud reads for Claude Code and Codex jobs (D-48).
+    grafanaMcpUrl: env.GRAFANA_RUNNER_URL ?? cfg.grafana?.url ?? "http://127.0.0.1:3124/mcp",
+    grafanaTokenFile: join(secrets, "grafana_mcp_token"),
+    gcp: {
+      credentialsFile: gcpCredentials,
+      projects: (cfg.gcp?.projects ?? []).filter(Boolean),
+      shell: cfg.gcp?.shell ?? "pulumi",
+      // Hidden from every job (D-48): the user's own gcloud sign-in, and Pennyworth's, whose refresh
+      // token can be widened back to cloud-platform.
+      hidden: [join(homedir(), ".config/gcloud"), dirname(gcpCredentials)],
+    },
     workDir: expand(cfg.work_dir ?? "~/pennyworth"),
     stateDir: expand(cfg.state_dir ?? "~/.local/state/pennyworth-runner"),
     devshells: { ...cfg.devshells, flake: expand(cfg.devshells.flake) },

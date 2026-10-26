@@ -10,8 +10,8 @@ export function inDevshells(flake, shells, argv) {
   return shells.reduceRight((inner, shell) => ["nix", "develop", `${flake}#${shell}`, "--command", ...inner], argv);
 }
 
-function sandboxConfig(cfg, worktree) {
-  const roots = [worktree, ...(cfg.sandbox?.extra_writable_roots ?? []).map(expand)].filter((p) => existsSync(p) || p === worktree);
+function sandboxConfig(cfg, worktree, stateRoots = []) {
+  const roots = [worktree, ...stateRoots, ...(cfg.sandbox?.extra_writable_roots ?? []).map(expand)].filter((p) => existsSync(p) || p === worktree);
   return [
     "-c", 'sandbox_mode="workspace-write"',
     "-c", `sandbox_workspace_write.network_access=${cfg.sandbox?.network === false ? "false" : "true"}`,
@@ -46,14 +46,45 @@ function primer(cfg) {
   return { url: cfg.primerMcpUrl, token: readFileSync(cfg.primerTokenFile, "utf8").trim() };
 }
 
-/** Command line for one engine run. Codex sandboxes its own tool calls; opencode and Claude Code run inside `codex sandbox`. */
-export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile }) {
+/**
+ * Grafana and Google Cloud reads (D-48) go to Claude Code and Codex only: production logs and
+ * metrics never go to OpenRouter's third-party model providers.
+ */
+export const observes = (kind) => kind === "claude" || kind === "codex";
+
+/** grafana-mcp on loopback (read and query scopes only, D-48); skipped until it's set up. */
+function grafana(cfg) {
+  if (!cfg.grafanaMcpUrl || !cfg.grafanaTokenFile || !existsSync(cfg.grafanaTokenFile)) return undefined;
+  return { url: cfg.grafanaMcpUrl, token: readFileSync(cfg.grafanaTokenFile, "utf8").trim() };
+}
+
+/**
+ * The whole run under bwrap with an empty tmpfs over the gcloud sign-ins (cfg.gcp.hidden): the
+ * sandbox limits writes, not reads, and gcloud would otherwise pick up the user's own credentials.
+ */
+function hiding(cfg, argv) {
+  const dirs = (cfg.gcp?.hidden ?? []).filter((d) => existsSync(d));
+  return dirs.length ? ["bwrap", "--dev-bind", "/", "/", ...dirs.flatMap((d) => ["--tmpfs", d]), "--die-with-parent", "--", ...argv] : argv;
+}
+
+/**
+ * Command line for one engine run. Codex sandboxes its own tool calls; opencode and Claude Code run
+ * inside `codex sandbox`. `gcp` is the job's gcloud session (src/gcp.mjs), for engines that observe.
+ */
+export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp }) {
+  const built = engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp: observes(engine.kind) ? gcp : undefined });
+  return { ...built, argv: hiding(cfg, built.argv) };
+}
+
+function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp }) {
   const p = primer(cfg);
-  const primerEnv = p ? { PRIMER_MCP_TOKEN: p.token } : {};
+  const g = observes(engine.kind) ? grafana(cfg) : undefined;
+  const mcpEnv = { ...(p ? { PRIMER_MCP_TOKEN: p.token } : {}), ...(g ? { GRAFANA_MCP_TOKEN: g.token } : {}), ...(gcp?.env ?? {}) };
+  const gcpRoots = gcp ? [gcp.root] : [];
   if (engine.kind === "codex") {
     const base = sessionId ? ["codex", "exec", "resume", sessionId] : ["codex", "exec"];
     // The workspace holds several clones and isn't a git repository itself (D-41).
-    const args = [...base, "--json", "--skip-git-repo-check", "-o", lastMessageFile, ...sandboxConfig(cfg, worktree)];
+    const args = [...base, "--json", "--skip-git-repo-check", "-o", lastMessageFile, ...sandboxConfig(cfg, worktree, gcpRoots)];
     if (p) {
       args.push(
         "-c", `mcp_servers.primer.url=${JSON.stringify(p.url)}`,
@@ -61,10 +92,17 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
         "-c", 'mcp_servers.primer.default_tools_approval_mode="approve"',
       );
     }
+    if (g) {
+      args.push(
+        "-c", `mcp_servers.grafana.url=${JSON.stringify(g.url)}`,
+        "-c", 'mcp_servers.grafana.bearer_token_env_var="GRAFANA_MCP_TOKEN"',
+        "-c", 'mcp_servers.grafana.default_tools_approval_mode="approve"',
+      );
+    }
     if (engine.model) args.push("-m", engine.model);
     if (engine.effort) args.push("-c", `model_reasoning_effort="${engine.effort}"`);
     args.push("-");
-    return { argv: args, env: primerEnv };
+    return { argv: args, env: mcpEnv };
   }
   if (engine.kind === "openrouter") {
     const key = readFileSync(cfg.openrouterKeyFile, "utf8").trim();
@@ -75,7 +113,7 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
     return {
       argv: codexSandbox(cfg, worktree, stateRoots, opencode),
       env: {
-        ...primerEnv,
+        ...mcpEnv,
         OPENROUTER_API_KEY: key,
         // Non-interactive: opencode must not stop to ask for permission, because an unanswered prompt
         // is auto-rejected and ends the run. Reading outside the worktree (reference repos) is
@@ -97,8 +135,11 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
     mkdirSync(cfg.claudeConfigDir, { recursive: true, mode: 0o700 });
     // Headless, no prompts (the codex sandbox is the write boundary), and nothing from your own
     // Claude setup: a runner-owned config dir, no settings files (yours or the repo's: no hooks),
-    // no MCP servers but Primer's read-only endpoint, and no claude.ai connectors.
-    const mcpServers = p ? { primer: { type: "http", url: p.url, headers: { Authorization: "Bearer ${PRIMER_MCP_TOKEN}" } } } : {};
+    // no MCP servers but Primer's and Grafana's read-only endpoints, and no claude.ai connectors.
+    const mcpServers = {
+      ...(p ? { primer: { type: "http", url: p.url, headers: { Authorization: "Bearer ${PRIMER_MCP_TOKEN}" } } } : {}),
+      ...(g ? { grafana: { type: "http", url: g.url, headers: { Authorization: "Bearer ${GRAFANA_MCP_TOKEN}" } } } : {}),
+    };
     const claude = [
       "claude", "-p", "--output-format", "stream-json", "--verbose",
       "--permission-mode", "bypassPermissions",
@@ -110,9 +151,9 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
     if (engine.effort) claude.push("--effort", engine.effort === "minimal" ? "low" : engine.effort);
     if (sessionId) claude.push("--resume", sessionId);
     return {
-      argv: codexSandbox(cfg, worktree, [cfg.claudeConfigDir], claude),
+      argv: codexSandbox(cfg, worktree, [cfg.claudeConfigDir, ...gcpRoots], claude),
       env: {
-        ...primerEnv,
+        ...mcpEnv,
         CLAUDE_CODE_OAUTH_TOKEN: token,
         CLAUDE_CONFIG_DIR: cfg.claudeConfigDir,
         ENABLE_CLAUDEAI_MCP_SERVERS: "false",
@@ -128,9 +169,9 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
  * The agent's environment: no SSH agent (fetch only via the runner), read-only gh first on PATH,
  * and a git ssh wrapper that refuses pushes.
  */
-export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, logPath, signal, env: jobEnv = {} }) {
+export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, logPath, signal, env: jobEnv = {}, gcp }) {
   const lastMessageFile = `${logPath}.last.md`;
-  const { argv, env, promptAsArg } = buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile });
+  const { argv, env, promptAsArg } = buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp });
   const full = inDevshells(cfg.devshells.flake, shells, promptAsArg ? [...argv, prompt] : argv);
   const agentEnv = {
     ...process.env,

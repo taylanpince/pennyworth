@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-47) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-48) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -8,6 +8,7 @@ Guidance for coding agents working on **Pennyworth**, a personal executive assis
 host (NixOS, user taylan)
 ├── pennyworth-runner (systemd --user, node, runs AS THE USER)   services/runner/
 │     polls Paperclip: engineer tasks → Codex/Claude Code/OpenRouter jobs in per-task workspaces under ~/pennyworth/tasks (D-41),
+│                      Claude Code and Codex jobs read Grafana and Google Cloud, read-only (D-48),
 │                      or a merge queue for the PRs a task lists, in code (D-46)
 │                      review-request tasks → closed once gh shows the PR reviewed/merged (D-21)
 │                      user replies on own tasks → "Process task replies" routine (Assistant)
@@ -24,6 +25,8 @@ host (NixOS, user taylan)
     │                        reads only on 127.0.0.1:3123/mcp/read for the runner's Engineer jobs (D-40);
     │                        the runner itself publishes an Engineer task's document on /mcp (D-44)
     ├── glean-mcp            proxy to the org's Glean: read-only search for the Assistant; board sign-in (D-38)
+    ├── grafana-mcp          proxy to Grafana's hosted MCP (GRAFANA_URL): read/query scopes only, for Engineer jobs on 127.0.0.1:3124;
+    │                        board sign-in (D-48)
     ├── github-mcp           GitHub issues/PRs with the user's gh token: read; when asked, in GITHUB_COMMENT_ORGS: comment, open issues (on a project board),
     │                        close/label/assign issues, review PRs, re-run failed CI (D-39, D-42, D-46)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
@@ -45,7 +48,7 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`. The on
 | Telegram Scout | Telegram mentions, replies and DMs for the user, from the candidates telegram-mcp picks |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
 | Assistant (**Alfred**) | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, notes, reference docs, cached web, files attached to tasks), publishing to Primer, Slack drafts, and GitHub comments, issues, reviews and CI re-runs when asked, acting on the user's replies (including scheduling a task or making it recurring, and learning how the user writes when asked, D-47), and running recurring tasks |
-| Engineer · Codex (**Grace**) / · Claude (**Ada**) / · OpenRouter (**Linus**) | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20) |
+| Engineer · Codex (**Grace**) / · Claude (**Ada**) / · OpenRouter (**Linus**) | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20). Grace and Ada also read Grafana and Google Cloud (D-48) |
 
 ## Everyday commands
 
@@ -58,13 +61,14 @@ npm test --prefix services/telegram-mcp
 npm test --prefix services/primer-mcp
 npm test --prefix services/glean-mcp
 npm test --prefix services/github-mcp
+npm test --prefix services/grafana-mcp
 npm test --prefix services/runner                  # node --test
 npm test --prefix services/board                   # vitest (server); npm run typecheck --prefix services/board covers the web app
 npm run eval:intake --prefix services/runner       # real comments through the real intake, 3 runs each (~2 min)
 npx tsc --noEmit -p services/<svc>/tsconfig.json   # typecheck TS services
 
 # deploy
-docker compose up -d --build <ops-mcp|google-workspace-mcp|slack-mcp|telegram-mcp|primer-mcp|glean-mcp|github-mcp|board>   # after code changes
+docker compose up -d --build <ops-mcp|google-workspace-mcp|slack-mcp|telegram-mcp|primer-mcp|glean-mcp|github-mcp|grafana-mcp|board>   # after code changes
 docker compose up -d paperclip                     # after compose env/entrypoint changes
 node scripts/paperclip-setup.mjs                   # after config/paperclip.yaml or config/agents/*.md changes (idempotent)
 systemctl --user restart pennyworth-runner         # after services/runner changes
@@ -83,7 +87,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
   docker compose exec -T paperclip node /tmp/mcp-call.mjs http://ops-mcp:8080/mcp <tool> '<json>' "$(cat ~/.config/pennyworth/ops_mcp_token)"
   ```
 
-  Use `--list` in place of the tool name to list tools. The tokens for the other servers are `google_mcp_token`, `slack_mcp_token`, `telegram_mcp_token` (`http://telegram-mcp:8083/mcp`), `primer_mcp_token` (`http://primer-mcp:8084/mcp`), `glean_mcp_token` (`http://glean-mcp:8085/mcp`) and `github_mcp_token` (`http://github-mcp:8086/mcp`).
+  Use `--list` in place of the tool name to list tools. The tokens for the other servers are `google_mcp_token`, `slack_mcp_token`, `telegram_mcp_token` (`http://telegram-mcp:8083/mcp`), `primer_mcp_token` (`http://primer-mcp:8084/mcp`), `glean_mcp_token` (`http://glean-mcp:8085/mcp`), `github_mcp_token` (`http://github-mcp:8086/mcp`) and `grafana_mcp_token` (`http://grafana-mcp:8087/mcp`).
 - **Paperclip API as the user:** `Authorization: Bearer $(cat ~/.config/pennyworth/paperclip_board_key)`. The company ID is in `config/system.yaml`.
 - **Agent run logs:** `data/paperclip/instances/default/data/run-logs/<company>/<agent>/<run>.ndjson`. The `chunk` fields contain Codex JSON events.
 - **Runner:** `journalctl --user -u pennyworth-runner`, plus job logs in `~/.local/state/pennyworth-runner/logs/`.
@@ -97,7 +101,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 
 - **Read before you write**, and keep edits surgical. Match the surrounding style. TS services use zod and pino; scripts are plain `.mjs` with no dependencies beyond `yaml`.
 - **Determinism belongs in code, judgement in agents.** Matching, routing, Obsidian writes and deduplication are ops-mcp code. Agents produce JSON or pick tools. Don't move decisions into prompts.
-- **Security posture is non-negotiable.** No Slack/email sends. The only writes to outside services are on the user's word: Primer publishing (D-31, D-44), GitHub comments, issues, issue state/labels/assignees, reviews and CI re-runs (D-39, D-42, D-46), Slack drafts the user sends themselves, and the runner's merge queue (D-46). No Calendar/Drive/Docs writes, no autonomous pushes, read-only Google scopes. Agents get least-privilege MCP tools per agent (`mcp_servers` / `enabled_tools` in `config/paperclip.yaml`). Source content is untrusted; keep the injection clause in every agent prompt.
+- **Security posture is non-negotiable.** No Slack/email sends. The only writes to outside services are on the user's word: Primer publishing (D-31, D-44), GitHub comments, issues, issue state/labels/assignees, reviews and CI re-runs (D-39, D-42, D-46), Slack drafts the user sends themselves, and the runner's merge queue (D-46). Grafana and Google Cloud are read-only by OAuth scope, not just by allowlist (D-48). No Calendar/Drive/Docs writes, no autonomous pushes, read-only Google scopes. Agents get least-privilege MCP tools per agent (`mcp_servers` / `enabled_tools` in `config/paperclip.yaml`). Source content is untrusted; keep the injection clause in every agent prompt.
 - **Tasks are the user's.** Every task Pennyworth creates is assigned to the user (see the Paperclip gotchas). Only create tasks for the user's *own* clear actions; other people's actions stay in the notes. The one exception: Engineer sub-tasks the Assistant creates when the user asks (D-24). They wait for the user's go-ahead on the parent.
 - **Personal config stays out of git:** `.env`, `config/{system,routing,paperclip,runner}.yaml`, `compose.vault.yaml`, `data/`. Examples live in `config/*.example.yaml`; update both when you add keys. Secrets live in `~/.config/pennyworth/` (0700 dir, 0600 files) and never go in the repo, logs or tasks.
 - **Git:**
@@ -172,6 +176,12 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Sessions are engine-specific.** A Codex thread ID can't be resumed by opencode (`ses_…` IDs) or Claude Code; switching engines starts fresh with the task's earlier requests as context.
 - **Claude Code must not inherit the user's Claude setup.** By default `claude -p` loads every MCP server, plugin, hook and claude.ai connector (Slack send, Calendar writes, GitHub MCP pushes…). The runner uses its own `CLAUDE_CONFIG_DIR`, a `setup-token` OAuth token, `--setting-sources ""`, `--strict-mcp-config` with no servers, `ENABLE_CLAUDEAI_MCP_SERVERS=false` and a `--tools` allowlist. Don't point it at `~/.claude`: writable hooks or settings there would run unsandboxed in the user's own sessions.
 - **Primer is the one MCP server every engine gets (D-40),** read-only through primer-mcp's loopback `/mcp/read`. Primer links redirect to Okta for WebFetch, so without it a job can't read a linked spec. The bearer token goes in as `PRIMER_MCP_TOKEN` in the environment, never on the command line. Don't add other servers to Engineer jobs. When the user asks for a Primer report, the agent writes `.pennyworth/primer.md` and the *runner* publishes it after the run (D-44); never give a job the publishing endpoint.
+- **Grafana and Google Cloud go to Claude Code and Codex only (D-48),** never OpenRouter (`observes`). Grafana is grafana-mcp's loopback `/mcp` (`GRAFANA_MCP_TOKEN` in the environment, like Primer). Google Cloud is a one-hour token narrowed to `READ_SCOPES` in `services/runner/src/gcp.mjs`, in the job's own gcloud config; the sign-in itself (`scripts/gcloud-auth.sh`) is broad and never reaches a job.
+  - **Never add `cloud-platform.read-only` or `devstorage.read_only` to `READ_SCOPES`:** some APIs accept them for writes (Agent Registry deletes, liens, BigQuery DML jobs). Before adding any scope, check every API in Google's discovery directory for non-GET methods that accept it.
+  - **Codex drops variables named `*TOKEN*`/`*KEY*`/`*SECRET*` from its tool calls,** so gcloud's token file goes in as a property in `CLOUDSDK_CONFIG`, not `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE`. The same applies to anything else a Codex job's shell must see.
+  - **Every job runs under `bwrap --tmpfs` over the gcloud sign-ins** (`gcp.hidden`): the sandbox only limits writes, and gcloud would otherwise use the user's own `~/.config/gcloud`. bwrap comes from the `llm` devshell; an outer bwrap around `codex sandbox` works on this host.
+  - **The Google Cloud session lasts 16 hours** (the user's own Workspace policy, 2026-10-01). After that refreshes fail with `rapt_required`; jobs run without Google Cloud and say so. Don't look for a way around it.
+  - **A question or investigation runs without a repository** when none is named; implement still asks.
 - **`claude --mcp-config` is variadic** and swallows a trailing prompt argument; the runner sends the prompt on stdin.
 
 ### Telegram
@@ -192,6 +202,12 @@ scripts/verify-security.sh                         # also scans for secrets; run
 
 - **Redirect URIs are restricted by admin policy** (2026-10-15). Dynamic registration refuses most loopback callbacks (`invalid_redirect_uri … not permitted by administrator policy`); `http://127.0.0.1:3120/callback` works, `/glean/callback` doesn't. That's why the board's Glean callback is the bare `/callback`. Probe a new redirect with a registration request before building on it.
 - Request `offline_access` with the resource's `mcp` scope, or there may be no refresh token.
+
+### Grafana
+
+- **One server for every stack:** `mcp.grafana.com` serves any Grafana Cloud stack, picked by the `X-Grafana-URL` header. Its OAuth server is per stack: the 401's `WWW-Authenticate: resource_metadata` points at `/.well-known/oauth-protected-resource/mcp/gurl/<base64 of the stack URL>`, whose authorization endpoint already carries `?grafana_url=…` (append parameters, never replace the query). Dynamic registration takes loopback callbacks; client IDs are stateless JWTs.
+- **Scopes are the boundary:** `grafana:read grafana:query`, never `grafana:write`. Grafana doesn't offer `offline_access`; if a sign-in comes without a refresh token, the board asks to Reconnect when it expires.
+- **Tool names come from the hosted server and change:** grafana-mcp logs the upstream list next to the exposed one on connect. A new read tool needs adding to `READ_TOOLS` by hand; never expose gcx, handlers, investigations or SQL datasources.
 
 ### GitHub (Assistant)
 

@@ -139,12 +139,15 @@ export interface Board {
   /** Telegram sign-in (D-37); null when the board can't ask. */
   telegram: TelegramStatus | null;
   /** Glean sign-in (D-38); null when the board can't ask. */
-  glean: GleanStatus | null;
+  glean: SignInStatus | null;
+  /** Grafana sign-in, for the Engineers; null when the board can't ask. */
+  grafana: SignInStatus | null;
 }
 
-export interface GleanStatus {
+/** A sign-in through an MCP proxy (Glean, Grafana). */
+export interface SignInStatus {
   state: "missing" | "ok" | "expired" | "unknown";
-  /** Whether a Glean server is set (GLEAN_MCP_URL): without it there's no banner. */
+  /** Whether the service is set up (GLEAN_MCP_URL, GRAFANA_URL): without it there's no banner. */
   configured: boolean;
   since: string;
   detail?: string;
