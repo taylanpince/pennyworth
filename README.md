@@ -13,7 +13,7 @@ It is built on [Paperclip](https://github.com/paperclipai/paperclip) (agents, ta
 - **Telegram:** mentions and replies to you in your chats, DMs, and things you promised there, become tasks, through your own Telegram session, read-only (optional).
 - **Email:** threads you label `pennyworth` in Gmail become tasks, and close when you remove the label.
 - **Daily brief:** every weekday morning, a ranked view of your day: priorities, meetings, what's stale.
-- **Assistant:** research and drafts (agendas, summaries) from Slack, Drive, Docs, Calendar and your notes, posted as task comments for you to review. It also acts on your replies to any task.
+- **Assistant:** research and drafts (agendas, summaries) from Slack, Drive, Docs, Calendar and your notes, posted as task comments for you to review. It also acts on your replies to any task, and learns how you write when you ask it to (a voice guide note in your vault).
 - **Coding jobs:** assign a task to an Engineer and say what you want. Codex, Claude Code or an OpenRouter model works in the task's own workspace, as you: several repositories, several branches and stacked branches in one task, and nothing is pushed until you say `push` or `pr`.
 - **Board:** a keyboard-driven task board on localhost, also usable from a paired phone at home.
 
@@ -129,7 +129,7 @@ Then drop a transcript into your transcripts folder, or have a Meet call that pr
 | Slack Scout | every 30 min in work hours | Slack read/search; Paperclip task search/create/update/close |
 | Telegram Scout | every 30 min in work hours | Telegram read (your chats) and mention candidates; Paperclip task search/create/update/close |
 | Inbox Agent | every 30 min in work hours: one task per Gmail thread labelled `pennyworth` (archived or not), closed when the label is removed | Gmail read/search; Paperclip task search/create/update/close |
-| Assistant (Alfred) | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; Glean search; reference docs; Primer read + publish when asked; GitHub issues/PRs read + comment and open issues when asked; notes read + meeting-note corrections; cached web search; Paperclip tasks |
+| Assistant (Alfred) | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; Glean search; reference docs; Primer read + publish when asked; GitHub issues/PRs read + comment and open issues when asked; notes read + meeting-note corrections; your writing voice guide, with lessons added when you ask; cached web search; Paperclip tasks |
 | Engineer · Codex (Grace) / · Claude (Ada) / · OpenRouter (Linus) | never woken: assignment targets for the runner | none (the runner does the work) |
 
 The agents you assign are your crew: each has a name, a portrait and a one-line voice (`persona` in `config/paperclip.yaml`, D-45). Naming one in a comment ("let Ada do it") picks that Engineer.

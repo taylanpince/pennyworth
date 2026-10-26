@@ -50,7 +50,7 @@ const http = createServer(async (req, res) => {
       if (!authorized(req)) return send(res, 401, { error: "unauthorized" });
       if (req.method !== "POST") return send(res, 405, { jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed" }, id: null });
       // Stateless mode: a fresh server and transport per request.
-      const server = buildServer({ meetings: app.meetings, vault: app.vault, knowledge: app.knowledge, log });
+      const server = buildServer({ meetings: app.meetings, vault: app.vault, knowledge: app.knowledge, voice: app.voice, log });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on("close", () => {
         void transport.close();

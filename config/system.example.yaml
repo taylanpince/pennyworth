@@ -42,6 +42,9 @@ vault:
   write_roots: [Meetings]
   meetings_root: Meetings
   target_heading: Meeting Log
+  # Your writing voice guide (inside a write root): the Assistant reads it before drafting in
+  # your voice and adds lessons under "## Lessons" when you ask it to learn. Leave out to disable.
+  voice_note: Meetings/Writing Voice.md
   # Frontmatter tags on every meeting note. In Obsidian, search tag:#type/meeting.
   meeting_tags: [type/meeting]
 

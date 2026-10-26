@@ -164,7 +164,7 @@ agents:
       # Reads only, on request (D-29); the scout tools stay with the Telegram Scout.
       telegram: [list_allowed_chats, read_chat_history, search_chat_history, get_new_messages]
       # knowledge_*: reference docs mounted from KNOWLEDGE_BASES (D-38).
-      ops_mcp: [obsidian_search, obsidian_read, obsidian_read_document_map, meeting_note_correct, knowledge_list, knowledge_index, knowledge_search, knowledge_read]
+      ops_mcp: [obsidian_search, obsidian_read, obsidian_read_document_map, meeting_note_correct, voice_note_read, voice_note_add, knowledge_list, knowledge_index, knowledge_search, knowledge_read]
       glean: [search, read_document, employee_search, meeting_lookup, code_search, chat]
       # Reads, plus slack_send_message_draft: a draft for the user to send, only when asked (D-46).
       slack: [slack_search_public, slack_search_public_and_private, slack_search_channels, slack_search_users, slack_read_channel, slack_read_thread, slack_read_user_profile, slack_list_user_channels, slack_send_message_draft]

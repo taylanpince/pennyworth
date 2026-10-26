@@ -12,6 +12,7 @@ import { TranscriptScanner } from "./sources/transcripts.js";
 import type { Logger } from "./util/log.js";
 import { KnowledgeBases } from "./knowledge/knowledge.js";
 import { Vault } from "./vault/vault.js";
+import { VoiceGuide } from "./voice/voice.js";
 
 export interface App {
   cfg: Config;
@@ -19,6 +20,7 @@ export interface App {
   vault: Vault;
   knowledge: KnowledgeBases;
   meetings: MeetingService;
+  voice: VoiceGuide;
   paperclip?: PaperclipApi;
   log: Logger;
 }
@@ -50,7 +52,7 @@ export function createApp(cfg: Config, log: Logger, overrides: { db?: Db; paperc
   const router = new Router(cfg, db, vault);
   const tasks = new TaskService(db, paperclip, log);
   const meetings = new MeetingService(cfg, db, store, scanner, vault, router, tasks, log);
-  return { cfg, db, vault, knowledge: new KnowledgeBases(cfg.knowledge), meetings, paperclip, log };
+  return { cfg, db, vault, knowledge: new KnowledgeBases(cfg.knowledge), meetings, voice: new VoiceGuide(cfg, vault, log, overrides.now), paperclip, log };
 }
 
 export async function healthChecks(app: App): Promise<{ ok: boolean; checks: Record<string, { ok: boolean; detail?: string }> }> {

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-46) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-47) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -15,7 +15,8 @@ host (NixOS, user taylan)
 ├── transcript watcher (systemd --user .path) → signed webhook → "Meeting scan"
 └── docker compose (project "pennyworth")
     ├── paperclip            pinned ghcr image, 127.0.0.1:3100, Codex agents inside
-    ├── ops-mcp              TypeScript: transcripts, matcher, vault writer, routing, review replies, tasks; reference docs (D-38)
+    ├── ops-mcp              TypeScript: transcripts, matcher, vault writer, routing, review replies, tasks; reference docs (D-38);
+    │                        the user's writing voice guide, lessons added on their word (D-47)
     ├── google-workspace-mcp read-only Calendar/Drive/Docs/Gmail, multi-account; sign-in state and board reconnect (D-36)
     ├── slack-mcp            proxy to mcp.slack.com (allowlisted read tools, plus drafts for the Assistant, D-46)
     ├── telegram-mcp         the user's own Telegram session, reads only by a request guard; live updates + sweep; board sign-in (D-37)
@@ -43,7 +44,7 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`. The on
 | Slack Scout | Slack items for the user |
 | Telegram Scout | Telegram mentions, replies and DMs for the user, from the candidates telegram-mcp picks |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
-| Assistant (**Alfred**) | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, notes, reference docs, cached web, files attached to tasks), publishing to Primer, Slack drafts, and GitHub comments, issues, reviews and CI re-runs when asked, acting on the user's replies (including scheduling a task or making it recurring), and running recurring tasks |
+| Assistant (**Alfred**) | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, notes, reference docs, cached web, files attached to tasks), publishing to Primer, Slack drafts, and GitHub comments, issues, reviews and CI re-runs when asked, acting on the user's replies (including scheduling a task or making it recurring, and learning how the user writes when asked, D-47), and running recurring tasks |
 | Engineer · Codex (**Grace**) / · Claude (**Ada**) / · OpenRouter (**Linus**) | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20) |
 
 ## Everyday commands

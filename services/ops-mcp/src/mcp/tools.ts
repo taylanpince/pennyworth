@@ -7,11 +7,13 @@ import { UserFacingError } from "../util/errors.js";
 import type { KnowledgeBases } from "../knowledge/knowledge.js";
 import type { Logger } from "../util/log.js";
 import type { Vault } from "../vault/vault.js";
+import type { VoiceGuide, VoiceLesson } from "../voice/voice.js";
 
 export interface ToolDeps {
   meetings: MeetingService;
   vault: Vault;
   knowledge: KnowledgeBases;
+  voice: VoiceGuide;
   log: Logger;
 }
 
@@ -34,7 +36,7 @@ function fail(err: unknown, log: Logger, tool: string) {
 
 export function buildServer(deps: ToolDeps): McpServer {
   const server = new McpServer({ name: "ops-mcp", version: "0.1.0" }, { instructions: SERVER_INSTRUCTIONS });
-  const { meetings, vault, knowledge, log } = deps;
+  const { meetings, vault, knowledge, voice, log } = deps;
 
   const wrap =
     <A,>(tool: string, fn: (args: A) => Promise<Json> | Json) =>
@@ -211,6 +213,35 @@ export function buildServer(deps: ToolDeps): McpServer {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     wrap("obsidian_read_document_map", (a: { path: string }) => vault.documentMap(a.path) as unknown as Json),
+  );
+
+  // The user's writing voice guide: read before drafting in their voice, lessons added on their word.
+  server.registerTool(
+    "voice_note_read",
+    {
+      title: "Read the user's writing voice guide",
+      description: "The user's notes on how they write (tone, structure, wording) and the lessons learned from their corrections. Read it before drafting anything in the user's voice.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    wrap("voice_note_read", () => voice.read()),
+  );
+
+  server.registerTool(
+    "voice_note_add",
+    {
+      title: "Add a lesson to the user's writing voice guide",
+      description:
+        "Append one lesson about the user's writing voice under Lessons in their voice guide, with their own example text. Only use when the user asked in their own comment to learn or remember how they write. Nothing else in the note is changed; an identical lesson is not added twice.",
+      inputSchema: {
+        lesson: z.string().min(1).max(2000).describe("What to do differently, as short guidance"),
+        example: z.string().max(4000).optional().describe("The user's own wording that shows it, verbatim"),
+        context: z.string().max(100).optional().describe("Where it applies, e.g. 'X and LinkedIn posts'; omit if it applies everywhere"),
+        task: z.string().max(32).optional().describe("The task it came from, e.g. PEN-2551"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    wrap("voice_note_add", (a: VoiceLesson) => voice.add(a)),
   );
 
   // Reference documentation (read-only), e.g. the wallet-brain and aggbrain doc repositories.
