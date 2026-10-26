@@ -41,7 +41,7 @@ async function connect(): Promise<NonNullable<typeof upstream>> {
   return upstream;
 }
 
-const isAuthFailure = (err: unknown) => /401|unauthori[sz]ed|invalid_token|not_authenticated/i.test(String(err));
+const isAuthFailure = (err: unknown) => /401|unauthori[sz]ed|unauthenticated|invalid_token|not_authenticated/i.test(String(err));
 
 async function withUpstream<T>(fn: (u: NonNullable<typeof upstream>) => Promise<T>): Promise<T> {
   // Reconnect every 30 minutes or after an auth failure. The reconnect sits inside the try: a token

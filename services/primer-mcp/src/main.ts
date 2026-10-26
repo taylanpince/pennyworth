@@ -45,7 +45,7 @@ async function withUpstream<T>(fn: (u: NonNullable<typeof upstream>) => Promise<
     if (!upstream || Date.now() - upstream.at > 30 * 60_000) await reset(false);
     return await fn(upstream ?? (await connect()));
   } catch (err) {
-    if (!/401|unauthori[sz]ed|invalid_token|not_authenticated/i.test(String(err))) throw err;
+    if (!/401|unauthori[sz]ed|unauthenticated|invalid_token|not_authenticated/i.test(String(err))) throw err;
     log.warn("Primer rejected the token; refreshing and retrying once");
     await reset(true);
     return fn(upstream ?? (await connect()));
