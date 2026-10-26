@@ -86,6 +86,7 @@ const brief = (i) => ({
   priority: i.priority,
   labels: (i.labels ?? []).map((l) => l.name),
   assignee: i.assigneeAgentId ? "agent" : i.assigneeUserId ? "user" : null,
+  ...(i.parentId ? { parent: i.parentId } : {}),
   createdAt: i.createdAt,
   updatedAt: i.updatedAt,
 });
@@ -111,6 +112,19 @@ let ownerId;
 async function ownerUserId() {
   if (ownerId === undefined && COMPANY) ownerId = (await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}`)).defaultResponsibleUserId ?? null;
   return ownerId ?? undefined;
+}
+
+/** One of the user's own tasks: assigned to them, or theirs to answer for. */
+async function isUsersTask(id) {
+  const owner = await ownerUserId();
+  const p = await api("GET", `/api/issues/${issueRef(id)}`);
+  return Boolean(owner) && (p.assigneeUserId === owner || p.responsibleUserId === owner);
+}
+
+/** The calling agent's own part of one of the user's tasks (D-45): a sub-task assigned to it. */
+async function isOwnPart(issue) {
+  if (!issue.parentId || !issue.assigneeAgentId) return false;
+  return (await api("GET", "/api/agents/me")).id === issue.assigneeAgentId && (await isUsersTask(issue.parentId));
 }
 
 async function findByMarker(marker, statuses = OPEN_STATUSES) {
@@ -163,13 +177,15 @@ const issueRef = (v) => {
 
 const TOOLS = {
   task_current: {
-    description: "Get the Paperclip task this run is working on (id, identifier, title, status, description).",
+    description:
+      "Get the Paperclip task this run is working on (id, identifier, title, status, description). When it's your part of one of the user's tasks, `parent` is that task (identifier, title, description) for context.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: false },
     run: async () => {
       if (!CURRENT_TASK) return { task: null };
       const i = await api("GET", `/api/issues/${issueRef(CURRENT_TASK)}`);
-      return { task: { ...brief(i), description: i.description } };
+      const p = i.parentId ? await api("GET", `/api/issues/${issueRef(i.parentId)}`).catch(() => undefined) : undefined;
+      return { task: { ...brief(i), description: i.description }, ...(p ? { parent: { identifier: p.identifier, title: p.title, description: p.description } } : {}) };
     },
   },
   task_get: {
@@ -300,8 +316,10 @@ const TOOLS = {
       if (me?.metadata?.setupKey !== "pennyworth:assistant") throw new Error("only the Assistant can create Engineer tasks");
       if (engine === "glm") engine = "openrouter"; // the OpenRouter Engineer was "Engineer · GLM"
       if (!ENGINES.includes(engine)) throw new Error(`engine must be one of ${ENGINES.join(", ")}`);
-      const p = await api("GET", `/api/issues/${issueRef(parent)}`);
+      let p = await api("GET", `/api/issues/${issueRef(parent)}`);
       const owner = await ownerUserId();
+      // From the Assistant's own sub-task (D-45), the Engineer joins the user's task it belongs to.
+      if (p.parentId && p.assigneeAgentId === me.id) p = await api("GET", `/api/issues/${issueRef(p.parentId)}`);
       if (!owner || (p.assigneeUserId !== owner && p.responsibleUserId !== owner)) throw new Error("the parent must be one of the user's tasks");
       const key = String(marker).trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(0, 80);
       if (!key) throw new Error("invalid marker");
@@ -482,13 +500,21 @@ const TOOLS = {
     },
   },
   task_handoff: {
-    description: "Hand a task back to the user: assign it to them (status todo) with a comment summarizing what you did or what you need. Use this to finish work on a task assigned to you.",
+    description:
+      "Hand a task back to the user with a comment summarizing what you did or what you need. Use this to finish work on a task assigned to you. Your part of one of the user's tasks stays yours, waiting for their reply; any other task is assigned back to them.",
     inputSchema: { type: "object", properties: { issue: { type: "string" }, comment: { type: "string" } }, required: ["issue", "comment"], additionalProperties: false },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     run: async ({ issue, comment }) => {
       const owner = await ownerUserId();
       if (!owner) throw new Error("could not determine the task owner");
-      const i = await api("PATCH", `/api/issues/${issueRef(issue)}`, { assigneeUserId: owner, assigneeAgentId: null, status: "todo", comment: String(comment).slice(0, 20_000) });
+      const body = String(comment).slice(0, 20_000);
+      const current = await api("GET", `/api/issues/${issueRef(issue)}`);
+      // The crew (D-45): an agent's sub-task on the user's task stays the agent's, as `todo` (a valid
+      // ending for Paperclip, unlike in_progress), so the user's next comment there wakes it again.
+      if (await isOwnPart(current)) {
+        return brief(await api("PATCH", `/api/issues/${issueRef(issue)}`, { status: "todo", comment: body }));
+      }
+      const i = await api("PATCH", `/api/issues/${issueRef(issue)}`, { assigneeUserId: owner, assigneeAgentId: null, status: "todo", comment: body });
       return brief(i);
     },
   },
@@ -512,6 +538,11 @@ const TOOLS = {
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     run: async ({ issue, status, comment }) => {
       if (!STATUSES.includes(status)) throw new Error("invalid status");
+      // An agent's part of the user's task (D-45) stays open for the user's replies: closing it is theirs.
+      if (status === "done" || status === "cancelled") {
+        const current = await api("GET", `/api/issues/${issueRef(issue)}`);
+        if (await isOwnPart(current)) throw new Error("this is your part of the user's task: it stays open for their replies. Finish with task_handoff instead; the user closes the task.");
+      }
       const body = { status };
       if (comment) body.comment = String(comment).slice(0, 20_000);
       const i = await api("PATCH", `/api/issues/${issueRef(issue)}`, body);
