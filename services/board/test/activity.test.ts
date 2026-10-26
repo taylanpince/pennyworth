@@ -107,5 +107,6 @@ describe("runner report", () => {
     expect(RunnerReportSchema.safeParse({ running: [], queued: [], recent: [] }).success).toBe(true);
     expect(RunnerReportSchema.safeParse({ running: [{ issueId: "x", identifier: "PEN-1", startedAt: ago(1) }], queued: [], recent: [] }).success).toBe(false);
     expect(RunnerReportSchema.safeParse({ running: [], queued: [], recent: [], extra: 1 }).success).toBe(false);
+    expect(RunnerReportSchema.safeParse({ running: [], queued: [], recent: [], latest: [{ identifier: "PEN-2", status: "timeout" }] }).success).toBe(true);
   });
 });

@@ -204,6 +204,11 @@ export function ownRequest(issue) {
  * A sub-task an agent (the Assistant) created for an Engineer under one of the user's tasks. Its
  * description is agent-written, so it waits for the user's go-ahead (D-24) before it is the request.
  */
+/** A part of the user's task they gave an Engineer themselves (D-45): their own request, no go-ahead needed. */
+export function isUserPart(issue, engineers) {
+  return Boolean(issue?.parentId && issue.createdByUserId && !issue.createdByAgentId && engineers.some((e) => e.id === issue.assigneeAgentId));
+}
+
 export function isAgentSubtask(issue) {
   return Boolean(issue?.parentId && issue.createdByAgentId && !issue.createdByUserId);
 }

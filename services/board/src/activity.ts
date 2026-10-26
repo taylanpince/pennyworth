@@ -24,6 +24,8 @@ export const RunnerReportSchema = z
     running: z.array(RunnerJobSchema).max(50),
     queued: z.array(z.object({ issueId: z.string().regex(UUID), identifier: z.string().regex(IDENT) }).strict()).max(200),
     recent: z.array(RunnerJobSchema).max(50),
+    /** Each task's latest job result (D-45), so a stuck part stays visible after it leaves `recent`. */
+    latest: z.array(z.object({ identifier: z.string().regex(IDENT), status: z.string().max(40) }).strict()).max(500).optional(),
   })
   .strict();
 

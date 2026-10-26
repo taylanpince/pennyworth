@@ -797,8 +797,8 @@ function send(res: ServerResponse, status: number, body: string | Buffer, type: 
 }
 
 /** The runner's latest job result per task (D-45: a failed run shows on the agent's portrait). */
-export function latestJobs(report: { recent: { identifier: string; status?: string }[] } | undefined): Map<string, string> {
+export function latestJobs(report: { recent: { identifier: string; status?: string }[]; latest?: { identifier: string; status: string }[] } | undefined): Map<string, string> {
   const out = new Map<string, string>();
-  for (const j of report?.recent ?? []) if (j.status && !out.has(j.identifier)) out.set(j.identifier, j.status);
+  for (const j of [...(report?.recent ?? []), ...(report?.latest ?? [])]) if (j.status && !out.has(j.identifier)) out.set(j.identifier, j.status);
   return out;
 }

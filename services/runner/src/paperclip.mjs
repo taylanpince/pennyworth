@@ -40,13 +40,17 @@ export class Paperclip {
    * minutes so a primary model changed in the Paperclip UI applies. Before the split there was one.
    */
   async engineerAgents() {
-    if (!this.engineers || Date.now() - this.engineers.at > 300_000) {
-      const agents = (await this.api("GET", `/api/companies/${this.company}/agents`)).filter((x) => x.status !== "terminated");
-      let list = agents.filter((x) => /^pennyworth:engineer(-|$)/.test(x.metadata?.setupKey ?? ""));
-      if (!list.length) list = agents.filter((x) => x.name === "Engineer");
-      this.engineers = { at: Date.now(), list };
+    const agents = await this.agents();
+    const list = agents.filter((x) => /^pennyworth:engineer(-|$)/.test(x.metadata?.setupKey ?? ""));
+    return list.length ? list : agents.filter((x) => x.name === "Engineer");
+  }
+
+  /** Every live agent, refreshed every few minutes (personas and primary models change in setup). */
+  async agents() {
+    if (!this.agentList || Date.now() - this.agentList.at > 300_000) {
+      this.agentList = { at: Date.now(), list: (await this.api("GET", `/api/companies/${this.company}/agents`)).filter((x) => x.status !== "terminated") };
     }
-    return this.engineers.list;
+    return this.agentList.list;
   }
 
   /** Show the executor on the task: assign it to an Engineer and set (or clear) its model override. */

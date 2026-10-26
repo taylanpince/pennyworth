@@ -123,6 +123,13 @@ export class State {
   }
 
   /** The newest finished jobs, with their task's identifier. */
+  /** The latest finished job of each task, newest first (D-45: a stuck part shows on the board). */
+  latestJobs(limit) {
+    return this.db
+      .prepare("SELECT jobs.status, tasks.identifier FROM jobs JOIN tasks USING (issue_id) WHERE jobs.id IN (SELECT MAX(id) FROM jobs WHERE finished_at IS NOT NULL GROUP BY issue_id) ORDER BY jobs.id DESC LIMIT ?")
+      .all(limit);
+  }
+
   recentJobs(limit) {
     return this.db
       .prepare("SELECT jobs.*, tasks.identifier FROM jobs JOIN tasks USING (issue_id) WHERE jobs.finished_at IS NOT NULL ORDER BY jobs.id DESC LIMIT ?")

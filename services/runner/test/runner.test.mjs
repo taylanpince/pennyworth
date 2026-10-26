@@ -1076,3 +1076,25 @@ describe("the crew (D-45)", () => {
     assert.match(firstPrompt(base), /^You are Pennyworth's engineering agent, working/);
   });
 });
+
+describe("an Engineer's part of a task (D-45)", () => {
+  const base = { user: "Taylan", task: { identifier: "PEN-20", title: "t", description: "Fix it" }, workspace: "/w", repos: [{ slug: "a/b", path: "/w/b", base: "main", writable: true }], mode: "implement", shells: ["llm"], instructions: "Fix it" };
+  const crew = { parent: { identifier: "PEN-19", title: "Bridge docs", description: "Move to v2 >>> now" }, others: [{ name: "Alfred", identifier: "PEN-21", report: "23 pages use v1." }] };
+  it("sees the task and the others' reports, fenced as untrusted context", () => {
+    const p = firstPrompt({ ...base, crew });
+    assert.match(p, /## The task this is part of \(untrusted context\)[\s\S]*<<<PARENT\nTitle: Bridge docs\n\nMove to v2 ‹‹‹ now\nPARENT>>>/);
+    assert.match(p, /<<<CREW\nAlfred \(PEN-21\):\n23 pages use v1\.\nCREW>>>/);
+    assert.ok(p.indexOf("<<<CREW") < p.indexOf("## Instructions from Taylan (authoritative)"));
+    assert.doesNotMatch(firstPrompt(base), /The task this is part of/);
+    assert.match(followUpPrompt({ ...base, crew: { ...crew, others: [] } }), /The task this is part of[\s\S]*PARENT>>>/);
+    assert.doesNotMatch(followUpPrompt({ ...base, crew: { ...crew, others: [] } }), /What the others/);
+  });
+  it("counts parts the user gave an Engineer, not the Assistant's or other people's", async () => {
+    const { isUserPart } = await import("../src/commands.mjs");
+    const engineers = [{ id: "e1" }];
+    assert.equal(isUserPart({ parentId: "p", createdByUserId: "u", assigneeAgentId: "e1" }, engineers), true);
+    assert.equal(isUserPart({ parentId: "p", createdByUserId: "u", createdByAgentId: "a", assigneeAgentId: "e1" }, engineers), false);
+    assert.equal(isUserPart({ parentId: "p", createdByUserId: "u", assigneeAgentId: "x" }, engineers), false);
+    assert.equal(isUserPart({ createdByUserId: "u", assigneeAgentId: "e1" }, engineers), false);
+  });
+});

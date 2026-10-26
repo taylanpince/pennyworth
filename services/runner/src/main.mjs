@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // Pennyworth runner: turns your comments on Paperclip tasks labelled "engineer" into
 // Codex / Claude Code / OpenRouter coding jobs in runner-owned git worktrees on this machine.
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { RUNNER_MARKER, isAgentSubtask, ownRequest, findRepos, mentionedRepos, readOnlyRefusal, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
+import { RUNNER_MARKER, isAgentSubtask, isUserPart, ownRequest, findRepos, mentionedRepos, readOnlyRefusal, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { runAgent } from "./engines.mjs";
 import { syncFiles } from "./files.mjs";
@@ -93,6 +94,7 @@ function reportActivity() {
     running: [...running.entries()].map(([issueId, r]) => ({ issueId, identifier: r.identifier, startedAt: r.startedAt, ...(r.info ?? {}) })),
     queued: queue.filter((j) => !running.has(j.issue.id)).map((j) => ({ issueId: j.issue.id, identifier: j.issue.identifier })),
     recent: state.recentJobs(15).map((j) => ({ issueId: j.issue_id, identifier: j.identifier, engine: j.engine ?? undefined, status: j.status, startedAt: j.started_at, finishedAt: j.finished_at })),
+    latest: state.latestJobs(200).map((j) => ({ identifier: j.identifier, status: j.status })),
   };
   boardApi.post("/internal/runner/activity", body).then(
     () => (activityError = ""),
@@ -456,6 +458,25 @@ async function syncPicker(issue, full, task, named) {
   return state.task(issue.id);
 }
 
+/**
+ * An Engineer's part of the user's task (D-45): the task itself, and the latest report of every other
+ * crew member on it (an agent's comment, or the runner's report on an Engineer's part).
+ */
+async function crewContext(full) {
+  if (!full.parentId) return undefined;
+  const parent = await pc.issue(full.parentId);
+  if (!parent.assigneeUserId) return undefined;
+  const [agents, kids] = await Promise.all([pc.agents(), pc.children(parent.id, "backlog,todo,in_progress,in_review,blocked,done,cancelled")]);
+  const others = [];
+  for (const k of kids) {
+    const persona = agents.find((a) => a.id === k.assigneeAgentId)?.metadata?.persona;
+    if (k.id === full.id || typeof persona?.name !== "string") continue;
+    const report = (await pc.comments(k.id)).reverse().find((c) => !Paperclip.isUserInstruction(c));
+    if (report) others.push({ name: persona.name, identifier: k.identifier, report: stripHidden(report.body).trim().slice(0, 4000) });
+  }
+  return { parent: { identifier: parent.identifier, title: parent.title, description: stripHidden(parent.description ?? "").trim() }, others };
+}
+
 class UserError extends Error {}
 
 async function startJob({ issue, instructions, read, candidates }) {
@@ -535,9 +556,15 @@ async function startJob({ issue, instructions, read, candidates }) {
     const branches = state.branches(issue.id);
     const files = await syncFiles(pc, full, workspace, log);
     const primer = primerRecord(issue.id);
+    // The task this is part of and what the others on it found (D-45): on the first run, then again when it changed.
+    const crewCtx = await crewContext(full).catch((err) => (log("crew context unavailable", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 200) }), undefined));
+    const crewKey = `crew:${issue.id}`;
+    const crewHash = crewCtx ? createHash("sha256").update(JSON.stringify(crewCtx)).digest("hex") : "";
+    const crew = crewCtx && (!resumed || state.get(crewKey) !== crewHash) ? crewCtx : undefined;
+    if (crewHash) state.set(crewKey, crewHash);
     const prompt = resumed
-      ? followUpPrompt({ user: cfg.selfName, mode, instructions, workspace, repos, branches, files, primer })
-      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells, instructions, earlier, files, primer, persona: personaFor(engine.kind, await pc.engineerAgents().catch(() => [])) });
+      ? followUpPrompt({ user: cfg.selfName, mode, instructions, workspace, repos, branches, files, primer, crew })
+      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells, instructions, earlier, files, primer, persona: personaFor(engine.kind, await pc.engineerAgents().catch(() => [])), crew });
     const tipsBefore = await branchTips(workspace);
     const helper = repoHelper.register({ issue, workspace });
     let result;
@@ -642,7 +669,9 @@ async function publishToPrimer(issue, full, workspace) {
 async function handleParentPr(parent, fresh) {
   const asks = fresh.filter((c) => parseCommand(c.body) === "pr");
   if (!asks.length) return false;
-  const kids = (await pc.children(parent.id)).filter((c) => isAgentSubtask(c) && state.get(`approved:${c.id}`));
+  const engineers = await pc.engineerAgents();
+  // Approved sub-tasks the Assistant made (D-24), and the parts the user gave Engineers themselves (D-45).
+  const kids = (await pc.children(parent.id)).filter((c) => (isAgentSubtask(c) && state.get(`approved:${c.id}`)) || isUserPart(c, engineers));
   if (!kids.length) return false;
   for (const c of asks) state.markHandled(c.id, parent.id);
   kids.sort((a, b) => a.identifier.localeCompare(b.identifier, undefined, { numeric: true }));
