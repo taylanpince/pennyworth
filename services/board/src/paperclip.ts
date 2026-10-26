@@ -34,6 +34,9 @@ export interface Issue {
   completedAt?: string | null;
   cancelledAt?: string | null;
   createdByUserId?: string | null;
+  createdByAgentId?: string | null;
+  /** The task this one is a sub-task of: an agent's work on the user's task (D-24, D-45). */
+  parentId?: string | null;
   /** "routine_execution" for a routine's run task. */
   originKind?: string | null;
 }

@@ -1,6 +1,7 @@
 // Board logic: which tasks show where, who they're assigned to, and how edits map onto Paperclip.
 // Pure functions (unit-tested); I/O is in app.ts.
 import { z } from "zod";
+import { crewOf, foldedChildren, type CrewInput, type CrewMember } from "./crew.js";
 import type { Agent, Comment, Issue, Label } from "./paperclip.js";
 import { BUCKETS, type Bucket, type Placement } from "./store.js";
 
@@ -99,6 +100,8 @@ export interface Card {
   recurring?: { summary: string; nextRun: string | null; paused: boolean };
   /** An agent is working on it now, or the runner has it queued. */
   working?: { agent: string; since: string | null; queued: boolean };
+  /** The agents on the task (D-45): its own agent, and those working in its sub-tasks. */
+  crew?: CrewMember[];
 }
 
 export function toCard(issue: Issue, list: Assignee[], seenAt: string): Card {
@@ -129,6 +132,8 @@ export interface BoardInput {
   recurring?: Map<string, NonNullable<Card["recurring"]>>;
   installedAt: string;
   assignees: Assignee[];
+  /** Activity and runner results for the crew on each card (D-45); without it, cards have no crew. */
+  crew?: Omit<CrewInput, "assignees" | "seen">;
 }
 
 export interface Board {
@@ -147,9 +152,20 @@ export function buildBoard(input: BoardInput): Board {
   const unique = new Map(input.open.map((i) => [i.id, i]));
   const briefs = [...unique.values()].filter(isBrief).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const recurring: Card[] = [];
+  // Agents' sub-tasks fold into the card they work on (D-45).
+  const all = [...new Map([...input.closed, ...input.open].map((i) => [i.id, i])).values()];
+  const folded = foldedChildren(all, input.assignees);
+  const children = new Map<string, Issue[]>();
+  for (const i of all) if (folded.has(i.id)) children.set(folded.get(i.id)!, [...(children.get(folded.get(i.id)!) ?? []), i]);
+  const crewInput = input.crew && { ...input.crew, assignees: input.assignees, seen };
+  const withCrew = (card: Card, issue: Issue) => {
+    const crew = crewInput ? crewOf(issue, children.get(issue.id) ?? [], crewInput) : [];
+    if (crew.length) card.crew = crew;
+    return card;
+  };
   for (const issue of unique.values()) {
-    if (isBrief(issue)) continue;
-    const card = toCard(issue, input.assignees, seen(issue.id));
+    if (isBrief(issue) || folded.has(issue.id)) continue;
+    const card = withCrew(toCard(issue, input.assignees, seen(issue.id)), issue);
     const rule = input.recurring?.get(issue.id);
     if (rule) {
       recurring.push({ ...card, recurring: rule });
@@ -165,9 +181,9 @@ export function buildBoard(input: BoardInput): Board {
   recurring.sort((a, b) => (a.recurring!.nextRun ?? "~").localeCompare(b.recurring!.nextRun ?? "~"));
   for (const b of BUCKETS) buckets[b].sort((x, y) => ranked.get(x.id)! - ranked.get(y.id)! || y.createdAt.localeCompare(x.createdAt));
   const brief = briefs[0];
-  const done = [...new Map(input.closed.filter((i) => !isBrief(i)).map((i) => [i.id, i])).values()]
+  const done = [...new Map(input.closed.filter((i) => !isBrief(i) && !folded.has(i.id) && !unique.has(i.id)).map((i) => [i.id, i])).values()]
     .sort((a, b) => closedAt(b).localeCompare(closedAt(a)))
-    .map((i) => toCard(i, input.assignees, seen(i.id)));
+    .map((i) => withCrew(toCard(i, input.assignees, seen(i.id)), i));
   return {
     buckets,
     brief: brief ? { id: brief.id, identifier: brief.identifier, title: brief.title, description: displayText(brief.description) } : null,

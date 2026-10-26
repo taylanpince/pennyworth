@@ -2,7 +2,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api } from "./api";
-import { BUCKETS, BUCKET_NAMES, type Assignee, type Board, type Bucket, type Card, type Working } from "./types";
+import { BUCKETS, BUCKET_NAMES, type Assignee, type Board, type Bucket, type Card, type CrewMember, type CrewState, type Working } from "./types";
 import { SOURCE_NAMES, STATUS_BADGE, agentShort, ago, elapsed, shortDate, shortName } from "./util";
 
 /** A crew member's portrait (D-45), or a coloured letter for you and agents without one. */
@@ -16,6 +16,59 @@ export function Avatar({ assignee, size }: { assignee: Assignee | undefined; siz
     <span className={`avatar avatar-${tone}`} title={assignee.name}>
       {letter}
     </span>
+  );
+}
+
+const STATE_WORDS: Record<CrewState, string> = { needs: "needs you", failed: "got stuck", proposed: "waiting for your approval", working: "working", queued: "queued", done: "done" };
+
+/** A crew member's portrait with a ring for where they stand (D-45). */
+export function CrewAvatar({ member, assignee, size }: { member: Pick<CrewMember, "state" | "since">; assignee: Assignee | undefined; size?: number }) {
+  return (
+    <span className={`crew-av st-${member.state}`} title={`${shortName(assignee)}: ${STATE_WORDS[member.state]}${member.state === "working" && member.since ? ` · ${elapsed(member.since)}` : ""}`}>
+      <Avatar assignee={assignee} size={size} />
+      <span className="pip" />
+    </span>
+  );
+}
+
+/** The issue to open for a crew member: the one that wants the user, else the first. */
+export const memberIssue = (m: CrewMember) => (m.issues.find((i) => i.state === m.state) ?? m.issues[0])!.identifier;
+
+/** The line under a card's title: the most urgent crew member, in words. */
+export function crewLine(crew: CrewMember[], assignees: Assignee[]): { text: string; tone: CrewState } | undefined {
+  const order: CrewState[] = ["needs", "failed", "proposed", "working", "queued"];
+  for (const state of order) {
+    const m = crew.find((x) => x.state === state);
+    if (!m) continue;
+    const name = shortName(assignees.find((a) => a.key === m.agent));
+    const fan = m.issues.length > 1 ? ` · ${m.finished ?? 0}/${m.issues.length}` : "";
+    const text = { needs: `${name} needs you`, failed: `${name} got stuck`, proposed: `Approve ${name}?`, working: `${name} is working${m.since ? ` · ${elapsed(m.since)}` : ""}`, queued: `${name} is queued`, done: "" }[state];
+    return { text: text + fan, tone: state };
+  }
+  return undefined;
+}
+
+function CrewRow({ crew, assignees }: { crew: CrewMember[]; assignees: Assignee[] }) {
+  const line = crewLine(crew, assignees);
+  return (
+    <div className="card-crew">
+      <span className="crew-stack">
+        {crew.map((m) => (
+          <a
+            key={m.agent}
+            href={`#/t/${memberIssue(m)}`}
+            className="crew-link"
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            aria-label={`Open ${shortName(assignees.find((a) => a.key === m.agent))}'s work`}
+          >
+            <CrewAvatar member={m} assignee={assignees.find((a) => a.key === m.agent)} />
+            {m.issues.length > 1 && <span className="fan">{m.finished ?? 0}/{m.issues.length}</span>}
+          </a>
+        ))}
+      </span>
+      {line && <span className={`crew-line tone-${line.tone}`}>{line.text}</span>}
+    </div>
   );
 }
 
@@ -70,9 +123,10 @@ export function CardView({ card, assignees, selected, overlay, closed, onOpen, o
       onClick={() => onOpen(card)}
     >
       <div className="card-title">{card.title}</div>
+      {card.crew && <CrewRow crew={card.crew} assignees={assignees} />}
       <div className="card-meta">
         <span className="ident">{card.identifier}</span>
-        <Chips card={card} />
+        <Chips card={card.crew ? { ...card, working: undefined } : card} />
         {card.scheduled && (
           <span className="tag when" title={`Moves to the top of ${BUCKET_NAMES[card.scheduled.bucket]} on ${card.scheduled.date}`}>
             ↑ {BUCKET_NAMES[card.scheduled.bucket]} {shortDate(card.scheduled.date)}
@@ -93,7 +147,7 @@ export function CardView({ card, assignees, selected, overlay, closed, onOpen, o
         <span className="time" title={new Date(card.activityAt).toLocaleString()}>
           {ago(card.activityAt)}
         </span>
-        {assignee?.kind !== "me" && <Avatar assignee={assignee} />}
+        {assignee?.kind !== "me" && !card.crew && <Avatar assignee={assignee} />}
       </div>
       {card.unread && <span className="dot" title="New activity" />}
       {!overlay && !closed && (onDone || onMove) && (

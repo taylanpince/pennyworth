@@ -148,6 +148,11 @@ function IssueBody({ issue, board, busy, update, setStatus, onClose, onMove, rel
           </button>
         )}
       </header>
+      {issue.parent && (
+        <div className="part-of">
+          Part of <a href={`#/t/${issue.parent.identifier}`}>{issue.parent.identifier}{issue.parent.title ? `: ${issue.parent.title}` : ""}</a>
+        </div>
+      )}
       {issue.working && (
         <div className={`working-bar${issue.working.queued ? " queued" : ""}`}>
           {issue.working.queued

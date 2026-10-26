@@ -19,7 +19,7 @@ import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSo
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CrewView } from "./Agents";
 import { PairRequired, api, type Session } from "./api";
-import { CardView, GleanBanner, GoogleBanner, PlusIcon, SortableCard, TelegramBanner } from "./components";
+import { CardView, GleanBanner, GoogleBanner, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
 import { Drawer } from "./Drawer";
 import { Markdown } from "./markdown";
 import { PairScreen, PhonePanel } from "./Pairing";
@@ -435,6 +435,8 @@ export function App() {
     return <div className="splash">{error ? <>Can't reach the board: {error}</> : <span className="spinner" />}</div>;
 
   const active = activeId ? BUCKETS.flatMap((b) => items[b]).find((c) => c.id === activeId) : undefined;
+  // Agents waiting on you (D-45): a question or result to read, a stuck run, or a proposal to approve.
+  const waiting = [...BUCKETS.flatMap((b) => items[b]), ...board.recurring].flatMap((c) => (c.crew ?? []).filter((m) => m.state === "needs" || m.state === "failed" || m.state === "proposed"));
   const counts = Object.fromEntries(BUCKETS.map((b) => [b, items[b].length])) as Record<Bucket, number>;
   const openCard = (c: Card) => {
     setSelected(c.id);
@@ -458,6 +460,11 @@ export function App() {
             Crew
             {board.agentsActive > 0 && <span className="btn-count">{board.agentsActive}</span>}
           </button>
+        )}
+        {waiting.length > 0 && (
+          <a className="btn" href={`#/t/${memberIssue(waiting[0]!)}`} title="Open the next agent waiting on you">
+            Needs you <span className="btn-count needs">{waiting.length}</span>
+          </a>
         )}
         {board.brief && (
           <a className="btn" href="#/brief" title="Today's brief (b)">

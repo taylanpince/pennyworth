@@ -21,6 +21,7 @@
   --later: #868e96;
   --backlog: #adb5bd;
   --working: #2f9e44;
+  --needs-text: #8a5d00;
   --shadow: 0 1px 2px rgba(29, 28, 26, 0.06), 0 1px 1px rgba(29, 28, 26, 0.04);
   --shadow-lg: 0 12px 32px rgba(29, 28, 26, 0.16), 0 2px 6px rgba(29, 28, 26, 0.08);
   --radius: 10px;
@@ -42,6 +43,7 @@
     --accent-soft: #242c4a;
     --accent-text: #0e1020;
     --low: #5c5a55;
+    --needs-text: #f5c95c;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.55);
     color-scheme: dark;
@@ -491,3 +493,29 @@ kbd {
 .crew-done .task-links.inline { min-width: 0; overflow: hidden; }
 .crew-done .time { flex: none; font-size: 12px; color: var(--faint); }
 .app.mobile .crew-tiles { grid-template-columns: 1fr; }
+
+/* crew on a card: portraits with a status ring (D-45) */
+.card-crew { display: flex; align-items: center; gap: 8px; margin-top: 7px; min-width: 0; }
+.crew-stack { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+.crew-link { display: inline-flex; align-items: center; gap: 3px; text-decoration: none; color: var(--muted); border-radius: 50%; }
+.crew-av { position: relative; display: inline-grid; border-radius: 50%; flex: none; }
+.crew-av .avatar { width: 22px; height: 22px; }
+.crew-av::before { content: ""; position: absolute; inset: -3px; border-radius: 50%; border: 2px solid transparent; pointer-events: none; }
+.crew-av.st-working::before { border-color: var(--working); border-right-color: transparent; animation: spin 1.4s linear infinite; }
+.crew-av.st-queued::before { border: 2px dashed var(--faint); }
+.crew-av.st-needs::before { border-color: var(--triage); }
+.crew-av.st-failed::before { border-color: var(--urgent); }
+.crew-av.st-proposed { filter: grayscale(1); opacity: 0.55; }
+.crew-av.st-proposed::before { border: 2px dashed var(--faint); }
+.crew-av .pip { position: absolute; right: -3px; bottom: -3px; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--surface); display: none; }
+.crew-av.st-needs .pip { display: block; background: var(--triage); }
+.crew-av.st-failed .pip { display: block; background: var(--urgent); }
+@media (prefers-reduced-motion: reduce) { .crew-av.st-working::before { animation: none; border-right-color: var(--working); } }
+.fan { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.crew-line { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.crew-line.tone-needs, .crew-line.tone-proposed { color: var(--needs-text); font-weight: 600; }
+.crew-line.tone-failed { color: var(--urgent); font-weight: 600; }
+.crew-line.tone-working { color: var(--working); }
+.btn .btn-count.needs { background: var(--triage); color: #2b1e00; }
+.part-of { font-size: 12px; color: var(--muted); padding: 6px 16px 0; }
+.part-of a { color: inherit; }

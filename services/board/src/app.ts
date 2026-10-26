@@ -7,6 +7,7 @@ import { z } from "zod";
 import { RunnerReportSchema, agentsView, runTasks, workingOn, type RunContext, type RunnerReport } from "./activity.js";
 import { RecurringSchema, RunStateSchema, ScheduleSchema, changeRecurring, claimDue, recurringView, scheduleMove } from "./automation.js";
 import { BadRequest, CreateSchema, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
+import { foldedChildren } from "./crew.js";
 import { inNetworks } from "./config.js";
 import { INLINE_TYPES, MAX_UPLOAD_BODY, UploadSchema, decode, fileType, fileViews, isPdf, pdfText, safeName } from "./files.js";
 import { GleanAuthFailed, type GleanAuth } from "./glean.js";
@@ -159,7 +160,12 @@ export function createApp(opts: AppOptions): Server {
 
   async function issueView(ref: string) {
     const { ctx, issue, assigned } = await ownIssue(ref);
-    const [comments, busy, files] = await Promise.all([pc.comments(issue.id), working(ctx), pc.attachments(issue.id).catch(() => [])]);
+    const [comments, busy, files, parent] = await Promise.all([
+      pc.comments(issue.id),
+      working(ctx),
+      pc.attachments(issue.id).catch(() => []),
+      issue.parentId ? pc.issueSummary(issue.parentId).catch(() => undefined) : undefined,
+    ]);
     store.markSeen(issue.id);
     const placement = store.placements().get(issue.id);
     const rec = store.recurring(issue.id);
@@ -176,6 +182,8 @@ export function createApp(opts: AppOptions): Server {
       working: busy.map.get(issue.identifier) ?? null,
       comments: comments.map((c) => commentView(c, ctx.me, ctx.agents)),
       files: fileViews(files, ctx.me),
+      // An agent's sub-task links back to the task it works on (D-45).
+      parent: parent ? { identifier: parent.identifier, title: parent.title } : null,
     };
   }
 
@@ -354,10 +362,12 @@ export function createApp(opts: AppOptions): Server {
         const ctx = await context();
         const since = new Date(Date.now() - RECENT_MS).toISOString();
         const [open, closed] = await Promise.all([pc.openIssues().then((l) => mine(l, ctx)), pc.closedSince(since).then((l) => mine(l, ctx))]);
-        store.placeNew(open.map((i) => ({ id: i.id, createdAt: i.createdAt, status: i.status })));
+        // Agents' sub-tasks are part of their parent's card (D-45): they never get a place of their own.
+        const folded = foldedChildren([...open, ...closed], ctx.assignees);
+        store.placeNew(open.filter((i) => !folded.has(i.id)).map((i) => ({ id: i.id, createdAt: i.createdAt, status: i.status })));
         const recurring = new Map([...store.allRecurring()].map(([id, r]) => [id, { summary: recurringView(r, opts.timezone).summary, nextRun: r.nextRun, paused: r.paused }]));
-        const board = buildBoard({ open, closed, placements: store.placements(), seen: store.allSeen(), schedules: store.schedules(), recurring, installedAt: store.meta("installed_at")!, assignees: ctx.assignees });
         const [busy, google, telegram, glean] = await Promise.all([working(ctx), opts.google?.status(), opts.telegram?.status(), opts.glean?.status()]);
+        const board = buildBoard({ open, closed, placements: store.placements(), seen: store.allSeen(), schedules: store.schedules(), recurring, installedAt: store.meta("installed_at")!, assignees: ctx.assignees, crew: { working: busy.map, jobs: latestJobs(shared.runner) } });
         for (const card of [...Object.values(board.buckets).flat(), ...board.recurring]) {
           const w = busy.map.get(card.identifier);
           if (w) card.working = w;
@@ -692,4 +702,11 @@ function page(text: string): string {
 function send(res: ServerResponse, status: number, body: string | Buffer, type: string, cache = "no-store") {
   res.writeHead(status, { ...SECURITY_HEADERS, "content-type": type, "cache-control": cache });
   res.end(body);
+}
+
+/** The runner's latest job result per task (D-45: a failed run shows on the agent's portrait). */
+export function latestJobs(report: { recent: { identifier: string; status?: string }[] } | undefined): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const j of report?.recent ?? []) if (j.status && !out.has(j.identifier)) out.set(j.identifier, j.status);
+  return out;
 }

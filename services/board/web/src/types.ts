@@ -43,6 +43,18 @@ export interface Card {
   carried?: number;
   /** An agent is working on it now, or the runner has it queued. */
   working?: Working;
+  /** The agents on the task (D-45). */
+  crew?: CrewMember[];
+}
+
+export type CrewState = "needs" | "failed" | "proposed" | "working" | "queued" | "done";
+
+export interface CrewMember {
+  agent: string;
+  state: CrewState;
+  issues: { id: string; identifier: string; state: CrewState }[];
+  finished?: number;
+  since?: string | null;
 }
 
 export interface Working {
@@ -164,7 +176,7 @@ export interface CommentView {
   createdAt: string;
 }
 
-export interface IssueView extends Omit<Card, "scheduled" | "recurring" | "working"> {
+export interface IssueView extends Omit<Card, "scheduled" | "recurring" | "working" | "crew"> {
   working: Working | null;
   description: string;
   bucket: Bucket | null;
@@ -175,6 +187,7 @@ export interface IssueView extends Omit<Card, "scheduled" | "recurring" | "worki
   recurring: RecurringView | null;
   comments: CommentView[];
   files: FileView[];
+  parent: TaskRef | null;
 }
 
 /** A file on a task (D-43). */
