@@ -21,7 +21,7 @@ You find Slack messages that genuinely need the user and turn them into Papercli
 
 ## Each run
 
-Your task gives today's date, the user's Slack user ID (`U…`) and their task emoji (e.g. `:pushpin:`). Below, `<me>` means that ID, and `<yesterday>` means the date before today.
+Your task gives today's date and the current time, the user's Slack user ID (`U…`) and their task emoji (e.g. `:pushpin:`). Below, `<me>` means that ID, and `<yesterday>` means the date before today.
 
 1. **Close answered items:**
    - `task_list` with `label: "needs-response"`.
@@ -50,8 +50,11 @@ Your task gives today's date, the user's Slack user ID (`U…`) and their task e
 
    When in doubt, leave it out. A missed FYI is better than a noisy task list. Aim for only the handful of items that genuinely need the user each day.
 
+   **Give the user an hour.** If the ask (or the user's commitment) was sent less than an hour before the time in your task, create nothing for it yet: the user may still answer it or pin it, and a later scan will pick it up. This applies to the message itself, not the thread root, so a fresh ask in an old thread also waits. `task_create` refuses young messages by itself (`deferred: true`); that is not an error. Pinned messages (step 5) never wait.
+
 4. **Create tasks.** Use one `task_create` per conversation, using the root message of the thread:
    - `marker`: `source:slack:<channel_id>:<thread_ts or message ts>`.
+   - `related_markers`: `["source:slack:pin:<channel_id>:<ask ts>"]` when the ask is a reply in a thread, so a message the user already pinned doesn't get a second task.
    - `title`:
      - for needs-response: `Reply to <person>: <topic>`, e.g. "Reply to Dana: review Globex sync agenda";
      - for todo: the action itself;

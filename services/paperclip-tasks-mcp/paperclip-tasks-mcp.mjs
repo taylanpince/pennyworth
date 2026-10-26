@@ -92,6 +92,7 @@ const brief = (i) => ({
 
 const PRIORITIES = ["critical", "high", "medium", "low"];
 const OPEN_STATUSES = "backlog,todo,in_progress,in_review,blocked";
+const SLACK_GRACE_SECONDS = 3600;
 
 let labelCache;
 async function labelIds(names) {
@@ -245,7 +246,14 @@ const TOOLS = {
       // closing either must not bring it back under the other marker.
       const markers = [m, ...(related_markers ?? []).map((r) => String(r).trim())];
       if (m.startsWith("source:slack:pin:")) markers.push(m.replace(/^source:slack:pin:/, "source:slack:"));
+      // ...and the other way round, for a needs-response or todo task (source:slack:<channel>:<ts>).
+      const slackAsk = /^source:slack:[^:]+:([0-9]+)(?:\.[0-9]+)?$/.exec(m);
+      if (slackAsk) markers.push(m.replace(/^source:slack:/, "source:slack:pin:"));
       if (markers.some((k) => !/^[A-Za-z0-9:._\/-]{3,200}$/.test(k))) throw new Error("invalid related marker");
+      // A Slack ask gets an hour for the user to answer or pin it before it becomes a task.
+      if (slackAsk && Date.now() / 1000 - Number(slackAsk[1]) < SLACK_GRACE_SECONDS) {
+        return { created: false, deferred: true, reason: "the Slack message is less than an hour old; a later scan decides" };
+      }
       // Idempotency keys expire after 7 days in Paperclip, so also look for an open task
       // (or, with dedupe_closed, a closed one) that already carries one of these markers.
       const statuses = dedupe_closed ? `${OPEN_STATUSES},done,cancelled` : OPEN_STATUSES;
