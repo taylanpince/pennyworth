@@ -13,7 +13,7 @@ export const ACTIONS = ["run", "stop", "status", "reset", "cleanup", "push", "pr
 export const INTAKE_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["action", "repo", "references", "mode", "engine", "model", "question"],
+  required: ["action", "repo", "references", "mode", "engine", "model", "primer", "question"],
   properties: {
     action: { type: "string", enum: ACTIONS },
     repo: { type: "string" },
@@ -21,6 +21,7 @@ export const INTAKE_SCHEMA = {
     mode: { type: "string", enum: ["answer", "investigate", "implement"] },
     engine: { type: "string", enum: ["codex", "claude", "openrouter", ""] },
     model: { type: "string" },
+    primer: { type: "boolean" },
     question: { type: "string" },
   },
 };
@@ -80,6 +81,7 @@ Fields:
   "answer" is for an actual question. A report that something is broken (an error, a failing build, test or deploy, pasted logs) without a question asks for it to be fixed: "implement". Otherwise, if unsure whether changes are wanted, do not pick "implement". A bare follow-up such as "continue", "go on" or "try again" keeps the previous mode${previousMode ? ` (it was "${previousMode}")` : ""}. But a go-ahead ("go ahead", "do it", "yes, apply them", "sounds good, make the changes") right after a report or plan that proposes changes (see the last result below) is "implement".
 - engine: "openrouter" if they ask for OpenRouter or opencode, or name a model from the OpenRouter list below (GLM, DeepSeek, Kimi, Qwen…); "claude" if they ask for Claude or Claude Code; "codex" if they name Codex; otherwise "".
 - model: a model they name, mapped to a known model: a Codex model (e.g. "astra"); for Claude, "opus", "sonnet", "haiku", "fable" or a full claude-… id; for OpenRouter, the id from the list (e.g. "deepseek" → the DeepSeek model listed first), or the full provider/model id they wrote. Otherwise "" (also for "use OpenRouter" alone).
+- primer: true if ${user} wants the result as a Primer document: the request asks to publish, put or share it on Primer, or for a Primer report or doc (Primer is the organization's document host). A Primer link given only to read is not that. Otherwise false.
 - question: only if repo is "" and the task has no repository yet, one short plain-language question asking which repository to use. Otherwise "".
 
 Candidate repositories: ${candidates.length ? candidates.join(", ") : "(none)"}
@@ -121,7 +123,7 @@ export function validateIntake(raw, { candidates, models, openrouter = [] }) {
   const engine = or ? "openrouter" : claude ? "claude" : raw?.engine === "codex" || model ? "codex" : undefined;
   const question = String(raw?.question ?? "").trim().slice(0, 500) || undefined;
   const action = ACTIONS.includes(raw?.action) ? raw.action : "run";
-  return { action, repo, references, mode, engine, model, question };
+  return { action, repo, references, mode, engine, model, primer: raw?.primer === true, question };
 }
 
 /** One no-tools Codex call with a JSON schema for its answer; resolves with the parsed JSON. */

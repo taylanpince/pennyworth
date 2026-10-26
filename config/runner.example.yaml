@@ -30,8 +30,10 @@ engines:
     config_dir: ~/.local/state/pennyworth-runner/claude
 
 # Primer for every engine, read-only (D-40). Token: $PENNYWORTH_SECRETS_DIR/primer_mcp_token.
+# publish_url: where the runner itself publishes a task's Primer document (D-44); never given to jobs.
 primer:
   url: http://127.0.0.1:3123/mcp/read
+  publish_url: http://127.0.0.1:3123/mcp
 
 # Reads plain-language requests (target repo, reference repos, mode, model) with a short Codex call.
 intake:

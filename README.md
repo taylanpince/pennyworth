@@ -300,7 +300,7 @@ node scripts/paperclip-setup.mjs   # gives the Assistant the primer server
 
 The `primer-mcp` sidecar holds the token pair (Primer rotates the refresh token on every use) and exposes only reads plus `primer_create_document` and `primer_add_version`. Deleting, sharing, changing visibility and page events are never listed ([D-31](docs/DECISIONS.md)). New documents are visible to your whole organization, as with any Primer document. Change that in Primer if you need to.
 
-Engineer jobs read Primer too, every engine, through the same sidecar's read-only endpoint on `127.0.0.1:3123` ([D-40](docs/DECISIONS.md)). They can't publish. Nothing to set up beyond the sign-in above; restart the runner after it.
+Engineer jobs read Primer too, every engine, through the same sidecar's read-only endpoint on `127.0.0.1:3123` ([D-40](docs/DECISIONS.md)). Ask an Engineer task for a Primer report ("publish it to Primer") and the runner publishes the agent's document after the run, then a new version each time a later run changes it ([D-44](docs/DECISIONS.md)); the jobs themselves still can't publish. Nothing to set up beyond the sign-in above; restart the runner after it.
 
 ## Google
 

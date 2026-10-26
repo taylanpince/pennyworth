@@ -7,7 +7,7 @@
 # Fields: id, why (optional), title, description (task text), own_description (true when you wrote
 # the task: the description is part of the request), comment (your newest comment),
 # context {known_repo, previous_mode, busy, has_work}, expect {action, mode, repo, references,
-# engine, model}. An expected value can be a list of acceptable values, or null for "unset".
+# engine, model, primer}. An expected value can be a list of acceptable values, or null for "unset".
 
 - id: target and reference repo
   title: New balance gateway
@@ -105,3 +105,15 @@
     Attached: `rate-limits-v2.pdf`
   context: { known_repo: 0xPolygon/example-gateway }
   expect: { action: run, mode: implement, references: [] }
+
+- id: publish a report to Primer
+  why: "the report has to reach Primer, and that's a run (the agent writes the document), not push/pr"
+  title: Investigate the gateway's failure signals
+  comment: Publish to Primer so I can review there.
+  context: { known_repo: 0xPolygon/example-gateway, previous_mode: investigate, last_result: "## Summary\nThe report is written." }
+  expect: { action: run, mode: investigate, primer: true }
+
+- id: Primer link to read is not publishing
+  title: Gateway rate limits
+  comment: Implement the design in https://primer.example.com/d/0000 in https://github.com/0xPolygon/example-gateway
+  expect: { action: run, mode: implement, repo: 0xPolygon/example-gateway, primer: false }

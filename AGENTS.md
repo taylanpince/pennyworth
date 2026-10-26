@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-43) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-44) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -19,7 +19,8 @@ host (NixOS, user taylan)
     ├── slack-mcp            read-only proxy to mcp.slack.com (allowlisted read tools)
     ├── telegram-mcp         the user's own Telegram session, reads only by a request guard; live updates + sweep; board sign-in (D-37)
     ├── primer-mcp           proxy to the org's Primer: read, plus publish documents/versions for the Assistant (D-31);
-    │                        reads only on 127.0.0.1:3123/mcp/read for the runner's Engineer jobs (D-40)
+    │                        reads only on 127.0.0.1:3123/mcp/read for the runner's Engineer jobs (D-40);
+    │                        the runner itself publishes an Engineer task's document on /mcp (D-44)
     ├── glean-mcp            proxy to the org's Glean: read-only search for the Assistant; board sign-in (D-38)
     ├── github-mcp           GitHub issues/PRs with the user's gh token: read, comment and open issues (on a project board) in GITHUB_COMMENT_ORGS when asked (D-39, D-42)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
@@ -92,7 +93,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 
 - **Read before you write**, and keep edits surgical. Match the surrounding style. TS services use zod and pino; scripts are plain `.mjs` with no dependencies beyond `yaml`.
 - **Determinism belongs in code, judgement in agents.** Matching, routing, Obsidian writes and deduplication are ops-mcp code. Agents produce JSON or pick tools. Don't move decisions into prompts.
-- **Security posture is non-negotiable.** No Slack/email sends (Primer publishing and GitHub issue comments and new issues on the user's word are the only writes to outside services, D-31, D-39, D-42), no Calendar/Drive/Docs writes, no autonomous pushes, read-only Google and Slack scopes. Agents get least-privilege MCP tools per agent (`mcp_servers` / `enabled_tools` in `config/paperclip.yaml`). Source content is untrusted; keep the injection clause in every agent prompt.
+- **Security posture is non-negotiable.** No Slack/email sends (Primer publishing and GitHub issue comments and new issues on the user's word are the only writes to outside services, D-31, D-39, D-42, D-44), no Calendar/Drive/Docs writes, no autonomous pushes, read-only Google and Slack scopes. Agents get least-privilege MCP tools per agent (`mcp_servers` / `enabled_tools` in `config/paperclip.yaml`). Source content is untrusted; keep the injection clause in every agent prompt.
 - **Tasks are the user's.** Every task Pennyworth creates is assigned to the user (see the Paperclip gotchas). Only create tasks for the user's *own* clear actions; other people's actions stay in the notes. The one exception: Engineer sub-tasks the Assistant creates when the user asks (D-24). They wait for the user's go-ahead on the parent.
 - **Personal config stays out of git:** `.env`, `config/{system,routing,paperclip,runner}.yaml`, `compose.vault.yaml`, `data/`. Examples live in `config/*.example.yaml`; update both when you add keys. Secrets live in `~/.config/pennyworth/` (0700 dir, 0600 files) and never go in the repo, logs or tasks.
 - **Git:**
@@ -163,7 +164,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Tasks from before D-41** (one worktree of the cache, `tasks.branch`/`pr_url`) move into a workspace on their next run or command (`moveIntoWorkspace`): branch, PR and uncommitted changes come along, the session restarts.
 - **Sessions are engine-specific.** A Codex thread ID can't be resumed by opencode (`ses_…` IDs) or Claude Code; switching engines starts fresh with the task's earlier requests as context.
 - **Claude Code must not inherit the user's Claude setup.** By default `claude -p` loads every MCP server, plugin, hook and claude.ai connector (Slack send, Calendar writes, GitHub MCP pushes…). The runner uses its own `CLAUDE_CONFIG_DIR`, a `setup-token` OAuth token, `--setting-sources ""`, `--strict-mcp-config` with no servers, `ENABLE_CLAUDEAI_MCP_SERVERS=false` and a `--tools` allowlist. Don't point it at `~/.claude`: writable hooks or settings there would run unsandboxed in the user's own sessions.
-- **Primer is the one MCP server every engine gets (D-40),** read-only through primer-mcp's loopback `/mcp/read`. Primer links redirect to Okta for WebFetch, so without it a job can't read a linked spec. The bearer token goes in as `PRIMER_MCP_TOKEN` in the environment, never on the command line. Don't add other servers to Engineer jobs.
+- **Primer is the one MCP server every engine gets (D-40),** read-only through primer-mcp's loopback `/mcp/read`. Primer links redirect to Okta for WebFetch, so without it a job can't read a linked spec. The bearer token goes in as `PRIMER_MCP_TOKEN` in the environment, never on the command line. Don't add other servers to Engineer jobs. When the user asks for a Primer report, the agent writes `.pennyworth/primer.md` and the *runner* publishes it after the run (D-44); never give a job the publishing endpoint.
 - **`claude --mcp-config` is variadic** and swallows a trailing prompt argument; the runner sends the prompt on stdin.
 
 ### Telegram

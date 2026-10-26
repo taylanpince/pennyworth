@@ -16,6 +16,7 @@ import { Paperclip } from "./paperclip.mjs";
 import { branchGuidance, checkBranchName, chooseBranchName, exampleBranches } from "./branch.mjs";
 import { cleanMessages, leaksInternal, writePrDescription } from "./describe.mjs";
 import { branchesFooter, commitMessage, firstPrompt, followUpPrompt, latestReport, latestResult, prSummary, prTitle, subtaskSummary, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
+import { PRIMER_FILE, publishDocument } from "./primer.mjs";
 import { startRepoHelper } from "./repohelper.mjs";
 import { baseRef, branchChanges, carryOver, dirtyCheckouts, ensureRepo, findBranches, keepBranches, messagesSince, moveOffDefault, readManifest, signUnsigned, workspacePath, workspaceRepos } from "./workspace.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
@@ -489,6 +490,8 @@ async function startJob({ issue, instructions, read, candidates }) {
       task = state.task(issue.id);
     }
     state.set(pendingKey, "");
+    // Once asked for, the task's document goes to Primer after every run that changes it (D-44).
+    if (read?.primer && !primerRecord(issue.id)) savePrimer(issue.id, {});
     // Every repository the request names joins the workspace (D-41), remembered for follow-ups.
     rememberRepos(issue.id, read?.references ?? []);
     const engine = task.engine ?? resolveEngine({}, cfg);
@@ -530,9 +533,10 @@ async function startJob({ issue, instructions, read, candidates }) {
 
     const branches = state.branches(issue.id);
     const files = await syncFiles(pc, full, workspace, log);
+    const primer = primerRecord(issue.id);
     const prompt = resumed
-      ? followUpPrompt({ user: cfg.selfName, mode, instructions, workspace, repos, branches, files })
-      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells, instructions, earlier, files });
+      ? followUpPrompt({ user: cfg.selfName, mode, instructions, workspace, repos, branches, files, primer })
+      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells, instructions, earlier, files, primer });
     const tipsBefore = await branchTips(workspace);
     const helper = repoHelper.register({ issue, workspace });
     let result;
@@ -565,8 +569,9 @@ async function startJob({ issue, instructions, read, candidates }) {
 
     const report = stripCommitLine(result.lastMessage);
     const stillDirty = (await dirtyCheckouts(after)).length > 0;
+    const primerNote = outcome.finished ? await publishToPrimer(issue, full, workspace) : "";
     if (mode === "answer" && outcome.finished) {
-      await pc.setStatus(issue.id, "in_review", `${stripAnswerHeading(report)}\n\n_${engineLabel(engine)} · ${whereNow}${stillDirty ? " · note: the workspace has uncommitted changes" : ""}_`);
+      await pc.setStatus(issue.id, "in_review", `${stripAnswerHeading(report)}${primerNote ? `\n\n${primerNote}` : ""}\n\n_${engineLabel(engine)} · ${whereNow}${stillDirty ? " · note: the workspace has uncommitted changes" : ""}_`);
       state.finishJob(jobId, "done");
       log("job finished", { issue: issue.identifier, code: result.code, mode });
       return;
@@ -575,6 +580,7 @@ async function startJob({ issue, instructions, read, candidates }) {
       outcome.headline,
       outcome.finished ? "" : `\nLast lines of the log:\n\`\`\`\n${logTail(logPath)}\n\`\`\`${report ? `\n\nThe agent's last message:\n\n> ${report.slice(0, 1500).replace(/\n/g, "\n> ")}` : ""}`,
       outcome.finished ? `\n${report}` : "",
+      primerNote ? `\n${primerNote}` : "",
       "",
       "---",
       `${engineLabel(engine)} · ${mode} · ${whereNow}`,
@@ -595,6 +601,34 @@ async function startJob({ issue, instructions, read, candidates }) {
     drainQueue();
     reportActivity();
     void reportToParent(issue).catch((err) => log("parent summary failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }));
+  }
+}
+
+// ------------------------------------------------------------------ Primer (D-44)
+
+const primerRecord = (issueId) => (state.get(`primer:${issueId}`) ? JSON.parse(state.get(`primer:${issueId}`)) : undefined);
+const savePrimer = (issueId, record) => state.set(`primer:${issueId}`, JSON.stringify(record));
+
+/**
+ * After a finished run on a task that asked for Primer: publish the agent's document if it changed.
+ * Resolves with a line for the task comment ("" when there was nothing to do).
+ */
+async function publishToPrimer(issue, full, workspace) {
+  const record = primerRecord(issue.id);
+  if (!record) return "";
+  const token = existsSync(cfg.primerTokenFile) ? readFileSync(cfg.primerTokenFile, "utf8").trim() : "";
+  try {
+    if (!token) throw new Error("primer-mcp isn't set up (no primer_mcp_token)");
+    const res = await publishDocument({ endpoint: { url: cfg.primerPublishUrl, token }, workspace, record, fallbackTitle: full.title });
+    if (res.outcome === "missing") return `_No Primer document: the run didn't write \`${PRIMER_FILE}\`._`;
+    if (res.outcome === "unchanged") return record.url ? `**Primer:** ${record.url} (unchanged)` : "";
+    savePrimer(issue.id, res.record);
+    log("published to Primer", { issue: issue.identifier, outcome: res.outcome, document: res.record.documentId });
+    const link = res.record.url ?? "the new document (its link wasn't in Primer's answer)";
+    return res.outcome === "created" ? `**Published to Primer:** ${link}` : `**New version on Primer:** ${link}`;
+  } catch (err) {
+    log("Primer publish failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) });
+    return `_Couldn't publish to Primer: ${String(err.message ?? err).slice(0, 200)}. The document is in \`${join(workspace, PRIMER_FILE)}\`; the next run tries again._`;
   }
 }
 

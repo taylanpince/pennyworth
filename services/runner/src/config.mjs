@@ -44,6 +44,8 @@ export function loadConfig() {
     claudeConfigDir: expand(cfg.engines?.claude?.config_dir ?? join(cfg.state_dir ?? "~/.local/state/pennyworth-runner", "claude")),
     // Primer for every Engineer job, read-only (D-40): primer-mcp's loopback port.
     primerMcpUrl: env.PRIMER_RUNNER_URL ?? cfg.primer?.url ?? "http://127.0.0.1:3123/mcp/read",
+    // The runner itself publishes a task's document there (D-44); jobs never get this endpoint.
+    primerPublishUrl: env.PRIMER_RUNNER_PUBLISH_URL ?? cfg.primer?.publish_url ?? "http://127.0.0.1:3123/mcp",
     primerTokenFile: join(secrets, "primer_mcp_token"),
     workDir: expand(cfg.work_dir ?? "~/pennyworth"),
     stateDir: expand(cfg.state_dir ?? "~/.local/state/pennyworth-runner"),

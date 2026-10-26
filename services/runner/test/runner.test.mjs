@@ -258,7 +258,9 @@ describe("plain-language intake", async () => {
       { repo: "0xpolygon/indexer-gateway-b", references: ["0xPolygon/indexer-gateway-a", "evil/repo", "0xPolygon/indexer-gateway-b"], mode: "investigate", engine: "", model: "astra", question: "" },
       { candidates, models },
     );
-    assert.deepEqual(v, { action: "run", repo: "0xPolygon/indexer-gateway-b", references: ["0xPolygon/indexer-gateway-a"], mode: "investigate", engine: "codex", model: "gpt-6-astra", question: undefined });
+    assert.deepEqual(v, { action: "run", repo: "0xPolygon/indexer-gateway-b", references: ["0xPolygon/indexer-gateway-a"], mode: "investigate", engine: "codex", model: "gpt-6-astra", primer: false, question: undefined });
+    assert.equal(validateIntake({ repo: "", references: [], mode: "investigate", engine: "", model: "", primer: true, question: "" }, { candidates, models }).primer, true);
+    assert.equal(validateIntake({ repo: "", references: [], mode: "investigate", engine: "", model: "", primer: "yes", question: "" }, { candidates, models }).primer, false);
     assert.equal(validateIntake({ repo: "evil/repo", references: [], mode: "rm -rf", engine: "x", model: "", question: "" }, { candidates, models }).repo, undefined);
     assert.equal(validateIntake({ repo: "evil/repo", references: [], mode: "rm -rf", engine: "x", model: "", question: "" }, { candidates, models }).mode, undefined);
   });
@@ -981,5 +983,74 @@ describe("files on a task (D-43)", () => {
     assert.ok(p.indexOf("## Files from") < p.indexOf("## Instructions from"));
     assert.match(followUpPrompt({ ...base, files }), /## Files from Taylan[\s\S]*## Instructions from Taylan/);
     assert.doesNotMatch(followUpPrompt(base), /Files from/);
+  });
+});
+
+describe("publishing a task's document to Primer (D-44)", async () => {
+  const { PRIMER_FILE, documentRef, publishDocument, readDocument } = await import("../src/primer.mjs");
+  const workspace = () => {
+    const dir = mkdtempSync(join(tmpdir(), "primer-"));
+    mkdirSync(join(dir, ".pennyworth"));
+    return dir;
+  };
+  // A fake primer-mcp: records tool calls and answers create_document with a link.
+  const fake = (answer = '{"documentId":"01a1-doc","url":"https://primer.example/d/01a1-doc"}') => {
+    const calls = [];
+    const fetchImpl = async (_url, init) => {
+      const body = JSON.parse(init.body);
+      if (body.method === "tools/call") calls.push(body.params);
+      const result = body.method === "tools/call" ? { content: [{ type: "text", text: body.params.name === "primer_create_document" ? answer : "ok" }] } : {};
+      return new Response(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: body.id, result })}\n\n`, { status: 200 });
+    };
+    return { calls, endpoint: { url: "http://primer/mcp", token: "t", fetchImpl } };
+  };
+
+  it("takes the title from the first heading", () => {
+    const dir = workspace();
+    assert.equal(readDocument(dir, "Task"), undefined);
+    writeFileSync(join(dir, PRIMER_FILE), "Intro\n\n# Relayer **failure** signals\n\nBody");
+    assert.equal(readDocument(dir, "Task").title, "Relayer failure signals");
+    writeFileSync(join(dir, PRIMER_FILE), "No heading");
+    assert.equal(readDocument(dir, "Task").title, "Task");
+  });
+
+  it("reads the document's ID from JSON or a link", () => {
+    assert.deepEqual(documentRef('{"documentId":"abc","url":"https://p/d/abc"}'), { url: "https://p/d/abc", documentId: "abc" });
+    assert.deepEqual(documentRef("Created: https://primer.example/d/01a16a96-2b11 (v1)"), { url: "https://primer.example/d/01a16a96-2b11", documentId: "01a16a96-2b11" });
+  });
+
+  it("creates the document once, then adds versions only when it changed", async () => {
+    const dir = workspace();
+    const { calls, endpoint } = fake();
+    assert.equal((await publishDocument({ endpoint, workspace: dir, fallbackTitle: "T" })).outcome, "missing");
+    writeFileSync(join(dir, PRIMER_FILE), "# Report\n\nv1");
+    const first = await publishDocument({ endpoint, workspace: dir, fallbackTitle: "T" });
+    assert.equal(first.outcome, "created");
+    assert.equal(first.record.documentId, "01a1-doc");
+    assert.deepEqual(calls[0], { name: "primer_create_document", arguments: { title: "Report", content: "# Report\n\nv1", format: "markdown" } });
+    assert.equal((await publishDocument({ endpoint, workspace: dir, record: first.record })).outcome, "unchanged");
+    writeFileSync(join(dir, PRIMER_FILE), "# Report\n\nv2");
+    const second = await publishDocument({ endpoint, workspace: dir, record: first.record });
+    assert.equal(second.outcome, "updated");
+    assert.deepEqual(calls[1], { name: "primer_add_version", arguments: { documentId: "01a1-doc", content: "# Report\n\nv2", format: "markdown" } });
+    assert.equal(calls.length, 2);
+  });
+
+  it("fails on a tool error without recording anything", async () => {
+    const dir = workspace();
+    writeFileSync(join(dir, PRIMER_FILE), "# Report");
+    const endpoint = { url: "http://primer/mcp", token: "t", fetchImpl: async (_u, init) => {
+      const body = JSON.parse(init.body);
+      const result = body.method === "tools/call" ? { isError: true, content: [{ type: "text", text: "primer_auth_unavailable" }] } : {};
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }), { status: 200 });
+    } };
+    await assert.rejects(publishDocument({ endpoint, workspace: dir }), /primer_auth_unavailable/);
+  });
+
+  it("tells the agent where the document goes only when Primer was asked for", () => {
+    const base = { user: "Taylan", task: { identifier: "PEN-1", title: "T", description: "" }, workspace: "/w", repos: [], mode: "investigate", shells: ["llm"], instructions: "Do it" };
+    assert.doesNotMatch(firstPrompt(base), /## Primer/);
+    assert.match(firstPrompt({ ...base, primer: {} }), /## Primer[\s\S]*\.pennyworth\/primer\.md[\s\S]*a new document the first time/);
+    assert.match(followUpPrompt({ ...base, primer: { url: "https://primer.example/d/x" } }), /new version of https:\/\/primer\.example\/d\/x/);
   });
 });
