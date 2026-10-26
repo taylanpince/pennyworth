@@ -21,13 +21,17 @@ export function Drawer({ refId, focus, board, onClose, onChanged, onMove, toast 
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const live = useRef(true);
+  // The board refreshes every few seconds with a new assignees list; reading it through a ref keeps
+  // `load` (and the effect below) stable, so the open task isn't blanked and rebuilt on every refresh.
+  const assignees = useRef(board.assignees);
+  assignees.current = board.assignees;
 
   const load = useCallback(async () => {
     try {
       const v = await api.issue(refId);
       if (!live.current) return;
       // An agent's part of a task opens as that agent's tab on the task (D-45).
-      if (v.parent && board.assignees.some((a) => a.kind !== "me" && a.key === v.assignee)) {
+      if (v.parent && assignees.current.some((a) => a.kind !== "me" && a.key === v.assignee)) {
         location.replace(`#/t/${v.parent.identifier}/${v.identifier}`);
         return;
       }
@@ -35,7 +39,7 @@ export function Drawer({ refId, focus, board, onClose, onChanged, onMove, toast 
     } catch (e) {
       if (live.current) setError((e as Error).message);
     }
-  }, [refId, board.assignees]);
+  }, [refId]);
 
   useEffect(() => {
     live.current = true;
@@ -343,12 +347,14 @@ function AgentPane({ task, member, focus, board, reload, onChanged, toast }: { t
       if (live.current) setPart(v);
     } catch {}
   }, [selected]);
+  // The task itself is the part: follow the task's own reloads.
   useEffect(() => {
+    if (self) setPart(task);
+  }, [self, task]);
+  // A sub-task: its own poll. Not keyed on `task`, which reloads every few seconds.
+  useEffect(() => {
+    if (self) return;
     live.current = true;
-    if (self) {
-      setPart(task);
-      return;
-    }
     setPart(null);
     void load();
     const t = setInterval(() => document.visibilityState === "visible" && void load(), 6000);
@@ -356,7 +362,7 @@ function AgentPane({ task, member, focus, board, reload, onChanged, toast }: { t
       live.current = false;
       clearInterval(t);
     };
-  }, [load, self, task]);
+  }, [load, self]);
   const scroll = useFollow(part?.comments ?? []);
   const sub = member.issues.find((i) => i.identifier === selected);
   const state = sub?.state ?? member.state;
