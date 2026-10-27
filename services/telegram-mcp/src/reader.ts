@@ -24,6 +24,9 @@ export function newClient(session: string, api: ApiCredentials, allowed: (classN
     // Plain MTProto (GramJS's default TCPFull) is cut off by the Cloudflare WARP gateway right after
     // the first packet, so every connect failed; the obfuscated transport gets through.
     connection: ConnectionTCPObfuscated,
+    // ...but only on 443: the gateway answers port 80 itself ("HTTP/1.1 400"), so connects there hang
+    // and reconnects time out. In Node this is still plain TCP; it only picks the port.
+    useWSS: true,
     connectionRetries: 5,
     autoReconnect: true,
     floodSleepThreshold: 60,

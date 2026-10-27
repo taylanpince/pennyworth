@@ -100,14 +100,27 @@ function startReader(): Promise<void> {
   return starting;
 }
 
+const START_MS = 60_000;
+
 async function doStart() {
   clearTimeout(retry);
   await stopReader();
   if (!existsSync(apiFile)) return setState("missing", "telegram/api.json is missing (create an app at my.telegram.org)");
   if (!existsSync(sessionFile)) return setState("missing", "not signed in yet: connect from the board");
+  let r: TelegramReader | undefined;
   try {
-    const r = new TelegramReader(readingClient(readFileSync(sessionFile, "utf8").trim(), loadApi(), (c) => log.error({ request: c }, "refused a Telegram request that isn't a read")));
-    const account = await r.start();
+    r = new TelegramReader(readingClient(readFileSync(sessionFile, "utf8").trim(), loadApi(), (c) => log.error({ request: c }, "refused a Telegram request that isn't a read")));
+    // GramJS's own reconnect checks the session and only prints what fails, then reconnects again
+    // within a second, forever (20,000 times in an hour, then out of memory). Start over from the
+    // stored session instead: that either recovers or finds the session ended and stops.
+    const self = r;
+    r.client.onError = async (err) => {
+      if (reader !== self || !ENDED.test(String((err as { errorMessage?: string }).errorMessage ?? err.message))) return;
+      log.warn({ err: err.message.slice(0, 200) }, "Telegram refused the session while reconnecting; starting over from the stored session");
+      void startReader();
+    };
+    let timer: NodeJS.Timeout | undefined;
+    const account = await Promise.race([r.start(), new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error("Telegram didn't answer within a minute")), START_MS)))]).finally(() => clearTimeout(timer));
     status.account = { name: account.name, username: account.username };
     const s = new Scout(r, { aliases, scope: loadScope(), statePath: join(stateDir, "scout.json"), lookbackHours: Number(process.env.TELEGRAM_LOOKBACK_HOURS ?? 24), saveDelayMs: 10_000 });
     r.onMessage((m) => void s.handle(m).catch((err) => (noteError(err), log.warn({ err: String((err as Error).message).slice(0, 300) }, "handling a new message failed"))));
@@ -123,6 +136,8 @@ async function doStart() {
       retry = setTimeout(() => void startReader(), 60_000).unref();
     }
     await stopReader();
+    // A client that never got as far as reading still has its connection and update loops.
+    await r?.stop();
   }
 }
 

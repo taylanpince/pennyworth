@@ -191,6 +191,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Chat refs are `tg:<marked peer id>`** and stable. Tasks made before D-37 carry the organization MCP's old refs; follow-ups find those chats by title.
 - **Telegram's `mentioned` flag** covers @mentions, name links and replies to the user's messages. The scout checks the replied-to message to tell "reply" from "mention"; aliases (`TELEGRAM_ME_ALIASES`) catch plain-text names.
 - **Message IDs have gaps:** small groups and DMs share the account's ID counter. Read "the messages before" with `read_chat_history`, never by ID range. `read_chat_history` returns newest first, up to 50; `get_new_messages` returns the earliest after an ID, oldest first, up to 100.
+- **Cloudflare WARP answers port 80 to Telegram itself** (`HTTP/1.1 400`, 2026-10-27), so MTProto there hangs or times out on reconnect. The client uses the obfuscated transport on 443 (`useWSS: true`, plain TCP in Node); keep both. GramJS's own reconnect only prints a dead session and retries every second, so `onError` restarts from the stored session instead (an hour of that loop once ran the process out of memory).
 - **Content is wrapped** in `<untrusted-telegram-content>` tags by telegram-mcp, and people paste API keys into these chats. The scout prompt forbids copying credentials into tasks. Message text is never written to disk or logged.
 
 ### Primer
