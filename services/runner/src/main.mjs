@@ -695,10 +695,10 @@ async function startJob({ issue, instructions, read, candidates }) {
     const crewHash = crewCtx ? createHash("sha256").update(JSON.stringify(crewCtx)).digest("hex") : "";
     const crew = crewCtx && (!resumed || state.get(crewKey) !== crewHash) ? crewCtx : undefined;
     if (crewHash) state.set(crewKey, crewHash);
+    const observe = observes(engine.kind) ? { grafana: existsSync(cfg.grafanaTokenFile), gcp: { state: gcp.state, detail: gcp.detail, projects: cfg.gcp.projects } } : undefined;
     const prompt = resumed
       ? followUpPrompt({ user: cfg.selfName, mode, instructions, workspace, repos, branches, files, primer, crew, observe })
       : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells: runShells, instructions, earlier, files, primer, persona: personaFor(engine.kind, await pc.engineerAgents().catch(() => [])), crew, observe });
-    const observe = observes(engine.kind) ? { grafana: existsSync(cfg.grafanaTokenFile), gcp: { state: gcp.state, detail: gcp.detail, projects: cfg.gcp.projects } } : undefined;
     const tipsBefore = await branchTips(workspace);
     const helper = repoHelper.register({ issue, workspace });
     let result;
