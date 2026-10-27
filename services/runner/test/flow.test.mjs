@@ -32,20 +32,28 @@ else {
   const prompt = readFileSync(0, "utf8");
   log("intake", prompt);
   const candidates = (/^Candidate repositories: (.*)$/m.exec(prompt)?.[1] ?? "").split(", ").filter((c) => c && c !== "(none)");
+  if (!prompt.includes("Candidate repositories:")) process.exit(1); // a PR description: falls back to the commits
   // Like the real intake on PEN-2714: every repository listed, none picked, and a question.
   const answer = { action: "run", repo: "", references: candidates, mode: "implement", engine: "", model: "", primer: false, question: "Which repository should I use?", gap_minutes: -1 };
   writeFileSync(args[args.indexOf("-o") + 1], JSON.stringify(answer));
 }`,
   // Claude Code: one session, and a report with the summary a finished run must have.
   claude: `log("claude", { argv: process.argv.slice(2), prompt: readFileSync(0, "utf8") });
+const repo = [join(process.cwd(), "app"), join(process.cwd(), "acme/app")].find((d) => existsSync(join(d, ".git")));
+const run = (...args) => spawnSync("git", ["-C", repo, ...args], { stdio: "ignore" });
+run("switch", "-qc", "fix/remove-telos", "origin/main");
+writeFileSync(join(repo, "chains.txt"), "polygon\\n");
+run("add", "chains.txt");
+run("commit", "-qm", "fix: drop Telos");
 console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "session-1" }));
 console.log(JSON.stringify({ type: "result", result: "## Summary\\n\\nChecked every repository; nothing needed changing." }));`,
-  // GitHub is out of reach: every gh call fails, as it may on a bad day.
+  // No GitHub API: every gh call fails (so PRs can't open), as it may on a bad day.
   gh: `process.exit(1);`,
 };
 
 const fakeScript = (body) => `#!${process.execPath}
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 const log = (kind, data) => appendFileSync(process.env.FAKE_LOG, JSON.stringify({ kind, data }) + "\\n");
 const exec = (argv) => process.exit(spawnSync(argv[0], argv.slice(1), { stdio: "inherit" }).status ?? 1);
@@ -60,6 +68,7 @@ function fakePaperclip({ parent, part, engineer }) {
   const issues = new Map([parent, part].map((i) => [i.id, i]));
   const comments = new Map([[parent.id, []], [part.id, []]]);
   const patches = [];
+  const activity = [];
   const unknown = [];
   let n = 0;
   const addComment = (issueId, body) => comments.get(issueId).push({ id: `comment-${++n}`, authorType: "user", authorUserId: USER, body, createdAt: new Date().toISOString() });
@@ -106,15 +115,18 @@ function fakePaperclip({ parent, part, engineer }) {
       if (req.method === "GET") return send(i);
     }
     // The board's internal API (job activity for the Crew view): accepted, not checked.
-    if (path.startsWith("/internal/")) return send({});
+    if (path.startsWith("/internal/")) {
+      if (path.endsWith("/runner/activity")) activity.push(JSON.parse(body));
+      return send({});
+    }
     unknown.push(`${req.method} ${path}`);
     send({ error: "not found" }, 404);
   });
-  return { server, comments, patches, unknown };
+  return { server, comments, patches, activity, unknown, addComment };
 }
 
 describe("runner end to end", () => {
-  let dir, runner, paperclip, output = "";
+  let dir, runner, paperclip, reportedAtPr = 0, output = "";
   const fakeLog = () => (existsSync(join(dir, "fake.log")) ? readFileSync(join(dir, "fake.log"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
   const partComments = () => paperclip.comments.get("part").map((c) => c.body);
 
@@ -180,6 +192,7 @@ recurring:
     );
     writeFileSync(join(secrets, "paperclip_board_key"), "board-key\n", { mode: 0o600 });
     writeFileSync(join(secrets, "claude_oauth_token"), "claude-token\n", { mode: 0o600 });
+    writeFileSync(join(secrets, "board_internal_token"), "board-token\n", { mode: 0o600 });
 
     // PEN-2713/PEN-2714: the repositories are on the user's task; Ada's part only says go.
     const engineer = { id: "engineer-claude", name: "Engineer · Claude", status: "idle", adapterType: "claude_local", adapterConfig: {}, metadata: { setupKey: "pennyworth:engineer-claude", persona: { name: "Ada" } } };
@@ -212,6 +225,15 @@ recurring:
       if (runner.exitCode !== null) break;
       await new Promise((r) => setTimeout(r, 200));
     }
+    // Then "pr": publishing shows on the board as Ada's work until the results are posted.
+    reportedAtPr = paperclip.activity.length;
+    paperclip.addComment("part", "pr");
+    const prDeadline = Date.now() + 60_000;
+    while (Date.now() < prDeadline && !partComments().some((c) => c.includes("| Branch | Result |"))) {
+      if (runner.exitCode !== null) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    await new Promise((r) => setTimeout(r, 500)); // the last activity report
   });
 
   after(() => {
@@ -257,6 +279,19 @@ recurring:
     assert.ok(shells.some((s) => s.endsWith("#llm")), `nix develop …#llm${context()}`);
     const bwrap = log.find((e) => e.kind === "bwrap")?.data ?? [];
     assert.ok(bwrap.includes("--tmpfs") && bwrap.some((a) => a.endsWith(".config/gcloud")), "bwrap hides ~/.config/gcloud");
+  });
+
+  it("shows a pr on the board as work in progress until the results are posted", () => {
+    const reports = paperclip.activity.slice(reportedAtPr);
+    const publishing = reports.find((a) => a.running.some((r) => r.identifier === "PEN-2"));
+    assert.ok(publishing, `never reported as running${context()}`);
+    assert.equal(publishing.running.find((r) => r.identifier === "PEN-2").mode, "opening PRs");
+    assert.match(publishing.running.find((r) => r.identifier === "PEN-2").repo, /acme\/app/);
+    assert.deepEqual(reports.at(-1).running, [], "and no longer running afterwards");
+    const table = partComments().find((c) => c.includes("| Branch | Result |"));
+    assert.match(table, /fix\/remove-telos/);
+    // Pushed for real (to the local "GitHub"); the PR itself can't open without the GitHub API.
+    assert.ok(git(dir, "--git-dir", join(dir, "github/acme/app.git"), "branch", "--list", "fix/remove-telos"), "branch pushed");
   });
 
   it("posts the agent's report and moves the part to review", () => {

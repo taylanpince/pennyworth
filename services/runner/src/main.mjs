@@ -921,6 +921,22 @@ async function runCommand(issue, task, command) {
     state.updateTask(issue.id, { workspace: null, session_id: null });
     return void (await pc.comment(issue.id, `Removed the workspace.${kept ? " Its branches are kept in the runner's copies of the repositories, and pushed ones are on GitHub." : ""}`));
   }
+  // Publishing takes minutes for many branches (a push and a PR description each): it shows on the
+  // board as the Engineer's work in progress, holds back new runs, and "stop" ends it between branches.
+  const controller = new AbortController();
+  const repos = (await workspaceRepos(workspace)).map((r) => r.slug).join(", ").slice(0, 200);
+  running.set(issue.id, { controller, identifier: issue.identifier, startedAt: new Date().toISOString(), info: { mode: command === "pr" ? "opening PRs" : "pushing branches", repo: repos, ...(task.engine ? { engine: engineLabel(task.engine) } : {}) } });
+  reportActivity();
+  try {
+    await publish(issue, workspace, command, controller.signal);
+  } finally {
+    running.delete(issue.id);
+    reportActivity();
+    drainQueue();
+  }
+}
+
+async function publish(issue, workspace, command, signal) {
   const notes = await leaveFinishedPrs(issue, workspace);
   const tidy = await tidyBranches(issue, workspace, { commitDirty: false });
   const rows = await branchRows(issue, workspace);
@@ -943,6 +959,10 @@ async function runCommand(issue, task, command) {
   const results = [];
   for (const r of ordered) {
     const label = `${new Set(rows.map((x) => x.repo)).size > 1 ? `${r.repo} · ` : ""}\`${r.branch}\``;
+    if (signal.aborted) {
+      results.push(`| ${label} | not published: stopped on request |`);
+      continue;
+    }
     try {
       results.push(`| ${label} | ${await publishBranch(issue, full, r, command, rows)} |`);
     } catch (err) {
