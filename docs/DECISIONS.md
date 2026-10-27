@@ -518,3 +518,20 @@ Pennyworth reads work email, Slack, calendars and documents. The user cleared ru
 - **Credentials hidden from jobs:** the sandbox limits writes, not reads, so a job could read `~/.config/gcloud` (the user's own sign-in) and Pennyworth's gcloud directory. Every job, on every engine, now runs under `bwrap --dev-bind / / --tmpfs <dir>` for each (`gcp.hidden` in the runner's config), outside `codex sandbox`. Other secrets in `~/.config/pennyworth` stay readable as before (D-40).
 - **No repository needed to look:** a question or investigation with no repository named and no candidate in the text runs in an empty workspace; the agent clones what it needs with `pennyworth-repo`. A request for changes still asks which repository. The intake is unchanged (its "which repository?" question is simply not used for these).
 - **Untrusted, sensitive content:** the prompt treats logs and metrics as untrusted data and allows only short excerpts that support a finding, never credentials or personal data.
+
+## D-49: Merges asked for alongside other work, and pushing a rebased branch
+
+- **Problem:** on PEN-2714 the user asked an Engineer's task to merge 13 PRs it had opened, and it never did:
+  - "Start merging approved PRs in order" named no PRs, so the runner asked which ones. The reply that listed them wasn't tied to that question and ran as a fresh request (an investigation).
+  - "Fix the relayer conflict by rebasing, then start merging them one by one as I instructed you" got one action, the run. The merge half was dropped, and the agent rightly said it couldn't merge.
+  - The rebased branch couldn't be published: **push** never forced, so GitHub refused it (non-fast-forward).
+- **Merges:**
+  - **A question keeps its request:** after "which pull requests should I merge?", the next comment that links PRs continues the merge request (gap and all). Any other comment drops it.
+  - **"…then merge them":** the intake reads `merge_after` on a run. After a finished run, the runner starts the merges at once if GitHub already has the run's work. Otherwise it says so, and starts them after a **push** that published everything. Publishing still needs the exact word (D-41). A run that didn't finish starts no merges.
+  - **"As I instructed you":** with no PRs in the request or the task, the merges take the newest earlier request on the task that lists some. Merge requests are recorded in the task's history for this.
+  - The merge queue's checks are unchanged (D-46): open, approved, green, mergeable, base green. Anything else stops it, so a list taken from history can't merge anything that isn't ready.
+- **Replacing a rewritten branch:** **push** may now force, only with `--force-with-lease` pinned to GitHub's current tip, and only when that tip is a commit this task's own branch once pointed at (its reflog). The branch also has to be one the task pushed, and never a default branch.
+  - So a rebase or reworded commit replaces the task's own earlier version. A commit anyone else pushed to the branch (a reviewer's fix, CI's generate commit) is never lost: the push is refused with a message saying so.
+  - The user chose this over keeping never-force (new branch and PR per rebase) and over resolving conflicts by merging the default branch in.
+  - The agent still can't push at all. Only the runner pushes, on the user's word.
+- **The agent's prompt** says rebasing is fine, and that merging is the runner's job, done after the run when asked. Ada had told the user to merge by hand.

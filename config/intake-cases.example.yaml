@@ -202,3 +202,16 @@
       PRs should be created separately on a service by service basis on the devops repo, and provided in order of sunset (application layer first, then infra)
   comment: ""
   expect: { action: run, mode: implement, repo: 0xPolygon/example-infra, references: [0xPolygon/example-gateway] }
+
+- id: fix, then merge
+  why: "the merge half of \"fix it, then merge them\" was dropped: the agent can't merge, the runner must after the run"
+  title: Remove an old network
+  comment: Fix the conflict by rebasing, then start merging them one by one as I said.
+  context: { known_repo: 0xPolygon/example-infra, previous_mode: investigate, has_work: true }
+  expect: { action: run, mode: implement, mergeAfter: true }
+
+- id: fix, I'll merge it myself
+  title: Remove an old network
+  comment: Fix the review comments. I'll merge it myself after.
+  context: { known_repo: 0xPolygon/example-infra, has_work: true }
+  expect: { action: run, mode: implement, mergeAfter: false }

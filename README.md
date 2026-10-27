@@ -249,7 +249,7 @@ Publishing takes the exact word, as a comment on its own:
 
 | Command | What it does |
 |---|---|
-| `push` | publish every branch with new commits to GitHub (never forced), parents before the branches stacked on them. An empty repository gets the work as its first commit on `main` |
+| `push` | publish every branch with new commits to GitHub (forced only to replace the task's own earlier version of a rebased branch, never over anyone else's commits: D-49), parents before the branches stacked on them. An empty repository gets the work as its first commit on `main` |
 | `pr` | push, then open a **draft** PR for every branch that has none, each into its base (a stacked branch's PR goes into its parent's branch), with a title and description written for the repository's reviewers. Open PRs just get the new commits |
 
 Repositories outside your orgs are read-only (D-35): their branches are listed but never published.

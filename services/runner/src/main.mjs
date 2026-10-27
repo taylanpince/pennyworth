@@ -284,6 +284,13 @@ async function handleRequest(issue, latest) {
   const action = (read?.action === "push" || read?.action === "pr") && !hasWork ? "run" : (read?.action ?? "run");
   log("request read", { issue: issue.identifier, action, mode: read?.mode });
 
+  // The reply to "which pull requests should I merge?" that links them continues that request.
+  const mergePending = state.get(`merge_pending:${issue.id}`);
+  if (mergePending) {
+    state.set(`merge_pending:${issue.id}`, "");
+    const asked = JSON.parse(mergePending);
+    if ((action === "run" || action === "merge") && merges.findPrs(latest).length) return startMerges(issue, full, `${asked.instructions}\n\n${instructions}`, latest, read?.gapMinutes ?? asked.gapMinutes);
+  }
   if (action === "merge") return startMerges(issue, full, instructions, latest, read?.gapMinutes);
   if (["stop", "status", "reset", "cleanup"].includes(action)) {
     if (action === "stop" && mergeQueue(issue.id)?.state === "running" && !running.has(issue.id)) return stopMerges(issue, "you asked me to stop");
@@ -359,13 +366,19 @@ function saveMerges(issueId, queue) {
  * or carry on with a stopped queue. advanceMerges() does the merging, one poll at a time.
  */
 async function startMerges(issue, full, instructions, latest, gapMinutes) {
+  // Merge requests are requests too: a later "merge them as I listed" finds their PRs (listedPrs).
+  if (latest) remember(issue.id, latest);
   const existing = mergeQueue(issue.id);
   let prs = merges.findPrs(latest);
   if (!prs.length && !existing?.prs.some((p) => p.status === "pending")) prs = merges.findPrs(`${instructions}\n${full.description ?? ""}`);
+  // "Merge them as I instructed you": the newest earlier request that lists PRs.
+  if (!prs.length && !existing?.prs.some((p) => p.status === "pending")) prs = listedPrs(issue.id);
   const outside = prs.filter((p) => !repoAllowed(normalizeRepo(p.repo), cfg.allowed_orgs));
   if (outside.length) return void (await pc.comment(issue.id, `I only merge in your orgs (${cfg.allowed_orgs.join(", ")}), so I didn't start: ${outside.map((p) => p.url).join(", ")}.`));
   if (running.has(issue.id)) return void (await pc.comment(issue.id, "Can't start merging while a run is in progress on this task. Comment **stop** first, or wait for it to finish."));
   const queue = merges.startOrResume(existing, prs, { gapMinutes: gapMinutes ?? existing?.gapMinutes ?? cfg.merges?.gap_minutes ?? 15 });
+  // Asked which PRs: the reply that links them continues this request.
+  state.set(`merge_pending:${issue.id}`, queue ? "" : JSON.stringify({ instructions, gapMinutes }));
   if (!queue) return void (await pc.comment(issue.id, existing?.state === "done" ? "Every PR on this task is already merged. Link the ones you want merged next." : "Which pull requests should I merge? Link them in a comment (or in the task), in the order you want them merged."));
   const engine = state.task(issue.id)?.engine;
   Object.assign(queue, { identifier: issue.identifier, engine: engine ? engineLabel(engine) : undefined });
@@ -378,6 +391,21 @@ async function startMerges(issue, full, instructions, latest, gapMinutes) {
   log("merges started", { issue: issue.identifier, prs: pending.length, gap: queue.gapMinutes });
   lastMergeCheck = 0; // start right away
   reportActivity();
+}
+
+/** Add a request to the task's history: context for a fresh agent session, and PR lists for merges. */
+function remember(issueId, request) {
+  const key = `history:${issueId}`;
+  state.set(key, `${state.get(key) || ""}\n\n---\n\n${request}`.trim().slice(-20_000));
+}
+
+/** The PRs of the newest earlier request on the task that lists any, in its order. */
+function listedPrs(issueId) {
+  for (const request of (state.get(`history:${issueId}`) || "").split("\n\n---\n\n").reverse()) {
+    const prs = merges.findPrs(request);
+    if (prs.length) return prs;
+  }
+  return [];
 }
 
 async function stopMerges(issue, why) {
@@ -615,6 +643,7 @@ async function startJob({ issue, instructions, read, candidates }) {
   running.set(issue.id, { controller, identifier: issue.identifier, startedAt: new Date().toISOString() });
   reportActivity();
   let jobId;
+  let then; // "…then merge them": after the job is off the running list
   try {
     const full = await pc.issue(issue.id);
     const pendingKey = `pending:${issue.id}`;
@@ -685,7 +714,7 @@ async function startJob({ issue, instructions, read, candidates }) {
     const resumed = Boolean(state.task(issue.id).session_id && sessionEngine === engine.kind);
     const historyKey = `history:${issue.id}`;
     const earlier = resumed ? "" : state.get(historyKey) || "";
-    state.set(historyKey, `${state.get(historyKey) || ""}\n\n---\n\n${instructions}`.trim().slice(-20_000));
+    remember(issue.id, instructions);
     const where = repos.length ? repos.map((r) => `\`${r.slug}\``).join(", ") : "no repository";
     await pc.startWork(
       issue.id,
@@ -763,6 +792,7 @@ async function startJob({ issue, instructions, read, candidates }) {
     // Failures also go to review (Paperclip refuses "blocked" without a blocker); the report says what failed.
     await pc.setStatus(issue.id, "in_review", parts.filter(Boolean).join("\n"));
     state.finishJob(jobId, result.timedOut ? "timeout" : result.code ? "failed" : outcome.finished ? "done" : "incomplete", rows.some((r) => r.unpublished.length) ? "committed" : undefined);
+    if (read?.mergeAfter) then = () => mergeAfterRun(issue, instructions, read.gapMinutes, { finished: outcome.finished, unpublished: rows.some((r) => r.unpublished.length && !r.merged) });
     log("job finished", { issue: issue.identifier, code: result.code, timedOut: result.timedOut, branches: rows.length, committed: tidy.committed });
   } catch (err) {
     if (jobId) state.finishJob(jobId, "failed", String(err).slice(0, 500));
@@ -770,6 +800,7 @@ async function startJob({ issue, instructions, read, candidates }) {
   } finally {
     gcp?.done();
     running.delete(issue.id);
+    if (then) await then().catch((err) => reportError(issue, err));
     drainQueue();
     reportActivity();
     void reportToParent(issue).catch((err) => log("parent summary failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }));
@@ -927,13 +958,32 @@ async function runCommand(issue, task, command) {
   const repos = (await workspaceRepos(workspace)).map((r) => r.slug).join(", ").slice(0, 200);
   running.set(issue.id, { controller, identifier: issue.identifier, startedAt: new Date().toISOString(), info: { mode: command === "pr" ? "opening PRs" : "pushing branches", repo: repos, ...(task.engine ? { engine: engineLabel(task.engine) } : {}) } });
   reportActivity();
+  let published = false;
   try {
-    await publish(issue, workspace, command, controller.signal);
+    published = await publish(issue, workspace, command, controller.signal);
   } finally {
     running.delete(issue.id);
     reportActivity();
-    drainQueue();
   }
+  // Merges asked for after a run that changed PRs ("…then merge them") wait for this push.
+  const after = state.get(`merge_after:${issue.id}`);
+  if (after && published) {
+    state.set(`merge_after:${issue.id}`, "");
+    const asked = JSON.parse(after);
+    await startMerges(issue, await pc.issue(issue.id), asked.instructions, "", asked.gapMinutes);
+  }
+  drainQueue();
+}
+
+/**
+ * After a run asked to be followed by merges (merge_after): start them now if GitHub already has
+ * everything, else once "push" publishes the run's changes. Publishing still needs the exact word.
+ */
+async function mergeAfterRun(issue, instructions, gapMinutes, { finished, unpublished }) {
+  if (!finished) return void (await pc.comment(issue.id, "I didn't start the merges you asked for: the run didn't finish. Ask again once it's sorted."));
+  if (!unpublished) return startMerges(issue, await pc.issue(issue.id), instructions, "", gapMinutes);
+  state.set(`merge_after:${issue.id}`, JSON.stringify({ instructions, gapMinutes }));
+  await pc.comment(issue.id, "Next, the merges you asked for: reply **push** to publish these changes, and I'll start merging as soon as GitHub has them.");
 }
 
 async function publish(issue, workspace, command, signal) {
@@ -943,7 +993,8 @@ async function publish(issue, workspace, command, signal) {
   const publishable = rows.filter((r) => !r.merged && (r.unpublished.length || (command === "pr" && !r.prUrl)));
   if (!publishable.length) {
     const open = rows.filter((r) => r.prUrl && !r.merged);
-    return void (await pc.comment(issue.id, [...notes, rows.length ? (open.length ? `Nothing new to publish: GitHub already has every commit${command === "pr" ? `, and the PRs are open: ${open.map((r) => r.prUrl).join(", ")}` : ""}.` : "Nothing new to publish.") : "There are no commits to publish."].join("\n\n")));
+    // GitHub already has everything: as good as published.
+    return (await pc.comment(issue.id, [...notes, rows.length ? (open.length ? `Nothing new to publish: GitHub already has every commit${command === "pr" ? `, and the PRs are open: ${open.map((r) => r.prUrl).join(", ")}` : ""}.` : "Nothing new to publish.") : "There are no commits to publish."].join("\n\n")), true);
   }
   // Parents before the branches stacked on them: a stacked PR needs its base on GitHub first.
   const ordered = [];
@@ -971,13 +1022,31 @@ async function publish(issue, workspace, command, signal) {
     }
   }
   await pc.comment(issue.id, [...notes, ...tidy.notes.map((n) => `_${n}_`), "| Branch | Result |", "|---|---|", ...results].join("\n"));
+  return !signal.aborted && !results.some((line) => line.includes("⚠️"));
 }
 
 /**
  * Publish one branch on the user's "push" or "pr": checks first (writable repository, a valid public
- * name, no internal names in its commits), then push (never forced), then for "pr" a draft PR into its
+ * name, no internal names in its commits), then push (forced only over its own earlier version, D-49), then for "pr" a draft PR into its
  * base, the parent branch for a stacked one. Returns the result line for the table.
  */
+/**
+ * A branch this task pushed and then rewrote (a rebase) can replace its earlier version (D-49): only
+ * when GitHub's tip is a commit the task's own branch once pointed at (its reflog), so nothing anyone
+ * else pushed is lost, and leased to exactly that commit. Undefined when the push is a fast-forward.
+ */
+async function leaseFor(r) {
+  if (!r.onGitHub) return undefined;
+  await git(r.path, "fetch", "--quiet", "origin", `+refs/heads/${r.branch}:refs/remotes/origin/${r.branch}`);
+  const remote = await git(r.path, "rev-parse", `refs/remotes/origin/${r.branch}`);
+  if (await git(r.path, "merge-base", "--is-ancestor", remote, `refs/heads/${r.branch}`).then(() => true, () => false)) return undefined;
+  const seen = (await git(r.path, "reflog", "show", "--format=%H", `refs/heads/${r.branch}`).catch(() => "")).split("\n");
+  if (r.branch === r.defaultBase || !r.pushed || !seen.includes(remote)) {
+    throw new UserError(`not replaced: GitHub's \`${r.branch}\` has commits this task didn't make (\`${remote.slice(0, 9)}\`). Ask me to build on GitHub's version instead`);
+  }
+  return remote;
+}
+
 async function publishBranch(issue, full, r, command, rows) {
   if (!r.writable) throw new UserError(`not published: \`${r.repo}\` is outside your orgs (${cfg.allowed_orgs.join(", ")}), so it's read-only`);
   const empty = await remoteIsEmpty(r.path);
@@ -991,12 +1060,13 @@ async function publishBranch(issue, full, r, command, rows) {
   if (r.unpublished.length || !r.onGitHub) {
     // Into an empty repository the first branch becomes its default branch, as GitHub expects.
     const target = empty ? r.defaultBase : r.branch;
-    await git(r.path, "push", "--no-verify", url, `refs/heads/${r.branch}:refs/heads/${target}`);
+    const lease = empty ? undefined : await leaseFor(r);
+    await git(r.path, "push", "--no-verify", ...(lease ? [`--force-with-lease=refs/heads/${target}:${lease}`] : []), url, `refs/heads/${r.branch}:refs/heads/${target}`);
     await git(r.path, "fetch", "--quiet", "origin");
     state.updateBranch(issue.id, r.repo, r.branch, { pushed: 1 });
     log("branch pushed", { issue: issue.identifier, repo: r.repo, branch: r.branch, target });
     if (target !== r.branch) return `The repository was empty: pushed as its first commits on \`${target}\` → https://github.com/${r.repo}/tree/${encodeURIComponent(target)}`;
-    pushed = `Pushed ${r.unpublished.length} commit${r.unpublished.length === 1 ? "" : "s"}`;
+    pushed = `${lease ? "Replaced the earlier version with" : "Pushed"} ${r.unpublished.length} commit${r.unpublished.length === 1 ? "" : "s"}`;
   }
   if (r.prUrl) return `${pushed || "Up to date"}. PR: ${r.prUrl}`;
   if (command === "push") return `${pushed} → https://github.com/${r.repo}/compare/${r.base}...${encodeURIComponent(r.branch)}?expand=1`;

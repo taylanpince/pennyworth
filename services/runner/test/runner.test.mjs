@@ -259,7 +259,11 @@ describe("plain-language intake", async () => {
       { repo: "0xpolygon/indexer-gateway-b", references: ["0xPolygon/indexer-gateway-a", "evil/repo", "0xPolygon/indexer-gateway-b"], mode: "investigate", engine: "", model: "astra", question: "" },
       { candidates, models },
     );
-    assert.deepEqual(v, { action: "run", repo: "0xPolygon/indexer-gateway-b", references: ["0xPolygon/indexer-gateway-a"], mode: "investigate", engine: "codex", model: "gpt-6-astra", primer: false, question: undefined, gapMinutes: undefined });
+    assert.deepEqual(v, { action: "run", repo: "0xPolygon/indexer-gateway-b", references: ["0xPolygon/indexer-gateway-a"], mode: "investigate", engine: "codex", model: "gpt-6-astra", primer: false, question: undefined, gapMinutes: undefined, mergeAfter: false });
+    // "…then merge them" only counts for a run, and only as a real true.
+    assert.equal(validateIntake({ action: "run", merge_after: true }, { candidates, models }).mergeAfter, true);
+    assert.equal(validateIntake({ action: "run", merge_after: "yes" }, { candidates, models }).mergeAfter, false);
+    assert.equal(validateIntake({ action: "stop", merge_after: true }, { candidates, models }).mergeAfter, false);
     assert.equal(validateIntake({ action: "merge", gap_minutes: 15 }, { candidates, models }).action, "merge");
     assert.equal(validateIntake({ action: "merge", gap_minutes: 15 }, { candidates, models }).gapMinutes, 15);
     assert.equal(validateIntake({ action: "merge", gap_minutes: -1 }, { candidates, models }).gapMinutes, undefined);

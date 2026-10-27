@@ -33,18 +33,30 @@ else {
   log("intake", prompt);
   const candidates = (/^Candidate repositories: (.*)$/m.exec(prompt)?.[1] ?? "").split(", ").filter((c) => c && c !== "(none)");
   if (!prompt.includes("Candidate repositories:")) process.exit(1); // a PR description: falls back to the commits
+  const newest = (/<<<COMMENT\\n([\\s\\S]*?)\\nCOMMENT>>>/.exec(prompt) ?? /<<<REQUEST\\n([\\s\\S]*?)\\nREQUEST>>>/.exec(prompt))?.[1] ?? "";
   // Like the real intake on PEN-2714: every repository listed, none picked, and a question.
-  const answer = { action: "run", repo: "", references: candidates, mode: "implement", engine: "", model: "", primer: false, question: "Which repository should I use?", gap_minutes: -1 };
+  const answer = { action: "run", repo: "", references: candidates, mode: "implement", engine: "", model: "", primer: false, question: "Which repository should I use?", gap_minutes: -1, merge_after: false };
+  if (/start merging/i.test(newest)) Object.assign(answer, { action: "merge", gap_minutes: 0 });
+  if (/then merge/i.test(newest)) Object.assign(answer, { merge_after: true });
   writeFileSync(args[args.indexOf("-o") + 1], JSON.stringify(answer));
 }`,
   // Claude Code: one session, and a report with the summary a finished run must have.
   claude: `log("claude", { argv: process.argv.slice(2), prompt: readFileSync(0, "utf8") });
 const repo = [join(process.cwd(), "app"), join(process.cwd(), "acme/app")].find((d) => existsSync(join(d, ".git")));
 const run = (...args) => spawnSync("git", ["-C", repo, ...args], { stdio: "ignore" });
-run("switch", "-qc", "fix/remove-telos", "origin/main");
-writeFileSync(join(repo, "chains.txt"), "polygon\\n");
-run("add", "chains.txt");
-run("commit", "-qm", "fix: drop Telos");
+const step = existsSync(process.env.FAKE_STEP) ? readFileSync(process.env.FAKE_STEP, "utf8").trim() : "commit";
+if (step === "commit") {
+  run("switch", "-qc", "fix/remove-telos", "origin/main");
+  writeFileSync(join(repo, "chains.txt"), "polygon\\n");
+  run("add", "chains.txt");
+  run("commit", "-qm", "fix: drop Telos");
+} else {
+  // Rewrites the pushed commit, as a rebase does.
+  run("switch", "-q", "fix/remove-telos");
+  writeFileSync(join(repo, "chains.txt"), "polygon\\n# " + Date.now() + "\\n");
+  run("add", "chains.txt");
+  run("commit", "-q", "--amend", "-m", "fix: drop Telos");
+}
 console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "session-1" }));
 console.log(JSON.stringify({ type: "result", result: "## Summary\\n\\nChecked every repository; nothing needed changing." }));`,
   // No GitHub API: every gh call fails (so PRs can't open), as it may on a bad day.
@@ -213,6 +225,7 @@ recurring:
         PAPERCLIP_URL: url,
         BOARD_INTERNAL_URL: `${url}/internal`,
         FAKE_LOG: join(dir, "fake.log"),
+        FAKE_STEP: join(dir, "claude-step"),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -242,6 +255,16 @@ recurring:
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
+  const say = (text) => paperclip.addComment("part", text);
+  const waitFor = async (what, ok, ms = 60_000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end && runner.exitCode === null) {
+      if (ok()) return;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    assert.fail(`timed out waiting for ${what}${context()}`);
+  };
+  const githubTip = () => git(dir, "--git-dir", join(dir, "github/acme/app.git"), "rev-parse", "fix/remove-telos");
   const context = () => `\nrunner output:\n${output.slice(-3000)}\ncomments on the part:\n${partComments().join("\n---\n")}\nunknown requests: ${paperclip.unknown.join(", ")}`;
 
   it("never asks which repository, and reports no error", () => {
@@ -299,5 +322,51 @@ recurring:
     assert.ok(done, `no report${context()}`);
     assert.match(done.comment, /Checked every repository/);
     assert.ok(paperclip.patches.some((p) => p.issue === "PEN-2" && p.status === "in_progress" && /On it/.test(p.comment)), "On it, first");
+  });
+
+  // PEN-2714: "start merging" with no PRs named, then the list as a reply.
+  it("asks which PRs to merge, and the reply that lists them starts the merges", async () => {
+    let n = partComments().length;
+    say("Start merging approved PRs in order.");
+    await waitFor("the question", () => partComments().slice(n).some((c) => /Which pull requests should I merge/.test(c)));
+    n = partComments().length;
+    say("1. https://github.com/acme/app/pull/1");
+    await waitFor("the merges", () => partComments().slice(n).some((c) => /merging 1 PR.*#1/.test(c)));
+  });
+
+  // PEN-2714: "fix the conflict by rebasing, then merge them as I instructed", then push.
+  it("after a rebase, push replaces the task's own branch and starts the merges asked for", async () => {
+    writeFileSync(join(dir, "claude-step"), "amend");
+    const before = githubTip();
+    let n = partComments().length;
+    say("Rebase it on main, then merge them one by one as I listed.");
+    await waitFor("the run, and the note about merging", () => partComments().slice(n).some((c) => /merges you asked for: reply \*\*push\*\*/.test(c)));
+    assert.ok(!partComments().slice(n).some((c) => /merging \d+ PR/.test(c)), "no merges before the push");
+    n = partComments().length;
+    say("push");
+    await waitFor("the push", () => partComments().slice(n).some((c) => /\| Branch \| Result \|/.test(c)));
+    const table = partComments().slice(n).find((c) => /\| Branch \| Result \|/.test(c));
+    assert.match(table, /Replaced the earlier version/, table);
+    assert.notEqual(githubTip(), before, "GitHub has the rewritten branch");
+    await waitFor("the merges, from the earlier list", () => partComments().slice(n).some((c) => /merging 1 PR.*#1/.test(c)));
+  });
+
+  it("never replaces commits someone else pushed to the branch", async () => {
+    // A reviewer's commit on the PR branch, on "GitHub".
+    const other = join(dir, "reviewer");
+    git(dir, "clone", "-q", "--branch", "fix/remove-telos", join(dir, "github/acme/app.git"), other);
+    writeFileSync(join(other, "review.txt"), "a fix\n");
+    git(other, "add", "review.txt");
+    git(other, "commit", "-qm", "fix: review comment");
+    git(other, "push", "-q", "origin", "fix/remove-telos");
+    const theirs = githubTip();
+    let n = paperclip.patches.length;
+    say("Reword the commit, please.");
+    await waitFor("the run", () => paperclip.patches.slice(n).some((p) => p.issue === "PEN-2" && p.status === "in_review"));
+    n = partComments().length;
+    say("push");
+    await waitFor("the push", () => partComments().slice(n).some((c) => /\| Branch \| Result \|/.test(c)));
+    assert.match(partComments().slice(n).find((c) => /\| Branch \|/.test(c)), /didn't make/);
+    assert.equal(githubTip(), theirs, "their commit is still there");
   });
 });

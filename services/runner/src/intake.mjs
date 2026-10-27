@@ -13,7 +13,7 @@ export const ACTIONS = ["run", "stop", "status", "reset", "cleanup", "push", "pr
 export const INTAKE_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["action", "repo", "references", "mode", "engine", "model", "primer", "question", "gap_minutes"],
+  required: ["action", "repo", "references", "mode", "engine", "model", "primer", "question", "gap_minutes", "merge_after"],
   properties: {
     action: { type: "string", enum: ACTIONS },
     repo: { type: "string" },
@@ -24,6 +24,7 @@ export const INTAKE_SCHEMA = {
     primer: { type: "boolean" },
     question: { type: "string" },
     gap_minutes: { type: "integer" },
+    merge_after: { type: "boolean" },
   },
 };
 
@@ -94,7 +95,8 @@ Fields:
 - engine: "openrouter" if they ask for OpenRouter or opencode, or name a model from the OpenRouter list below (GLM, DeepSeek, Kimi, Qwen…); "claude" if they ask for Claude or Claude Code; "codex" if they name Codex${crewLine(crew)}; otherwise "".
 - model: a model they name, mapped to a known model: a Codex model (e.g. "astra"); for Claude, "opus", "sonnet", "haiku", "fable" or a full claude-… id; for OpenRouter, the id from the list (e.g. "deepseek" → the DeepSeek model listed first), or the full provider/model id they wrote. Otherwise "" (also for "use OpenRouter" alone).
 - primer: true if ${user} wants the result as a Primer document: the request asks to publish, put or share it on Primer, or for a Primer report or doc (Primer is the organization's document host). A Primer link given only to read is not that. Otherwise false.
-- gap_minutes: for "merge", the minutes to wait between merges if ${user} says ("at least 15 mins between each" → 15, "an hour apart" → 60, "no need to wait" → 0). Otherwise -1.
+- gap_minutes: for "merge", or for "run" with merge_after, the minutes to wait between merges if ${user} says ("at least 15 mins between each" → 15, "an hour apart" → 60, "no need to wait" → 0). Otherwise -1.
+- merge_after: for "run" only: true if the request ALSO asks for pull requests to be merged once this work is done ("fix the conflict, then start merging them", "rebase it and merge them one by one as I said"). The agent can't merge; the runner does it after the run. Otherwise false.
 - question: only if repo is "", the task has no repository yet and the request names none of the candidates, one short plain-language question asking which repository to use. Never ask which of several named repositories to use or which comes first: they are all worked in. Otherwise "".
 
 Candidate repositories: ${candidates.length ? candidates.join(", ") : "(none)"}
@@ -137,7 +139,8 @@ export function validateIntake(raw, { candidates, models, openrouter = [] }) {
   const question = String(raw?.question ?? "").trim().slice(0, 500) || undefined;
   const action = ACTIONS.includes(raw?.action) ? raw.action : "run";
   const gapMinutes = Number.isInteger(raw?.gap_minutes) && raw.gap_minutes >= 0 && raw.gap_minutes <= 720 ? raw.gap_minutes : undefined;
-  return { action, repo, references, mode, engine, model, primer: raw?.primer === true, question, gapMinutes };
+  const mergeAfter = action === "run" && raw?.merge_after === true;
+  return { action, repo, references, mode, engine, model, primer: raw?.primer === true, question, gapMinutes, mergeAfter };
 }
 
 /** One no-tools Codex call with a JSON schema for its answer; resolves with the parsed JSON. */
