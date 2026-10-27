@@ -5,7 +5,8 @@
 #   npm run eval:intake --prefix services/runner [-- <id filter>]
 #
 # Fields: id, why (optional), title, description (task text), own_description (true when you wrote
-# the task: the description is part of the request), comment (your newest comment),
+# the task: the description is part of the request), parent {identifier, title, description} (the
+# user's task an Engineer's part belongs to, D-45), comment (your newest comment),
 # context {known_repo, previous_mode, busy, has_work}, expect {action, mode, repo, references,
 # engine, model, primer, gapMinutes}. An expected value can be a list of acceptable values, or null for "unset".
 
@@ -183,3 +184,21 @@
   own_description: true
   comment: ""
   expect: { action: run, mode: implement, repo: 0xPolygon/example-gateway, references: [0xPolygon/example-infra] }
+
+- id: crew part, repos on the parent
+  why: an Engineer's part said only "go ahead … on dev-v2"; the repositories were on the user's task it belongs to
+  title: Drop Telos Support
+  description: Ada, go ahead and start this process on dev-v2 please
+  own_description: true
+  parent:
+    identifier: PEN-1
+    title: Drop Telos Support
+    description: |-
+      We've decided to drop support for Telos and Telos Testnet completely. This task will cover creating the necessary PRs across the following repos:
+
+      - 0xPolygon/example-infra
+      - 0xPolygon/example-gateway
+
+      PRs should be created separately on a service by service basis on the devops repo, and provided in order of sunset (application layer first, then infra)
+  comment: ""
+  expect: { action: run, mode: implement, repo: 0xPolygon/example-infra, references: [0xPolygon/example-gateway] }

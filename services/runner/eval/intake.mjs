@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { crewNames, findRepos, openrouterModels, stripHidden } from "../src/commands.mjs";
 import { loadConfig, REPO_ROOT } from "../src/config.mjs";
-import { readApproval, readRequest } from "../src/intake.mjs";
+import { readApproval, readRequest, withParent } from "../src/intake.mjs";
 
 const FIELDS = ["action", "mode", "repo", "references", "engine", "model", "primer", "gapMinutes", "decision"];
 
@@ -66,8 +66,10 @@ async function main() {
   const worker = async () => {
     for (let c; (c = pending.shift()); ) {
       const instructions = requestFor(c);
+      // An Engineer's part of the user's task (D-45): the intake also sees that task.
+      const description = withParent(c.description, c.parent);
       // Outside the orgs, the runner adds the public repos GitHub confirms (D-35); a case lists them.
-      const candidates = findRepos(`${instructions}\n${c.title ?? ""}\n${c.description ?? ""}`, cfg.allowed_orgs).map((r) => r.slug);
+      const candidates = findRepos(`${instructions}\n${c.title ?? ""}\n${description}`, cfg.allowed_orgs).map((r) => r.slug);
       candidates.push(...(c.public_repos ?? []));
       const ctx = c.context ?? {};
       try {
@@ -79,7 +81,7 @@ async function main() {
           continue;
         }
         const read = await readRequest({
-          cfg, user: cfg.selfName, title: c.title ?? "", description: c.description ?? "", instructions,
+          cfg, user: cfg.selfName, title: c.title ?? "", description, instructions,
           latest: stripHidden(c.comment ?? "").trim(), candidates, openrouter, crew: crewNames(engineers),
           known: ctx.known_repo, previousMode: ctx.previous_mode, busy: Boolean(ctx.busy), hasWork: Boolean(ctx.has_work), lastResult: ctx.last_result,
         });

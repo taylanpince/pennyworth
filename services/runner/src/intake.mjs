@@ -61,6 +61,13 @@ export function resolveOpenRouterModel(name, models) {
   return /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._:-]*$/.test(n) ? n : undefined;
 }
 
+/** A task's description, followed by the user's task it is part of (D-45), whose text the request builds on. */
+export function withParent(description, parent) {
+  const own = String(description ?? "").trim();
+  if (!parent) return own;
+  return [own, `The task this is part of (${parent.identifier}): ${parent.title}`, String(parent.description ?? "").trim()].filter(Boolean).join("\n\n");
+}
+
 /** The Engineers by name (D-45): naming one picks its engine ("let Ada do it" → claude). */
 const crewLine = (crew) => (crew.length ? `; or the engine of an Engineer they name: ${crew.map((c) => `${c.name} → "${c.engine}"`).join(", ")}` : "");
 

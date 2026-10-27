@@ -13,7 +13,7 @@ import { observes, runAgent } from "./engines.mjs";
 import { gcpSession } from "./gcp.mjs";
 import { syncFiles } from "./files.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureGuardHooks, git, remoteIsEmpty } from "./git.mjs";
-import { codexModels, readApproval, readRequest, resolveModelAlias } from "./intake.mjs";
+import { codexModels, readApproval, readRequest, resolveModelAlias, withParent } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
 import { branchGuidance, checkBranchName, chooseBranchName, exampleBranches } from "./branch.mjs";
 import { cleanMessages, leaksInternal, writePrDescription } from "./describe.mjs";
@@ -269,13 +269,16 @@ async function handleRequest(issue, latest) {
   const pending = state.get(`pending:${issue.id}`);
   if (pending) instructions = `${pending}\n\n${instructions}`;
 
-  const candidates = await repoCandidates(`${instructions}\n${full.title}\n${full.description ?? ""}`);
+  // An Engineer's part (D-45) is often just "go ahead": the user's task it belongs to names the repositories.
+  const parent = await crewParent(full).catch(() => undefined);
+  const description = withParent(full.description, parent);
+  const candidates = await repoCandidates(`${instructions}\n${full.title}\n${description}`);
   const before = state.task(issue.id);
   const busy = running.has(issue.id) || queue.some((j) => j.issue.id === issue.id);
   const hasWork = await taskHasCommits(before);
   const engineers = await pc.engineerAgents().catch(() => []);
   const openrouter = openrouterModels(engineers);
-  const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description: full.description, instructions, latest, candidates, openrouter, crew: crewNames(engineers), known: before.repo, previousMode: before.mode, busy, hasWork, lastResult: await lastResultOf(issue.id).catch(() => undefined) })
+  const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description, instructions, latest, candidates, openrouter, crew: crewNames(engineers), known: before.repo, previousMode: before.mode, busy, hasWork, lastResult: await lastResultOf(issue.id).catch(() => undefined) })
     .catch((err) => (log("intake failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }), undefined));
   // Publishing needs something to publish: "build X and prepare a PR" on a fresh task is a run.
   const action = (read?.action === "push" || read?.action === "pr") && !hasWork ? "run" : (read?.action ?? "run");
@@ -579,14 +582,20 @@ async function syncPicker(issue, full, task, named) {
   return state.task(issue.id);
 }
 
+/** The user's task an Engineer's part belongs to (D-45), or undefined. */
+async function crewParent(full) {
+  if (!full.parentId) return undefined;
+  const parent = await pc.issue(full.parentId);
+  return parent.assigneeUserId ? parent : undefined;
+}
+
 /**
  * An Engineer's part of the user's task (D-45): the task itself, and the latest report of every other
  * crew member on it (an agent's comment, or the runner's report on an Engineer's part).
  */
 async function crewContext(full) {
-  if (!full.parentId) return undefined;
-  const parent = await pc.issue(full.parentId);
-  if (!parent.assigneeUserId) return undefined;
+  const parent = await crewParent(full);
+  if (!parent) return undefined;
   const [agents, kids] = await Promise.all([pc.agents(), pc.children(parent.id, "backlog,todo,in_progress,in_review,blocked,done,cancelled")]);
   const others = [];
   for (const k of kids) {

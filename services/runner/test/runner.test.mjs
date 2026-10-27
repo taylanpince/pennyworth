@@ -563,6 +563,14 @@ describe("intake actions", async () => {
     assert.match(p, /a run is IN PROGRESS/);
     assert.match(p, /newest comment \(decides "action"\):\n<<<COMMENT\nstop that\nCOMMENT>>>/);
   });
+  it("adds the user's task an Engineer's part belongs to (D-45)", async () => {
+    const { withParent } = await import("../src/intake.mjs");
+    assert.equal(withParent(" go ahead ", undefined), "go ahead");
+    assert.equal(
+      withParent("go ahead", { identifier: "PEN-1", title: "Drop X", description: "Repos:\n- a/b\n" }),
+      "go ahead\n\nThe task this is part of (PEN-1): Drop X\n\nRepos:\n- a/b",
+    );
+  });
 });
 
 describe("intake regression set", async () => {
