@@ -121,6 +121,25 @@ fi
 
 check "board (127.0.0.1:3120)" sh -c 'curl -fsS --max-time 5 http://127.0.0.1:3120/healthz | grep -q ok && curl -fsS --max-time 10 http://127.0.0.1:3120/api/board | grep -q "\"buckets\""'
 
+# The runner, and what its jobs need from the engine devshell, seen with the runner's own PATH:
+# bwrap only on an interactive shell's PATH stopped every job (PEN-2714).
+if systemctl --user list-unit-files pennyworth-runner.service >/dev/null 2>&1; then
+  check "runner active" systemctl --user is-active --quiet pennyworth-runner
+  runner_pid="$(systemctl --user show pennyworth-runner -p MainPID --value)"
+  runner_path="$(tr '\0' '\n' < "/proc/$runner_pid/environ" 2>/dev/null | sed -n 's/^PATH=//p')"
+  rcfg="config/runner.yaml"; [ -f "$rcfg" ] || rcfg="config/runner.example.yaml"
+  flake="$(sed -n 's/^  flake: *\([^ #]*\).*/\1/p' "$rcfg" | head -1)"; flake="${flake/#\~/$HOME}"
+  eshell="$(sed -n 's/^  engine_shell: *\([^ #]*\).*/\1/p' "$rcfg" | head -1)"
+  job_tools() {
+    env -i HOME="$HOME" PATH="${runner_path:-/run/current-system/sw/bin}" nix develop "$flake#$eshell" --command \
+      sh -c 'for t in bwrap codex claude opencode git node; do command -v "$t" >/dev/null || { echo "missing $t"; exit 1; }; done' 2>&1 | grep -v 'is dirty'
+    return "${PIPESTATUS[0]}"
+  }
+  check "runner devshell ${eshell:-?} has the job tools" job_tools
+else
+  printf '  skip  runner (not installed)\n'
+fi
+
 check "watcher webhook configured" test -s "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/meeting_webhook_url"
 if systemctl --user list-unit-files pennyworth-transcripts.path >/dev/null 2>&1; then
   check "transcript watcher active" systemctl --user is-active --quiet pennyworth-transcripts.path

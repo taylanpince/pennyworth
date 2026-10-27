@@ -62,7 +62,7 @@ npm test --prefix services/primer-mcp
 npm test --prefix services/glean-mcp
 npm test --prefix services/github-mcp
 npm test --prefix services/grafana-mcp
-npm test --prefix services/runner                  # node --test
+npm test --prefix services/runner                  # node --test; test/flow.test.mjs runs the real runner against a fake Paperclip and fake engines
 npm test --prefix services/board                   # vitest (server); npm run typecheck --prefix services/board covers the web app
 npm run eval:intake --prefix services/runner       # real comments through the real intake, 3 runs each (~2 min)
 npx tsc --noEmit -p services/<svc>/tsconfig.json   # typecheck TS services
@@ -166,6 +166,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 
 ### Runner engines
 
+- **A request has to go all the way through before it ships.** `test/flow.test.mjs` runs `src/main.mjs` from a task on a fake Paperclip to a finished job, with fake `nix`, `bwrap`, `codex`, `claude` and `gh` and local repositories for GitHub. Three bugs on 2026-10-27 (a question about repositories the user had listed, a variable used before it was set, repositories only on the parent task) passed every unit test and stopped real jobs; extend the flow test when you change `handleRequest` or `startJob`.
 - **opencode auto-rejects unanswered permission prompts and still exits 0.** Its defaults `ask` for `external_directory`, `doom_loop` and reading `*.env`/`*.env.*` files (tracked ones too: PEN-2421 stopped at its first `.env.prod`), so they are set to `allow` (the `codex sandbox` around it is the write boundary). Never treat exit 0 as success: a run only counts as finished if its report has `## Summary` (`runOutcome`).
 - **The executor picker is Paperclip's own** (D-20): the Engineer agent's adapter type maps to the engine, and `assigneeAdapterOverrides.adapterConfig` holds the model and effort. When a comment names an engine or model, the runner rewrites the assignee and override to match, so don't keep a second copy of the engine anywhere else.
 - **Everything that reaches GitHub is for the repo's reviewers,** who don't know Pennyworth and can't see Paperclip. PR titles and bodies come from `services/runner/src/describe.mjs` (a Codex call that follows any PR wording in the task or its parent, with `leaksInternal` falling back to the commit messages), commit subjects pass `publicSubject`, and the agent prompt forbids Pennyworth/Paperclip/PEN-numbers/local paths in the repo. Never add task numbers or tool names to commits or PRs (PR #44 on zkevm-techdocs said "Draft opened by Pennyworth for Paperclip task PEN-406").
@@ -179,7 +180,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Grafana and Google Cloud go to Claude Code and Codex only (D-48),** never OpenRouter (`observes`). Grafana is grafana-mcp's loopback `/mcp` (`GRAFANA_MCP_TOKEN` in the environment, like Primer). Google Cloud is a one-hour token narrowed to `READ_SCOPES` in `services/runner/src/gcp.mjs`, in the job's own gcloud config; the sign-in itself (`scripts/gcloud-auth.sh`) is broad and never reaches a job.
   - **Never add `cloud-platform.read-only` or `devstorage.read_only` to `READ_SCOPES`:** some APIs accept them for writes (Agent Registry deletes, liens, BigQuery DML jobs). Before adding any scope, check every API in Google's discovery directory for non-GET methods that accept it.
   - **Codex drops variables named `*TOKEN*`/`*KEY*`/`*SECRET*` from its tool calls,** so gcloud's token file goes in as a property in `CLOUDSDK_CONFIG`, not `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE`. The same applies to anything else a Codex job's shell must see.
-  - **Every job runs under `bwrap --tmpfs` over the gcloud sign-ins** (`gcp.hidden`): the sandbox only limits writes, and gcloud would otherwise use the user's own `~/.config/gcloud`. bwrap comes from the `llm` devshell; an outer bwrap around `codex sandbox` works on this host.
+  - **Every job runs under `bwrap --tmpfs` over the gcloud sign-ins** (`gcp.hidden`): the sandbox only limits writes, and gcloud would otherwise use the user's own `~/.config/gcloud`. bwrap comes from the `llm` devshell (`~/config/nixos/shells/llm.nix`), not the host: the runner's systemd PATH has none, so a test from an interactive shell can pass while every job fails with `bwrap: not found` (PEN-2714). `scripts/healthcheck.sh` checks the job tools with the runner's own PATH. An outer bwrap around `codex sandbox` works on this host.
   - **The Google Cloud session lasts 16 hours** (the user's own Workspace policy, 2026-10-01). After that refreshes fail with `rapt_required`; jobs run without Google Cloud and say so. Don't look for a way around it.
   - **A question or investigation runs without a repository** when none is named; implement still asks.
 - **`claude --mcp-config` is variadic** and swallows a trailing prompt argument; the runner sends the prompt on stdin.
