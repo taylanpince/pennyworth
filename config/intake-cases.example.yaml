@@ -169,3 +169,17 @@
   comment: Can you check whether https://github.com/0xPolygon/example-infra/pull/103 is safe to merge?
   context: { known_repo: 0xPolygon/example-infra }
   expect: { action: run, mode: [answer, investigate] }
+
+- id: same work in several repos
+  why: the intake asked which of the named repositories to use, though all of them join the workspace (D-41)
+  title: Prepare the release branches
+  description: |-
+    For the following repos:
+
+    - 0xPolygon/example-gateway
+    - 0xPolygon/example-infra
+
+    Compare master with the release branch and rebase release on master.
+  own_description: true
+  comment: ""
+  expect: { action: run, mode: implement, repo: 0xPolygon/example-gateway, references: [0xPolygon/example-infra] }

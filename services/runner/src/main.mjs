@@ -612,7 +612,9 @@ async function startJob({ issue, instructions, read, candidates }) {
     // Settings from the intake's reading of the request (handleRequest), checked in applyDirectives.
     const before = state.task(issue.id);
     const inferred = {};
-    if (read?.repo && !before.repo) inferred.repo = read.repo;
+    // Several repositories named and none picked: they all join the workspace, so the first leads.
+    const lead = read?.repo ?? read?.references?.[0];
+    if (lead && !before.repo) inferred.repo = lead;
     inferred.mode = read?.mode ?? "investigate"; // judged per request; if unreadable, change nothing
     if (read?.engine === "openrouter") Object.assign(inferred, { engine: "openrouter" }, read.model ? { model: read.model } : {});
     else if (read?.engine === "claude") Object.assign(inferred, { engine: "claude" }, read.model ? { model: read.model } : {});
@@ -640,7 +642,7 @@ async function startJob({ issue, instructions, read, candidates }) {
     // Once asked for, the task's document goes to Primer after every run that changes it (D-44).
     if (read?.primer && !primerRecord(issue.id)) savePrimer(issue.id, {});
     // Every repository the request names joins the workspace (D-41), remembered for follow-ups.
-    rememberRepos(issue.id, read?.references ?? []);
+    rememberRepos(issue.id, (read?.references ?? []).filter((r) => r.toLowerCase() !== String(task.repo).toLowerCase()));
     const engine = task.engine ?? resolveEngine({}, cfg);
     const mode = task.mode ?? "investigate";
     const readOnly = mode === "implement" && readOnlyRefusal(task.repo, cfg.allowed_orgs, "change code there");
