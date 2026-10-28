@@ -342,6 +342,14 @@ recurring:
     say("Rebase it on main, then merge them one by one as I listed.");
     await waitFor("the run, and the note about merging", () => partComments().slice(n).some((c) => /merges you asked for: reply \*\*push\*\*/.test(c)));
     assert.ok(!partComments().slice(n).some((c) => /merging \d+ PR/.test(c)), "no merges before the push");
+    // "As I listed": the run sees the conversation since its last reply, and where the work stands.
+    const prompt = fakeLog().filter((e) => e.kind === "claude").at(-1).data.prompt;
+    assert.match(prompt, /## On this task since your last reply/);
+    assert.match(prompt, /### Taylan [^\n]*\n\n1\. https:\/\/github\.com\/acme\/app\/pull\/1/, "the list the user gave");
+    assert.match(prompt, /<<<RUNNER\nWhich pull requests should I merge/, "the question it answered");
+    assert.match(prompt, /## Where things stand \(read just now\)[\s\S]*\| acme\/app \| `fix\/remove-telos` \|/);
+    assert.match(prompt, /## Instructions from Taylan \(authoritative\)[\s\S]*Rebase it on main, then merge them/);
+    assert.doesNotMatch(prompt.split("## Instructions from Taylan")[0], /Rebase it on main/, "this run's request isn't repeated in the conversation");
     n = partComments().length;
     say("push");
     await waitFor("the push", () => partComments().slice(n).some((c) => /\| Branch \| Result \|/.test(c)));

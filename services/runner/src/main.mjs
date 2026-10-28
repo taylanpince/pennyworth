@@ -25,6 +25,7 @@ import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } 
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import * as merges from "./merges.mjs";
 import { State } from "./state.mjs";
+import { REPLY_MARKER, prSnapshot, stateSection, threadEntries, threadSection } from "./thread.mjs";
 
 const execFileP = promisify(execFile);
 const cfg = loadConfig();
@@ -610,6 +611,41 @@ async function syncPicker(issue, full, task, named) {
   return state.task(issue.id);
 }
 
+/**
+ * What a run sees of the task beyond the request: the conversation since the session last read it
+ * (everything for a new session; this run's own request left out) and the live state of its branches,
+ * PRs and merges. GitHub or Paperclip being unreachable leaves a part out rather than failing the run.
+ */
+async function conversation(issue, workspace, { instructions, resumed, persona }) {
+  const key = `thread_upto:${issue.id}`;
+  const seen = state.get(key) || ""; // the newest comment any earlier run of this task was given
+  const upto = resumed ? seen : "";
+  const comments = await pc.comments(issue.id).catch((err) => (log("thread unavailable", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 200) }), []));
+  const agents = await pc.agents().catch(() => []);
+  const entries = threadEntries(comments.filter((c) => c.createdAt > upto), {
+    user: cfg.selfName,
+    you: persona?.name,
+    agents,
+    // This run's request: comments no run has seen yet, which the instructions carry.
+    current: (c) => c.createdAt > seen && instructions.includes(stripHidden(c.body).trim()),
+  });
+  if (comments.length) state.set(key, comments.at(-1).createdAt);
+  const rows = await branchRows(issue, workspace).catch(() => []);
+  const prs = new Map();
+  const gh = await findRealGh().catch(() => "");
+  await Promise.all(
+    [...new Set(rows.filter((r) => r.prUrl && !r.merged).map((r) => r.prUrl))].map(async (url) => {
+      const { stdout } = await execFileP(gh, ["pr", "view", url, "--json", "state,isDraft,reviewDecision,mergeStateStatus,statusCheckRollup"], { timeout: 20_000 }).catch(() => ({ stdout: "" }));
+      prs.set(url, prSnapshot(stdout ? JSON.parse(stdout) : undefined));
+    }),
+  );
+  const queue = mergeQueue(issue.id);
+  return {
+    thread: threadSection(cfg.selfName, entries, { resumed }),
+    stand: stateSection({ rows, prs, merges: queue ? merges.summary(queue, queue.state === "running" ? "Running." : queue.state === "stopped" ? `Stopped: ${queue.reason}.` : "Done.") : "" }),
+  };
+}
+
 /** The user's task an Engineer's part belongs to (D-45), or undefined. */
 async function crewParent(full) {
   if (!full.parentId) return undefined;
@@ -709,11 +745,9 @@ async function startJob({ issue, instructions, read, candidates }) {
     reportActivity();
     // A saved session can only be continued by the engine that created it (Codex, Claude Code and
     // opencode sessions are not interchangeable). After a switch the new engine starts fresh, with the
-    // earlier requests on this task and the work already on its branches as context.
+    // whole conversation on the task and the work already on its branches as context.
     const sessionEngine = state.get(`session_engine:${issue.id}`) || (String(task.session_id).startsWith("ses_") ? "openrouter" : "codex");
     const resumed = Boolean(state.task(issue.id).session_id && sessionEngine === engine.kind);
-    const historyKey = `history:${issue.id}`;
-    const earlier = resumed ? "" : state.get(historyKey) || "";
     remember(issue.id, instructions);
     const where = repos.length ? repos.map((r) => `\`${r.slug}\``).join(", ") : "no repository";
     await pc.startWork(
@@ -734,9 +768,12 @@ async function startJob({ issue, instructions, read, candidates }) {
     const crew = crewCtx && (!resumed || state.get(crewKey) !== crewHash) ? crewCtx : undefined;
     if (crewHash) state.set(crewKey, crewHash);
     const observe = observes(engine.kind) ? { grafana: existsSync(cfg.grafanaTokenFile), gcp: { state: gcp.state, detail: gcp.detail, projects: cfg.gcp.projects } } : undefined;
+    const persona = personaFor(engine.kind, await pc.engineerAgents().catch(() => []));
+    // The conversation (all of it for a new session, what's new for a resumed one) and where the work stands.
+    const { thread, stand } = await conversation(issue, workspace, { instructions, resumed, persona });
     const prompt = resumed
-      ? followUpPrompt({ user: cfg.selfName, mode, instructions, workspace, repos, branches, files, primer, crew, observe })
-      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells: runShells, instructions, earlier, files, primer, persona: personaFor(engine.kind, await pc.engineerAgents().catch(() => [])), crew, observe });
+      ? followUpPrompt({ user: cfg.selfName, mode, instructions, workspace, repos, branches, files, primer, crew, observe, thread, stand })
+      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells: runShells, instructions, files, primer, persona, crew, observe, thread, stand });
     const tipsBefore = await branchTips(workspace);
     const helper = repoHelper.register({ issue, workspace });
     let result;
@@ -771,7 +808,7 @@ async function startJob({ issue, instructions, read, candidates }) {
     const stillDirty = (await dirtyCheckouts(after)).length > 0;
     const primerNote = outcome.finished ? await publishToPrimer(issue, full, workspace) : "";
     if (mode === "answer" && outcome.finished) {
-      await pc.setStatus(issue.id, "in_review", `${stripAnswerHeading(report)}${primerNote ? `\n\n${primerNote}` : ""}\n\n_${engineLabel(engine)} · ${whereNow}${stillDirty ? " · note: the workspace has uncommitted changes" : ""}_`);
+      await pc.setStatus(issue.id, "in_review", `${REPLY_MARKER}${stripAnswerHeading(report)}${primerNote ? `\n\n${primerNote}` : ""}\n\n_${engineLabel(engine)} · ${whereNow}${stillDirty ? " · note: the workspace has uncommitted changes" : ""}_`);
       state.finishJob(jobId, "done");
       log("job finished", { issue: issue.identifier, code: result.code, mode });
       return;
@@ -790,7 +827,7 @@ async function startJob({ issue, instructions, read, candidates }) {
     if (stillDirty) parts.push("\n_Note: the workspace has uncommitted changes._");
     parts.push(`Workspace: \`${workspace}\` · log: \`${logPath}\``);
     // Failures also go to review (Paperclip refuses "blocked" without a blocker); the report says what failed.
-    await pc.setStatus(issue.id, "in_review", parts.filter(Boolean).join("\n"));
+    await pc.setStatus(issue.id, "in_review", `${REPLY_MARKER}${parts.filter(Boolean).join("\n")}`);
     state.finishJob(jobId, result.timedOut ? "timeout" : result.code ? "failed" : outcome.finished ? "done" : "incomplete", rows.some((r) => r.unpublished.length) ? "committed" : undefined);
     if (read?.mergeAfter) then = () => mergeAfterRun(issue, instructions, read.gapMinutes, { finished: outcome.finished, unpublished: rows.some((r) => r.unpublished.length && !r.merged) });
     log("job finished", { issue: issue.identifier, code: result.code, timedOut: result.timedOut, branches: rows.length, committed: tidy.committed });
