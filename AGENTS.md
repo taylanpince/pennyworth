@@ -189,6 +189,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
   - **The Google Cloud session lasts 16 hours** (the user's own Workspace policy, 2026-10-01). After that refreshes fail with `rapt_required`; jobs run without Google Cloud and say so. Don't look for a way around it.
   - **No repository needed:** with none named in the request, the task or its parent, the workspace starts empty and the agent clones what it needs (`pennyworth repo`). The runner never asks which repository.
 - **`claude --mcp-config` is variadic** and swallows a trailing prompt argument; the runner sends the prompt on stdin.
+- **Claude Code runs with streamed input (D-50, stage 4).** The prompt is the first `stream-json` message, and a comment the busy reader would keep for later goes into the running session instead (`channel.send`). `--replay-user-messages` echoes each message once taken in: stdin closes only when every message sent has been taken in and answered. A message that lands as a turn ends gets a turn of its own, and its answer joins the reply. Never close stdin on the first `result`. Codex and opencode can't take input mid-run, so their comments wait for the next turn.
 
 ### Telegram
 

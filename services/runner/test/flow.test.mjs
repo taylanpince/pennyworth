@@ -316,20 +316,26 @@ recurring:
     await waitFor("the stop", () => reviews().some((p) => /Stopped on request/.test(p.comment ?? "")), 30_000);
   });
 
-  it("answers a progress question mid-run, and keeps other comments for the next turn", async () => {
+  it("answers a progress question mid-run, and passes other comments into the running session", async () => {
     step("slow");
     const n = starts().length;
     const c = partComments().length;
+    const replies = reviews().length;
     say("Look at the staging logs again.");
     await waitFor("the run to start", () => starts().length > n);
     await new Promise((r) => setTimeout(r, 1000));
     say("How's it going?");
     await waitFor("the answer", () => partComments().slice(c).some((x) => /Still running/.test(x)), 20_000);
     say("Also check the infra repo.");
-    await waitFor("the note", () => partComments().slice(c).some((x) => /Noted: I'll read this/.test(x)), 20_000);
-    await waitFor("the next turn", () => claudeRuns().some((r) => /## Instructions from Taylan[\s\S]*Also check the infra repo/.test(r.prompt)), 40_000);
-    await waitFor("its reply", () => reviews().length >= 2 && !running());
+    await waitFor("the hand-over", () => partComments().slice(c).some((x) => /Passed on: Ada reads it now/.test(x)), 20_000);
+    // Claude Code takes it in mid-run (stage 4): one reply that covers it, no extra turn.
+    await waitFor("the reply", () => reviews().length > replies);
+    assert.match(reviews().at(-1).comment, /Also, as you asked while I worked: Also check the infra repo\./);
+    assert.deepEqual(fakeLog().filter((e) => e.kind === "claude-mid-run").at(-1).data, ["Also check the infra repo."]);
+    await new Promise((r) => setTimeout(r, 2500));
+    assert.equal(reviews().length, replies + 1, "no second turn for it");
   });
+
   // An agent turn or publishing in progress (the merge queue runs on in the background: GitHub fails here).
   const running = () => (paperclip.activity.at(-1)?.running ?? []).some((r) => r.identifier === "PEN-2" && r.mode !== "merging PRs");
 

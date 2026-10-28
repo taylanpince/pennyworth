@@ -295,6 +295,11 @@ async function whileBusy(issue, latest, instructions) {
     return stopMerges(issue, "you asked me to stop");
   }
   if (read.decision === "answer" && read.answer) return void (await pc.comment(issue.id, read.answer));
+  // A session that takes messages while it works gets the comment now, as the user's own words.
+  if (r?.channel?.send?.(latest)) {
+    log("comment passed to the run", { issue: issue.identifier });
+    return void (await pc.comment(issue.id, `Passed on: ${r.who ?? "the agent"} reads it now, while working.`));
+  }
   return dispatch({ issue, instructions });
 }
 
@@ -644,7 +649,10 @@ async function agentStatus({ issue, workspace }) {
 async function allowWrite(ctx, action, targets, extra = {}) {
   const key = `${action}\n${targets.join("\n")}`;
   if (ctx.allowed?.has(key)) return;
-  const verdict = await authorize({ cfg, user: cfg.selfName, action, targets, words: ctx.words, ...extra });
+  // The user's words as they are now: a comment they added while the agent works counts too.
+  const comments = await pc.comments(ctx.issue.id).catch(() => undefined);
+  const words = comments ? wordsAround(comments, { isCommand: (body) => Boolean(parseCommand(body)) }) : ctx.words;
+  const verdict = await authorize({ cfg, user: cfg.selfName, action, targets, words, ...extra });
   log("write checked", { issue: ctx.issue.identifier, action, targets: targets.length, allowed: verdict.allowed, how: verdict.how, reason: verdict.reason.slice(0, 200) });
   if (!verdict.allowed) throw new UserError(`Not done: this needs ${cfg.selfName}'s go-ahead (${verdict.reason}). Say exactly what you'd ${action === "merge" ? "merge" : "publish"} and ask them; don't try again in this turn.`);
   (ctx.allowed ??= new Set()).add(key);
@@ -807,6 +815,9 @@ async function startJob({ issue, instructions }) {
     const observe = observes(engine.kind) ? { grafana: existsSync(cfg.grafanaTokenFile), gcp: { state: gcp.state, detail: gcp.detail, projects: cfg.gcp.projects } } : undefined;
     const engineers = await pc.engineerAgents().catch(() => []);
     const persona = personaFor(engine.kind, engineers);
+    // Comments while it works reach a session that takes them (Claude Code: stage 4 of the design).
+    const channel = {};
+    Object.assign(running.get(issue.id), { channel, who: persona?.name });
     // The conversation (all of it for a new session, what's new for a resumed one) and where the work stands.
     const { thread, stand, words } = await conversation(issue, workspace, { instructions, resumed, persona });
     const prompt = resumed
@@ -817,7 +828,7 @@ async function startJob({ issue, instructions }) {
     const helper = repoHelper.register(tools);
     let result;
     try {
-      result = await runAgent({ cfg, engine, shells: runShells, worktree: workspace, prompt, sessionId: resumed ? state.task(issue.id).session_id : undefined, logPath, signal: controller.signal, env: helper.env, gcp });
+      result = await runAgent({ cfg, engine, shells: runShells, worktree: workspace, prompt, sessionId: resumed ? state.task(issue.id).session_id : undefined, logPath, signal: controller.signal, env: helper.env, gcp, channel });
     } finally {
       helper.done();
     }

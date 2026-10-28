@@ -141,7 +141,9 @@ function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp 
       ...(g ? { grafana: { type: "http", url: g.url, headers: { Authorization: "Bearer ${GRAFANA_MCP_TOKEN}" } } } : {}),
     };
     const claude = [
-      "claude", "-p", "--output-format", "stream-json", "--verbose",
+      // Streamed input, so the user's comments can reach a run in progress; each one is echoed back
+      // once taken in (--replay-user-messages), which tells runAgent when the conversation is done.
+      "claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--replay-user-messages",
       "--permission-mode", "bypassPermissions",
       "--setting-sources", "",
       "--strict-mcp-config", "--mcp-config", JSON.stringify({ mcpServers }),
@@ -159,19 +161,25 @@ function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp 
         ENABLE_CLAUDEAI_MCP_SERVERS: "false",
         DISABLE_AUTOUPDATER: "1",
       },
+      streamInput: true,
     };
   }
   throw new Error(`unsupported engine ${engine.kind}`);
 }
 
+/** One message for Claude Code's streamed input. */
+const userMessage = (text) => `${JSON.stringify({ type: "user", message: { role: "user", content: text } })}\n`;
+
 /**
- * Run the agent; resolves with { code, sessionId, lastMessage, timedOut, cancelled }.
+ * Run the agent; resolves with { code, sessionId, lastMessage, timedOut, cancelled }. For an engine with
+ * streamed input (Claude Code), `channel.send(text)` gives the running session another message from the
+ * user (docs/design/conversational-engineers.md, stage 4) and returns false once the run is over.
  * The agent's environment: no SSH agent (fetch only via the runner), read-only gh first on PATH,
  * and a git ssh wrapper that refuses pushes.
  */
-export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, logPath, signal, env: jobEnv = {}, gcp }) {
+export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, logPath, signal, env: jobEnv = {}, gcp, channel }) {
   const lastMessageFile = `${logPath}.last.md`;
-  const { argv, env, promptAsArg } = buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp });
+  const { argv, env, promptAsArg, streamInput } = buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp });
   const full = inDevshells(cfg.devshells.flake, shells, promptAsArg ? [...argv, prompt] : argv);
   const agentEnv = {
     ...process.env,
@@ -203,6 +211,16 @@ export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, log
     const child = spawn(full[0], full.slice(1), { cwd: worktree, env: agentEnv, detached: true, stdio: ["pipe", "pipe", "pipe"] });
     let found = sessionId;
     let finalText = "";
+    // Streamed input: the session ends once every message sent has been taken in and answered. A
+    // message that arrives as a turn ends gets a turn of its own; its answer joins the reply.
+    let sent = 0;
+    let taken = 0;
+    const answers = [];
+    let lingering;
+    const finish = () => {
+      clearTimeout(lingering);
+      if (!child.stdin.writableEnded) child.stdin.end();
+    };
     let buffer = "";
     const onLine = (line) => {
       try {
@@ -211,7 +229,17 @@ export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, log
         if (e.sessionID && !found) found = e.sessionID; // opencode
         if (e.type === "text" && e.part?.text) finalText = e.part.text; // opencode: keep last text part
         if (e.type === "system" && e.subtype === "init" && e.session_id && !found) found = e.session_id; // claude
-        if (e.type === "result" && typeof e.result === "string") finalText = e.result; // claude: the final message
+        if (streamInput && e.type === "user" && e.isReplay) taken++;
+        if (e.type === "result" && typeof e.result === "string") {
+          // claude: the answer of a turn
+          answers.push(e.result);
+          finalText = answers.filter((a) => a.trim() && a.trim() !== "NO_REPLY").join("\n\n") || e.result;
+          if (streamInput) {
+            clearTimeout(lingering);
+            if (taken >= sent) finish();
+            else lingering = setTimeout(finish, 120_000); // a message it never took in: don't wait forever
+          }
+        }
       } catch {
         /* non-JSON output */
       }
@@ -226,7 +254,19 @@ export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, log
       }
     });
     child.stderr.on("data", (d) => log.write(d));
-    if (!promptAsArg) child.stdin.end(prompt);
+    child.stdin.on("error", () => {}); // a message sent as the process exits
+    if (streamInput) {
+      child.stdin.write(userMessage(prompt));
+      sent = 1;
+      if (channel) {
+        channel.send = (text) => {
+          if (child.stdin.writableEnded || child.exitCode !== null) return false;
+          child.stdin.write(userMessage(text));
+          sent++;
+          return true;
+        };
+      }
+    } else if (!promptAsArg) child.stdin.end(prompt);
     else child.stdin.end();
 
     let timedOut = false;
@@ -251,6 +291,8 @@ export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, log
     });
     child.on("close", (code) => {
       clearTimeout(timer);
+      clearTimeout(lingering);
+      if (channel) channel.send = () => false;
       log.end();
       let lastMessage = existsSync(lastMessageFile) ? readFileSync(lastMessageFile, "utf8").trim() : finalText.trim();
       if (!lastMessage && engine.kind !== "codex") lastMessage = finalText.trim();

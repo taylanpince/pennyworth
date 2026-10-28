@@ -1,6 +1,6 @@
 # Design: Engineers you talk to (replaces the runner's intake)
 
-Status: built, 2026-10-28 (stages 1–3; decisions at the end). Recorded as **D-50**; stage 4 is open. Once built, this becomes **D-50** in `docs/DECISIONS.md`. It replaces the intake (`services/runner/src/intake.mjs`), most of `handleRequest` and the runner's command handling. D-41 (workspaces), D-45 (crew parts), D-46 (the merge queue's checks), D-48 and D-49 (leased pushes) stay.
+Status: built, 2026-10-28 (stages 1–4; decisions at the end). Recorded as **D-50**; stage 5 (the Assistant) is open. Once built, this becomes **D-50** in `docs/DECISIONS.md`. It replaces the intake (`services/runner/src/intake.mjs`), most of `handleRequest` and the runner's command handling. D-41 (workspaces), D-45 (crew parts), D-46 (the merge queue's checks), D-48 and D-49 (leased pushes) stay.
 
 ## Why
 
@@ -136,7 +136,7 @@ Each stage ships on its own, behind the flow test, and leaves the system working
 1. **The whole thread in every turn** (done 2026-10-28, `services/runner/src/thread.mjs`). Build the thread and the live state table, and give them to fresh and resumed sessions alike. The intake stays for now. This alone fixes "as I instructed you" for the agent, and lets Ada see the runner's questions and results.
 2. **Tools and the user's word** (done 2026-10-28: `bin/pennyworth`, `src/authorize.mjs`, `eval:authorize`). The `pennyworth` CLI and endpoint, the authorization call, `eval:authorize`, and the new prompt rule. **push** and **pr** stay as shortcuts. Ada can now push, open PRs and queue merges when asked.
 3. **Every comment is a turn** (done 2026-10-28: `src/busy.mjs`, `eval:busy`; the agent also got `pennyworth engine`, `primer`, `reset` and `cleanup`). Remove the intake from routing, along with modes, the runner's questions, pending state and `merge_after`. Add the during-a-run reader and `pennyworth engine`. Move the eval cases. D-49's merge plumbing is retired here; its lease rule stays.
-4. **Comments into a running Claude Code session,** if `--input-format stream-json` holds up in the sandbox.
+4. **Comments into a running Claude Code session** (done 2026-10-28: `--input-format stream-json --replay-user-messages`, checked through the devshells, bwrap and the sandbox), if `--input-format stream-json` holds up in the sandbox.
 5. **Later:** the Assistant (Alfred) on the same thread-and-tools model. Today it is woken by the "Process task replies" routine with its own context assembly.
 
 ## Decisions (the user, 2026-10-27)
