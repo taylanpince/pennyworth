@@ -38,6 +38,23 @@ export function threadEntries(comments, { user, you, agents = [], current = () =
   return out;
 }
 
+const isReply = (c) => c.authorType !== "agent" && String(c.body ?? "").includes(RUNNER_MARKER) && (String(c.body).includes(REPLY_MARKER) || LEGACY_REPLY.test(stripHidden(c.body)));
+
+/**
+ * The user's words around the agent's previous reply, for checking a GitHub write against them
+ * (src/authorize.mjs): their comments before it and after it, and the reply. Comments the runner
+ * carried out as commands (exact "push", "pr") are left out: done once, they allow nothing more.
+ */
+export function wordsAround(comments, { isCommand = () => false } = {}) {
+  const last = comments.findLastIndex(isReply);
+  const own = (c) => c.authorType === "user" && !String(c.body ?? "").includes(RUNNER_MARKER) && stripHidden(c.body).trim() && !isCommand(c.body);
+  return {
+    earlier: comments.slice(0, Math.max(last, 0)).filter(own),
+    recent: comments.slice(last + 1).filter(own),
+    lastReply: last >= 0 ? comments[last].body : "",
+  };
+}
+
 /**
  * The conversation as a prompt section, newest kept when it's long: each entry is cut to `each`
  * characters, and the oldest are left out past `budget`. "" when there's nothing to show.

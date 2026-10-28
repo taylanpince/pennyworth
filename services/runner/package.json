@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/main.mjs",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.mjs",
-    "eval:intake": "node --disable-warning=ExperimentalWarning eval/intake.mjs"
+    "eval:intake": "node --disable-warning=ExperimentalWarning eval/intake.mjs",
+    "eval:authorize": "node --disable-warning=ExperimentalWarning eval/authorize.mjs"
   },
   "dependencies": {
     "yaml": "^2.9.1"

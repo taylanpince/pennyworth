@@ -1,0 +1,52 @@
+#!/usr/bin/env node
+// The task's GitHub actions for the agent (stage 2 of docs/design/conversational-engineers.md). The
+// runner does the work and checks each write against the user's words; this only forwards the request.
+//
+//   pennyworth status                                   branches, PRs, reviews, checks, merge queue (live)
+//   pennyworth push [<org/repo> <branch>]...            push the task's branches (or the ones named)
+//   pennyworth pr [<org/repo> <branch>]... [--title <title>] [--body-file <file>]
+//                                                       push, and open a draft PR for each
+//   pennyworth merge <PR link>... [--gap <minutes>]     merge PRs one at a time, after this turn
+//   pennyworth repo <org/name>                          clone another repository into the workspace
+import { readFileSync } from "node:fs";
+
+const usage = `usage: pennyworth status | push [<org/repo> <branch>]... | pr [<org/repo> <branch>]... [--title <title>] [--body-file <file>] | merge <PR link>... [--gap <minutes>] | repo <org/name>`;
+const [command, ...rest] = process.argv.slice(2);
+const fail = (msg, code = 1) => {
+  console.error(`pennyworth: ${msg}`);
+  process.exit(code);
+};
+if (!["status", "push", "pr", "merge", "repo"].includes(command)) fail(usage, 2);
+if (!process.env.PENNYWORTH_REPO_URL) fail("only available inside a task run", 2);
+
+const flags = {};
+const words = [];
+for (let i = 0; i < rest.length; i++) {
+  if (rest[i] === "--title" || rest[i] === "--body-file" || rest[i] === "--gap") flags[rest[i].slice(2)] = rest[++i];
+  else words.push(rest[i]);
+}
+let body;
+if (command === "repo") {
+  if (words.length !== 1) fail(usage, 2);
+  body = { repo: words[0] };
+} else if (command === "merge") {
+  if (!words.length) fail("name the pull requests to merge, in order", 2);
+  body = { prs: words, gap: flags.gap === undefined ? undefined : Number(flags.gap) };
+} else if (command === "push" || command === "pr") {
+  if (words.length % 2) fail("name branches as <org/repo> <branch> pairs", 2);
+  const branches = [];
+  for (let i = 0; i < words.length; i += 2) branches.push({ repo: words[i], branch: words[i + 1] });
+  body = { branches };
+  if (command === "pr" && flags.title) body.title = flags.title;
+  if (command === "pr" && flags["body-file"]) body.body = readFileSync(flags["body-file"], "utf8");
+} else body = {};
+
+const res = await fetch(`${process.env.PENNYWORTH_REPO_URL}/${command}`, {
+  method: "POST",
+  headers: { authorization: `Bearer ${process.env.PENNYWORTH_REPO_TOKEN ?? ""}`, "content-type": "application/json" },
+  body: JSON.stringify(body),
+  signal: AbortSignal.timeout(20 * 60_000),
+}).catch((err) => fail(`the runner didn't answer (${err.message})`));
+const text = await res.text();
+if (!res.ok) fail(text);
+console.log(text);

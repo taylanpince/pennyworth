@@ -19,3 +19,4 @@ config/paperclip.yaml
 .comments/
 config/runner.yaml
 config/intake-cases.yaml
+config/authorize-cases.yaml

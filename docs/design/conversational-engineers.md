@@ -134,7 +134,7 @@ Every comment becomes a turn on the task's engine. The intake call before every 
 Each stage ships on its own, behind the flow test, and leaves the system working.
 
 1. **The whole thread in every turn** (done 2026-10-28, `services/runner/src/thread.mjs`). Build the thread and the live state table, and give them to fresh and resumed sessions alike. The intake stays for now. This alone fixes "as I instructed you" for the agent, and lets Ada see the runner's questions and results.
-2. **Tools and the user's word.** The `pennyworth` CLI and endpoint, the authorization call, `eval:authorize`, and the new prompt rule. **push** and **pr** stay as shortcuts. Ada can now push, open PRs and queue merges when asked.
+2. **Tools and the user's word** (done 2026-10-28: `bin/pennyworth`, `src/authorize.mjs`, `eval:authorize`). The `pennyworth` CLI and endpoint, the authorization call, `eval:authorize`, and the new prompt rule. **push** and **pr** stay as shortcuts. Ada can now push, open PRs and queue merges when asked.
 3. **Every comment is a turn.** Remove the intake from routing, along with modes, the runner's questions, pending state and `merge_after`. Add the during-a-run reader and `pennyworth engine`. Move the eval cases. D-49's merge plumbing is retired here; its lease rule stays.
 4. **Comments into a running Claude Code session,** if `--input-format stream-json` holds up in the sandbox.
 5. **Later:** the Assistant (Alfred) on the same thread-and-tools model. Today it is woken by the "Process task replies" routine with its own context assembly.

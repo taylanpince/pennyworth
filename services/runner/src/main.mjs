@@ -25,7 +25,8 @@ import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } 
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import * as merges from "./merges.mjs";
 import { State } from "./state.mjs";
-import { REPLY_MARKER, prSnapshot, stateSection, threadEntries, threadSection } from "./thread.mjs";
+import { REPLY_MARKER, prSnapshot, stateSection, threadEntries, threadSection, wordsAround } from "./thread.mjs";
+import { authorize } from "./authorize.mjs";
 
 const execFileP = promisify(execFile);
 const cfg = loadConfig();
@@ -366,11 +367,11 @@ function saveMerges(issueId, queue) {
  * "Merge these approved PRs, 15 minutes apart": queue the PRs the comment names (else the task's),
  * or carry on with a stopped queue. advanceMerges() does the merging, one poll at a time.
  */
-async function startMerges(issue, full, instructions, latest, gapMinutes) {
+async function startMerges(issue, full, instructions, latest, gapMinutes, { prs: given } = {}) {
   // Merge requests are requests too: a later "merge them as I listed" finds their PRs (listedPrs).
   if (latest) remember(issue.id, latest);
   const existing = mergeQueue(issue.id);
-  let prs = merges.findPrs(latest);
+  let prs = given ?? merges.findPrs(latest);
   if (!prs.length && !existing?.prs.some((p) => p.status === "pending")) prs = merges.findPrs(`${instructions}\n${full.description ?? ""}`);
   // "Merge them as I instructed you": the newest earlier request that lists PRs.
   if (!prs.length && !existing?.prs.some((p) => p.status === "pending")) prs = listedPrs(issue.id);
@@ -630,6 +631,16 @@ async function conversation(issue, workspace, { instructions, resumed, persona }
     current: (c) => c.createdAt > seen && instructions.includes(stripHidden(c.body).trim()),
   });
   if (comments.length) state.set(key, comments.at(-1).createdAt);
+  return {
+    thread: threadSection(cfg.selfName, entries, { resumed }),
+    stand: await liveState(issue, workspace),
+    // What the user said around the agent's last reply: what its GitHub writes are checked against.
+    words: wordsAround(comments, { isCommand: (body) => Boolean(parseCommand(body)) }),
+  };
+}
+
+/** Where the task's work stands, read now: branches, their PRs on GitHub, and the merge queue. */
+async function liveState(issue, workspace) {
   const rows = await branchRows(issue, workspace).catch(() => []);
   const prs = new Map();
   const gh = await findRealGh().catch(() => "");
@@ -640,10 +651,55 @@ async function conversation(issue, workspace, { instructions, resumed, persona }
     }),
   );
   const queue = mergeQueue(issue.id);
-  return {
-    thread: threadSection(cfg.selfName, entries, { resumed }),
-    stand: stateSection({ rows, prs, merges: queue ? merges.summary(queue, queue.state === "running" ? "Running." : queue.state === "stopped" ? `Stopped: ${queue.reason}.` : "Done.") : "" }),
-  };
+  return stateSection({ rows, prs, merges: queue ? merges.summary(queue, queue.state === "running" ? "Running." : queue.state === "stopped" ? `Stopped: ${queue.reason}.` : "Done.") : "" });
+}
+
+// ------------------------------------------------------------------ the agent's tools (pennyworth …)
+
+/** `pennyworth status`: where the task's work stands, read now. */
+async function agentStatus({ issue, workspace }) {
+  return (await liveState(issue, workspace)) || "No branches, PRs or merges on this task yet.";
+}
+
+/**
+ * A GitHub write the agent asked for, checked against the user's words (src/authorize.mjs) once per
+ * run and target list. Refuses with a message telling the agent to ask.
+ */
+async function allowWrite(ctx, action, targets, extra = {}) {
+  const key = `${action}\n${targets.join("\n")}`;
+  if (ctx.allowed?.has(key)) return;
+  const verdict = await authorize({ cfg, user: cfg.selfName, action, targets, words: ctx.words, ...extra });
+  log("write checked", { issue: ctx.issue.identifier, action, targets: targets.length, allowed: verdict.allowed, how: verdict.how, reason: verdict.reason.slice(0, 200) });
+  if (!verdict.allowed) throw new UserError(`Not done: this needs ${cfg.selfName}'s go-ahead (${verdict.reason}). Say exactly what you'd ${action === "merge" ? "merge" : "publish"} and ask them; don't try again in this turn.`);
+  (ctx.allowed ??= new Set()).add(key);
+}
+
+/**
+ * `pennyworth push` and `pennyworth pr`: the same publishing as the user's "push" and "pr", once their
+ * words allow it. The results also go on the task, so every GitHub write is on record there.
+ */
+async function agentPublish(ctx, command, args) {
+  const only = (Array.isArray(args.branches) ? args.branches : [])
+    .map((b) => ({ repo: normalizeRepo(String(b?.repo ?? ""))?.slug ?? "", branch: String(b?.branch ?? "") }))
+    .filter((b) => b.repo && b.branch);
+  const { text } = await publish(ctx.issue, ctx.workspace, command, ctx.signal, {
+    only,
+    text: command === "pr" && args.title ? { title: String(args.title), body: String(args.body ?? "") } : undefined,
+    check: (ordered) => allowWrite(ctx, command, ordered.map((r) => `${r.repo} \`${r.branch}\`${r.prUrl ? ` (PR ${r.prUrl})` : ""}`)),
+  });
+  return stripHidden(text).trim();
+}
+
+/** `pennyworth merge`: PRs for the merge queue (D-46), which starts on them when this run ends. */
+async function agentMerge(ctx, args) {
+  const prs = merges.findPrs((Array.isArray(args.prs) ? args.prs : []).join("\n"));
+  if (!prs.length) throw new UserError("Name the pull requests as links or org/repo#number, in the order to merge them.");
+  const outside = prs.filter((p) => !repoAllowed(normalizeRepo(p.repo), cfg.allowed_orgs));
+  if (outside.length) throw new UserError(`Only PRs in ${cfg.allowed_orgs.join(", ")} can be merged: ${outside.map((p) => p.url).join(", ")}.`);
+  const gap = Number.isInteger(args.gap) && args.gap >= 0 && args.gap <= 720 ? args.gap : undefined;
+  await allowWrite(ctx, "merge", prs.map((p) => p.url), { gapMinutes: gap });
+  ctx.merge = { prs, gap };
+  return `Queued ${prs.map((p) => `#${p.number}`).join(", ")}: the merges start when this run ends, one at a time${gap !== undefined ? `, ${gap} minutes apart` : ""}. Each must be approved, with green checks and a green base branch, or the queue stops and says why on the task.`;
 }
 
 /** The user's task an Engineer's part belongs to (D-45), or undefined. */
@@ -680,6 +736,7 @@ async function startJob({ issue, instructions, read, candidates }) {
   reportActivity();
   let jobId;
   let then; // "…then merge them": after the job is off the running list
+  let tools; // the run's `pennyworth` context: merges it queued start after the run
   try {
     const full = await pc.issue(issue.id);
     const pendingKey = `pending:${issue.id}`;
@@ -770,12 +827,13 @@ async function startJob({ issue, instructions, read, candidates }) {
     const observe = observes(engine.kind) ? { grafana: existsSync(cfg.grafanaTokenFile), gcp: { state: gcp.state, detail: gcp.detail, projects: cfg.gcp.projects } } : undefined;
     const persona = personaFor(engine.kind, await pc.engineerAgents().catch(() => []));
     // The conversation (all of it for a new session, what's new for a resumed one) and where the work stands.
-    const { thread, stand } = await conversation(issue, workspace, { instructions, resumed, persona });
+    const { thread, stand, words } = await conversation(issue, workspace, { instructions, resumed, persona });
     const prompt = resumed
       ? followUpPrompt({ user: cfg.selfName, mode, instructions, workspace, repos, branches, files, primer, crew, observe, thread, stand })
       : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells: runShells, instructions, files, primer, persona, crew, observe, thread, stand });
     const tipsBefore = await branchTips(workspace);
-    const helper = repoHelper.register({ issue, workspace });
+    tools = { issue, workspace, words, signal: controller.signal };
+    const helper = repoHelper.register(tools);
     let result;
     try {
       result = await runAgent({ cfg, engine, shells: runShells, worktree: workspace, prompt, sessionId: resumed ? state.task(issue.id).session_id : undefined, logPath, signal: controller.signal, env: helper.env, gcp });
@@ -837,6 +895,8 @@ async function startJob({ issue, instructions, read, candidates }) {
   } finally {
     gcp?.done();
     running.delete(issue.id);
+    // Merges the agent queued with `pennyworth merge` (the user's words allowed them) win over merge_after.
+    if (tools?.merge) then = async () => startMerges(issue, await pc.issue(issue.id), "", "", tools.merge.gap, { prs: tools.merge.prs });
     if (then) await then().catch((err) => reportError(issue, err));
     drainQueue();
     reportActivity();
@@ -997,7 +1057,7 @@ async function runCommand(issue, task, command) {
   reportActivity();
   let published = false;
   try {
-    published = await publish(issue, workspace, command, controller.signal);
+    published = (await publish(issue, workspace, command, controller.signal)).ok;
   } finally {
     running.delete(issue.id);
     reportActivity();
@@ -1023,15 +1083,26 @@ async function mergeAfterRun(issue, instructions, gapMinutes, { finished, unpubl
   await pc.comment(issue.id, "Next, the merges you asked for: reply **push** to publish these changes, and I'll start merging as soon as GitHub has them.");
 }
 
-async function publish(issue, workspace, command, signal) {
+/**
+ * Push the task's branches (or the `only` ones) and, for "pr", open a draft PR for each. `check(ordered)`
+ * runs once the branches are known, before anything is published, and refuses by throwing. `text` is the
+ * agent's own PR title and description, for a single branch. Resolves with { ok, text }: whether
+ * everything went out, and the results comment.
+ */
+async function publish(issue, workspace, command, signal, { only = [], text, check } = {}) {
   const notes = await leaveFinishedPrs(issue, workspace);
   const tidy = await tidyBranches(issue, workspace, { commitDirty: false });
   const rows = await branchRows(issue, workspace);
-  const publishable = rows.filter((r) => !r.merged && (r.unpublished.length || (command === "pr" && !r.prUrl)));
+  const named = (r) => !only.length || only.some((o) => o.repo.toLowerCase() === r.repo.toLowerCase() && o.branch === r.branch);
+  const unknown = only.filter((o) => !rows.some((r) => o.repo.toLowerCase() === r.repo.toLowerCase() && o.branch === r.branch));
+  if (unknown.length) throw new UserError(`not a branch of this task: ${unknown.map((o) => `${o.repo} ${o.branch}`).join(", ")}. Its branches: ${rows.map((r) => `${r.repo} ${r.branch}`).join(", ") || "none yet"}`);
+  const publishable = rows.filter((r) => named(r) && !r.merged && (r.unpublished.length || (command === "pr" && !r.prUrl)));
   if (!publishable.length) {
-    const open = rows.filter((r) => r.prUrl && !r.merged);
+    const open = rows.filter((r) => named(r) && r.prUrl && !r.merged);
     // GitHub already has everything: as good as published.
-    return (await pc.comment(issue.id, [...notes, rows.length ? (open.length ? `Nothing new to publish: GitHub already has every commit${command === "pr" ? `, and the PRs are open: ${open.map((r) => r.prUrl).join(", ")}` : ""}.` : "Nothing new to publish.") : "There are no commits to publish."].join("\n\n")), true);
+    const said = [...notes, rows.length ? (open.length ? `Nothing new to publish: GitHub already has every commit${command === "pr" ? `, and the PRs are open: ${open.map((r) => r.prUrl).join(", ")}` : ""}.` : "Nothing new to publish.") : "There are no commits to publish."].join("\n\n");
+    await pc.comment(issue.id, said);
+    return { ok: true, text: said };
   }
   // Parents before the branches stacked on them: a stacked PR needs its base on GitHub first.
   const ordered = [];
@@ -1042,24 +1113,26 @@ async function publish(issue, workspace, command, signal) {
     ordered.push(r);
   };
   publishable.forEach(visit);
+  if (check) await check(ordered);
 
   const full = await pc.issue(issue.id);
   const results = [];
   for (const r of ordered) {
     const label = `${new Set(rows.map((x) => x.repo)).size > 1 ? `${r.repo} · ` : ""}\`${r.branch}\``;
-    if (signal.aborted) {
+    if (signal?.aborted) {
       results.push(`| ${label} | not published: stopped on request |`);
       continue;
     }
     try {
-      results.push(`| ${label} | ${await publishBranch(issue, full, r, command, rows)} |`);
+      results.push(`| ${label} | ${await publishBranch(issue, full, r, command, rows, ordered.length === 1 ? text : undefined)} |`);
     } catch (err) {
       log("publish failed", { issue: issue.identifier, repo: r.repo, branch: r.branch, err: String(err.stderr || err.message).slice(0, 300) });
       results.push(`| ${label} | ⚠️ ${String(err instanceof UserError ? err.message : err.stderr || err.message).trim().split("\n").slice(-3).join(" ").replace(/\|/g, "/").slice(0, 400)} |`);
     }
   }
-  await pc.comment(issue.id, [...notes, ...tidy.notes.map((n) => `_${n}_`), "| Branch | Result |", "|---|---|", ...results].join("\n"));
-  return !signal.aborted && !results.some((line) => line.includes("⚠️"));
+  const said = [...notes, ...tidy.notes.map((n) => `_${n}_`), "| Branch | Result |", "|---|---|", ...results].join("\n");
+  await pc.comment(issue.id, said);
+  return { ok: !signal?.aborted && !results.some((line) => line.includes("⚠️")), text: said };
 }
 
 /**
@@ -1084,7 +1157,7 @@ async function leaseFor(r) {
   return remote;
 }
 
-async function publishBranch(issue, full, r, command, rows) {
+async function publishBranch(issue, full, r, command, rows, text) {
   if (!r.writable) throw new UserError(`not published: \`${r.repo}\` is outside your orgs (${cfg.allowed_orgs.join(", ")}), so it's read-only`);
   const empty = await remoteIsEmpty(r.path);
   if (r.branch === r.defaultBase ? !empty : !checkBranchName(r.branch, { base: r.defaultBase, defaultBranch: r.defaultBase })) throw new UserError(`not a branch name I'd publish`);
@@ -1117,7 +1190,9 @@ async function publishBranch(issue, full, r, command, rows) {
   const subject = messages.at(-1)?.split("\n")[0] ?? full.title;
   const fallbackTitle = prTitle(oneline, rows.filter((x) => !x.merged).length > 1 || leaksInternal(full.title) ? subject : full.title);
   const siblings = rows.filter((x) => x !== r && !x.merged);
-  const pr = await writePrDescription({
+  // The agent's own title and description (it knows the conversation), unless they mention internal names.
+  const own = text?.title && !leaksInternal(`${text.title}\n${text.body ?? ""}`) ? { title: String(text.title).slice(0, 200), body: String(text.body ?? "").slice(0, 60_000), generated: false } : undefined;
+  const pr = own ?? await writePrDescription({
     cfg, repo: r.repo, base: r.base,
     request: [
       await prRequest(full),
@@ -1127,7 +1202,7 @@ async function publishBranch(issue, full, r, command, rows) {
     messages, stat, diff, report: siblings.length ? undefined : await lastReport(issue.id).catch(() => undefined), fallbackTitle,
   });
   const body = leaksInternal(pr.body) ? "" : pr.body;
-  log("pr description", { issue: issue.identifier, branch: r.branch, generated: pr.generated, rejected: Boolean(pr.rejected) });
+  log("pr description", { issue: issue.identifier, branch: r.branch, generated: pr.generated, rejected: Boolean(pr.rejected), own: Boolean(own), ownRefused: Boolean(text?.title && !own) });
   const { stdout } = await execFileP(await findRealGh(), ["pr", "create", "--draft", "--repo", r.repo, "--head", r.branch, "--base", r.base, "--title", pr.title, "--body", body], { cwd: r.path }).catch((err) => {
     // gh's error message repeats the whole command line (PR body included): show stderr only.
     throw new UserError(`couldn't open the PR. GitHub said: ${String(err.stderr || "gh pr create failed").trim().slice(-400)}`);
@@ -1246,7 +1321,12 @@ const repoHelper = startRepoHelper(async ({ issue, workspace }, raw) => {
   rememberRepos(issue.id, [repo.slug]);
   log("repository added by the agent", { issue: issue.identifier, repo: repo.slug });
   return `${repo.slug} is at ${path} (default branch ${await defaultBranch(path)})${writable(repo.slug) ? "" : ". It is read-only: changes there can't be published"}.`;
-}, log);
+}, log, {
+  status: agentStatus,
+  push: (ctx, args) => agentPublish(ctx, "push", args),
+  pr: (ctx, args) => agentPublish(ctx, "pr", args),
+  merge: agentMerge,
+});
 
 /** Each repository in the workspace for the prompt; with `naming`, its branch naming rules and examples. */
 async function repoInfo(workspace, { naming } = {}) {

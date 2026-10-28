@@ -30,6 +30,13 @@ exec(process.argv.slice(i + 1));`,
 if (args[0] === "sandbox") exec(args.slice(args.indexOf("--") + 1));
 else {
   const prompt = readFileSync(0, "utf8");
+  if (prompt.includes("<<<RECENT_COMMENTS_FROM_")) {
+    // The write check: allowed only when the user's recent words say "go ahead".
+    const recent = /<<<RECENT_COMMENTS_FROM_\\w+\\n([\\s\\S]*?)\\nRECENT_COMMENTS_FROM_/.exec(prompt)?.[1] ?? "";
+    log("authorize", prompt);
+    writeFileSync(args[args.indexOf("-o") + 1], JSON.stringify({ allowed: /go ahead/i.test(recent), reason: /go ahead/i.test(recent) ? "asked" : "not asked" }));
+    process.exit(0);
+  }
   log("intake", prompt);
   const candidates = (/^Candidate repositories: (.*)$/m.exec(prompt)?.[1] ?? "").split(", ").filter((c) => c && c !== "(none)");
   if (!prompt.includes("Candidate repositories:")) process.exit(1); // a PR description: falls back to the commits
@@ -44,8 +51,14 @@ else {
   claude: `log("claude", { argv: process.argv.slice(2), prompt: readFileSync(0, "utf8") });
 const repo = [join(process.cwd(), "app"), join(process.cwd(), "acme/app")].find((d) => existsSync(join(d, ".git")));
 const run = (...args) => spawnSync("git", ["-C", repo, ...args], { stdio: "ignore" });
-const step = existsSync(process.env.FAKE_STEP) ? readFileSync(process.env.FAKE_STEP, "utf8").trim() : "commit";
-if (step === "commit") {
+const [step, ...tools] = (existsSync(process.env.FAKE_STEP) ? readFileSync(process.env.FAKE_STEP, "utf8").trim() : "commit").split("\\n");
+if (step === "none") {
+} else if (step === "second") {
+  run("switch", "-qc", "feat/second", "origin/main");
+  writeFileSync(join(repo, "second.txt"), "second\\n");
+  run("add", "second.txt");
+  run("commit", "-qm", "feat: second change");
+} else if (step === "commit") {
   run("switch", "-qc", "fix/remove-telos", "origin/main");
   writeFileSync(join(repo, "chains.txt"), "polygon\\n");
   run("add", "chains.txt");
@@ -56,6 +69,12 @@ if (step === "commit") {
   writeFileSync(join(repo, "chains.txt"), "polygon\\n# " + Date.now() + "\\n");
   run("add", "chains.txt");
   run("commit", "-q", "--amend", "-m", "fix: drop Telos");
+}
+// The agent's tools, as it would call them from its shell.
+for (const line of tools) {
+  const [cmd, ...cmdArgs] = line.split(" ");
+  const out = spawnSync(cmd, cmdArgs, { cwd: process.cwd(), encoding: "utf8" });
+  log("tool", { line, code: out.status, out: (out.stdout ?? "") + (out.stderr ?? "") });
 }
 console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "session-1" }));
 console.log(JSON.stringify({ type: "result", result: "## Summary\\n\\nChecked every repository; nothing needed changing." }));`,
@@ -359,6 +378,45 @@ recurring:
     await waitFor("the merges, from the earlier list", () => partComments().slice(n).some((c) => /merging 1 PR.*#1/.test(c)));
   });
 
+  const toolRuns = () => fakeLog().filter((e) => e.kind === "tool").map((e) => e.data);
+  const runTurn = async (comment) => {
+    const n = paperclip.patches.length;
+    say(comment);
+    await waitFor("the run", () => paperclip.patches.slice(n).some((p) => p.issue === "PEN-2" && p.status === "in_review"));
+  };
+
+  it("pushes when the user asks in their own words, through the agent's own tool", async () => {
+    writeFileSync(join(dir, "claude-step"), "second\npennyworth push acme/app feat/second");
+    await runTurn("Add the second change, and go ahead and push it.");
+    const call = toolRuns().at(-1);
+    assert.equal(call.code, 0, call.out);
+    assert.match(call.out, /\| Branch \| Result \|[\s\S]*feat\/second[\s\S]*Pushed 1 commit/);
+    assert.ok(git(dir, "--git-dir", join(dir, "github/acme/app.git"), "branch", "--list", "feat/second"), "on GitHub");
+    assert.ok(partComments().some((c) => /\| Branch \| Result \|[\s\S]*feat\/second/.test(c)), "the push is on record on the task");
+    const check = fakeLog().filter((e) => e.kind === "authorize").at(-1).data;
+    assert.match(check, /RECENT_COMMENTS_FROM_TAYLAN\n[^\n]*go ahead and push it/);
+    assert.doesNotMatch(check, /Remove Telos from these repos/, "the check never sees task text, only the user's words and the agent's reply");
+  });
+
+  it("refuses a write the user didn't ask for, and tells the agent to ask", async () => {
+    const n = partComments().length;
+    writeFileSync(join(dir, "claude-step"), "none\npennyworth merge https://github.com/acme/app/pull/1");
+    await runTurn("Look into why CI is red.");
+    const call = toolRuns().at(-1);
+    assert.equal(call.code, 1);
+    assert.match(call.out, /Not done: this needs Taylan's go-ahead \(not asked\)[\s\S]*ask them/);
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.ok(!partComments().slice(n).some((c) => /merging \d+ PR/.test(c)), "no merges");
+  });
+
+  it("queues merges the user asked for, and starts them when the run ends", async () => {
+    const n = partComments().length;
+    writeFileSync(join(dir, "claude-step"), "none\npennyworth merge https://github.com/acme/app/pull/1 --gap 0");
+    say("Go ahead and merge https://github.com/acme/app/pull/1 when it's green.");
+    await waitFor("the merges", () => partComments().slice(n).some((c) => /merging 1 PR.*#1/.test(c)));
+    assert.match(toolRuns().at(-1).out, /Queued #1: the merges start when this run ends/);
+  });
+
   it("never replaces commits someone else pushed to the branch", async () => {
     // A reviewer's commit on the PR branch, on "GitHub".
     const other = join(dir, "reviewer");
@@ -368,6 +426,7 @@ recurring:
     git(other, "commit", "-qm", "fix: review comment");
     git(other, "push", "-q", "origin", "fix/remove-telos");
     const theirs = githubTip();
+    writeFileSync(join(dir, "claude-step"), "amend");
     let n = paperclip.patches.length;
     say("Reword the commit, please.");
     await waitFor("the run", () => paperclip.patches.slice(n).some((p) => p.issue === "PEN-2" && p.status === "in_review"));
