@@ -1,48 +1,29 @@
 #!/usr/bin/env node
-// Regression set for the intake: real comments, each with the reading it must get, run through
-// the real intake call (a short Codex call per case). Run before every change to intake.mjs,
-// the intake's call sites, or the runner's handling of its answers:
+// Regression set for the go-ahead on Engineer sub-tasks (D-24, readApproval in src/intake.mjs): real
+// comments on a parent task, each with the reading it must get, run through the real call. Run before
+// every change to the go-ahead prompt or its inputs:
 //
-//   npm run eval:intake                 all cases (config/intake-cases.yaml, else the example set)
-//   npm run eval:intake -- PEN-298      only cases whose id contains "PEN-298"
+//   npm run eval:intake                 all go-ahead cases (config/intake-cases.yaml, else the example set)
+//   npm run eval:intake -- skip         only cases whose id contains "skip"
 //   EVAL_REPEAT=5 npm run eval:intake   runs per case (default 3)
 //
-// The intake doesn't answer the same way every time (the old PEN-298 prompt misread the restated
-// request 3 runs out of 4), so each case runs several times and passes only if every run does.
-//
-// Every misread found on a real task gets added to config/intake-cases.yaml, so it can't return.
+// The call doesn't answer the same way every time, so each case runs several times and passes only
+// if every run does. Requests to Engineers are no longer read by the runner (they go to the Engineer,
+// docs/design/conversational-engineers.md): other cases in the file are skipped. Their GitHub writes
+// have their own set, eval:authorize.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { crewNames, findRepos, openrouterModels, stripHidden } from "../src/commands.mjs";
+import { stripHidden } from "../src/commands.mjs";
 import { loadConfig, REPO_ROOT } from "../src/config.mjs";
-import { readApproval, readRequest, withParent } from "../src/intake.mjs";
+import { readApproval } from "../src/intake.mjs";
 
-const FIELDS = ["action", "mode", "repo", "references", "engine", "model", "primer", "gapMinutes", "mergeAfter", "decision"];
-
-/** The request text exactly as handleRequest builds it (title + own description on a first run). */
-export function requestFor(c) {
-  const comment = stripHidden(c.comment ?? "").trim();
-  const own = c.own_description ? `${c.title}\n\n${stripHidden(c.description ?? "").trim()}` : "";
-  return [own, comment].filter(Boolean).join("\n\n");
-}
-
-/** Compare one reading with the expectation: a value, a list of acceptable values, or null for "unset". */
+/** Compare one reading with the expectation: a value, or a list of acceptable values. */
 export function mismatches(read, expect) {
   const out = [];
-  for (const field of FIELDS) {
-    if (!(field in expect)) continue;
-    const want = expect[field];
+  for (const [field, want] of Object.entries(expect ?? {})) {
     const got = read[field];
-    const ok =
-      field === "references"
-        ? JSON.stringify([...(got ?? [])].sort()) === JSON.stringify([...(want ?? [])].sort())
-        : want === null
-          ? got === undefined
-          : Array.isArray(want)
-            ? want.includes(got)
-            : got === want;
-    if (!ok) out.push(`${field}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+    if (!(Array.isArray(want) ? want.includes(got) : got === want)) out.push(`${field}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
   }
   return out;
 }
@@ -52,55 +33,33 @@ async function main() {
   const real = join(REPO_ROOT, "config/intake-cases.yaml");
   const file = existsSync(real) ? real : join(REPO_ROOT, "config/intake-cases.example.yaml");
   const filter = process.argv[2];
-  const cases = parseYaml(readFileSync(file, "utf8")).filter((c) => !filter || c.id.includes(filter));
-  console.log(`${cases.length} case(s) from ${file}\n`);
-
-  // The OpenRouter Engineer's models, as setup gives them to the agent (config/paperclip.yaml).
-  const pcFile = ["config/paperclip.yaml", "config/paperclip.example.yaml"].map((f) => join(REPO_ROOT, f)).find(existsSync);
-  const engineers = Object.values(parseYaml(readFileSync(pcFile, "utf8")).agents ?? {}).map((a) => ({ adapterType: a.adapter, adapterConfig: { model: a.model }, metadata: { models: a.models, persona: a.persona } }));
-  const openrouter = openrouterModels(engineers);
+  const all = parseYaml(readFileSync(file, "utf8"));
+  const cases = all.filter((c) => c.kind === "go-ahead" && (!filter || c.id.includes(filter)));
+  console.log(`${cases.length} go-ahead case(s) from ${file} (${all.length - all.filter((c) => c.kind === "go-ahead").length} request cases skipped: requests now go to the Engineer)\n`);
 
   const repeat = Math.max(1, Number(process.env.EVAL_REPEAT ?? 3));
   const results = [];
   const pending = cases.flatMap((c) => Array.from({ length: repeat }, () => c));
   const worker = async () => {
     for (let c; (c = pending.shift()); ) {
-      const instructions = requestFor(c);
-      // An Engineer's part of the user's task (D-45): the intake also sees that task.
-      const description = withParent(c.description, c.parent);
-      // Outside the orgs, the runner adds the public repos GitHub confirms (D-35); a case lists them.
-      const candidates = findRepos(`${instructions}\n${c.title ?? ""}\n${description}`, cfg.allowed_orgs).map((r) => r.slug);
-      candidates.push(...(c.public_repos ?? []));
       const ctx = c.context ?? {};
+      const waiting = (ctx.waiting ?? ["PEN-1: Engineer task"]).map((w, n) => ({ identifier: String(w).split(":")[0] || `PEN-${n}`, title: String(w).split(":").slice(1).join(":").trim() || String(w) }));
       try {
-        // Go-ahead cases (D-24): a comment on a parent task with Engineer sub-tasks waiting.
-        if (c.kind === "go-ahead") {
-          const waiting = (ctx.waiting ?? ["PEN-1: Engineer task"]).map((w, n) => ({ identifier: String(w).split(":")[0] || `PEN-${n}`, title: String(w).split(":").slice(1).join(":").trim() || String(w) }));
-          const decision = await readApproval({ cfg, user: cfg.selfName, title: c.title ?? "", waiting, comment: stripHidden(c.comment ?? "").trim() });
-          results.push({ c, read: { decision }, bad: mismatches({ decision }, c.expect ?? {}) });
-          continue;
-        }
-        const read = await readRequest({
-          cfg, user: cfg.selfName, title: c.title ?? "", description, instructions,
-          latest: stripHidden(c.comment ?? "").trim(), candidates, openrouter, crew: crewNames(engineers),
-          known: ctx.known_repo, previousMode: ctx.previous_mode, busy: Boolean(ctx.busy), hasWork: Boolean(ctx.has_work), lastResult: ctx.last_result,
-        });
-        results.push({ c, read, bad: mismatches(read, c.expect ?? {}) });
+        const decision = await readApproval({ cfg, user: cfg.selfName, title: c.title ?? "", waiting, comment: stripHidden(c.comment ?? "").trim() });
+        results.push({ c, decision, bad: mismatches({ decision }, c.expect) });
       } catch (err) {
-        results.push({ c, bad: [`intake failed: ${String(err.message ?? err).slice(0, 200)}`] });
+        results.push({ c, bad: [`call failed: ${String(err.message ?? err).slice(0, 200)}`] });
       }
     }
   };
   await Promise.all(Array.from({ length: Number(process.env.EVAL_CONCURRENCY ?? 4) }, worker));
 
-  const summary = (read) => (read?.decision ? `go-ahead: ${read.decision}` : read ? `${read.action}/${read.mode ?? "-"}${read.repo ? ` ${read.repo}` : ""}${read.engine ? ` ${read.engine}` : ""}${read.model ? `:${read.model}` : ""}` : "no reading");
   let failed = 0;
   for (const c of cases) {
     const runs = results.filter((r) => r.c === c);
     const bad = runs.filter((r) => r.bad.length);
     if (bad.length) failed++;
-    const readings = [...new Set(runs.map((r) => summary(r.read)))].join(" | ");
-    console.log(`${bad.length ? "✗" : "✓"} ${c.id.padEnd(34)} ${runs.length - bad.length}/${runs.length}  ${readings}`);
+    console.log(`${bad.length ? "✗" : "✓"} ${c.id.padEnd(34)} ${runs.length - bad.length}/${runs.length}  ${[...new Set(runs.map((r) => r.decision ?? "-"))].join(" | ")}`);
     for (const b of [...new Set(bad.flatMap((r) => r.bad))]) console.log(`    ${b}`);
     if (bad.length && c.why) console.log(`    why: ${c.why}`);
   }

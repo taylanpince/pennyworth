@@ -1,11 +1,11 @@
 // The agent's `pennyworth` commands (bin/pennyworth, and bin/pennyworth-repo): a loopback endpoint in
 // the runner. `repo` clones another repository into the job's workspace (D-41): agents have no SSH
-// agent, so they can't clone private repositories themselves. `status`, `push`, `pr` and `merge`
-// are the runner's GitHub actions as the agent's tools (stage 2 of docs/design/conversational-engineers.md);
-// the runner checks each against the user's words. Each job gets its own random token.
+// agent, so they can't clone private repositories themselves. The others are the runner's actions as
+// the agent's tools (docs/design/conversational-engineers.md), and every write among them is checked
+// against the user's words. Each job gets its own random token.
 
 /** The commands, and nothing else: verify-security.sh checks this list. */
-export const TOOLS = ["repo", "status", "push", "pr", "merge"];
+export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "reset", "cleanup"];
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 

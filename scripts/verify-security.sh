@@ -186,11 +186,12 @@ merge_writes="$(sed -n '/^export const WRITES/,/^\];/p' services/runner/src/merg
 # The Engineer's own tools (docs/design/conversational-engineers.md): a fixed command list on the per-run
 # loopback endpoint, every write checked against the user's words, and the check given nothing else.
 tools="$(grep -oE '^export const TOOLS = \[[^]]*\]' services/runner/src/repohelper.mjs)"
-[ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge"]' ] \
+[ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "reset", "cleanup"]' ] \
   && grep -q 'check: (ordered) => allowWrite(ctx, command,' services/runner/src/main.mjs \
   && [ "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "merge"' | cut -d: -f1)" -lt "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'ctx.merge = ' | cut -d: -f1)" ] \
+  && [ "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "primer"' | cut -d: -f1)" -lt "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'savePrimer(' | cut -d: -f1)" ] \
   && grep -q '^export function authorizePrompt({ user, action, earlier = \[\], recent = \[\], lastReply = "" })' services/runner/src/authorize.mjs \
-  && pass "runner: the Engineer's push, pr and merge are checked against the user's words only (services/runner/src/authorize.mjs)" || fail "runner: the Engineer's tools or their check changed: $tools"
+  && pass "runner: the Engineer's push, pr, merge and Primer publishing are checked against the user's words only (services/runner/src/authorize.mjs)" || fail "runner: the Engineer's tools or their check changed: $tools"
 pass "no email/Slack/Telegram send or calendar write tool is configured for any agent"
 
 echo

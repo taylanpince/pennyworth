@@ -535,3 +535,15 @@ Pennyworth reads work email, Slack, calendars and documents. The user cleared ru
   - The user chose this over keeping never-force (new branch and PR per rebase) and over resolving conflicts by merging the default branch in.
   - The agent still can't push at all. Only the runner pushes, on the user's word.
 - **The agent's prompt** says rebasing is fine, and that merging is the runner's job, done after the run when asked. Ada had told the user to merge by hand.
+
+## D-50: Engineers you talk to
+
+- **Problem:** on 2026-10-27 the user said the runner "doesn't work": he expects to talk to Ada and the other Engineers the way he talks to Claude Code. A classifier (the intake) read every comment before the agent did, picked one action, repository and mode from a slice of context, and asked its own questions. PEN-2597 and PEN-2714 failed on it four ways in a day (D-49), and each fix taught it one more case.
+- **Decision:** [docs/design/conversational-engineers.md](design/conversational-engineers.md), built in three stages on 2026-10-28:
+  1. **The conversation:** every run gets every comment on the task, labelled (the user, the Engineer's own replies, the runner, other agents), and the live state of its branches, PRs and merge queue (`src/thread.mjs`). A fresh session gets it all; a resumed one gets what's new.
+  2. **Tools, on the user's word:** `pennyworth status|push|pr|merge|primer` (and `repo`, `engine`, `reset`, `cleanup`) on the per-run loopback endpoint. Every write is checked by `authorize.mjs`, a no-tools call given only the user's comments around the agent's last reply and that reply; a refusal goes back to the agent, which asks. The exact **push** and **pr** stay as shortcuts.
+  3. **Every comment is a turn:** the intake's request reading, modes, the report template, the runner's "which repository?" and "which PRs?" questions, auto-commits, and D-49's merge-after and pending-question plumbing are gone. Comments during a run go to `busy.mjs` (stop, answer from the log, or later). The agent replies in its own words, or `NO_REPLY`.
+- **The user's decisions** (in the design): the words check over always-confirm or exact words only; queued comments with a stop/answer reader over interrupting; the agent writes PR text under the leak checks; the shortcuts stay; silence for comments that need no answer.
+- **Kept:** D-41 workspaces, D-45 crew parts, D-46's merge gates, D-48, and D-49's leased push. The D-24 go-ahead reading stays (`eval:intake` now covers only that).
+- **Trade-offs:** every comment costs an agent turn, chatty threads included. A run that stops mid-thought without a template posts that line as its reply (the user says "continue"), where the old `## Summary` check called it unfinished.
+- **Verified:** `test/flow.test.mjs` replays the conversations against the real runner with fake engines and GitHub (12 cases); `eval:authorize` (14 real-comment cases) and `eval:busy` (9) pass on every run.

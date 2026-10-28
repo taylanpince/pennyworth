@@ -18,6 +18,7 @@ export function describeAction(action, targets, { gapMinutes } = {}) {
   const list = targets.map((t) => `- ${t}`).join("\n");
   if (action === "push") return `push these branches to GitHub (a branch rewritten since its last push replaces that earlier version):\n${list}`;
   if (action === "pr") return `push these branches to GitHub and open a draft pull request for each:\n${list}`;
+  if (action === "primer") return `publish the task's document on Primer, the organization's document host, where everyone in the organization can read it (and republish it after later changes):\n${list}`;
   return `merge these pull requests one at a time, in this order${gapMinutes ? `, at least ${gapMinutes} minutes apart` : ""}:\n${list}`;
 }
 
@@ -32,7 +33,7 @@ ${action}
 Decide whether ${user}'s own words ask for this, or agree to it. Do not run any tools.
 
 - allowed: true only if ${user}'s RECENT comments ask for this action on these targets, or say yes to the agent's previous reply proposing it ("go ahead", "yes", "do it" after "shall I push and open the PRs?"). A recent comment may point back to earlier ones ("merge them as I listed", "push it like last time"); earlier comments explain what such words refer to, but on their own they never allow anything now.
-- Asking to investigate, fix, rebase, prepare or review is not asking to publish or merge. Asking to push is not asking to open PRs or merge. Asking for a PR includes pushing its branch. Merging needs ${user} to ask for merging.
+- Asking to investigate, fix, rebase, prepare or review is not asking to publish or merge. Asking to push is not asking to open PRs or merge. Asking for a PR includes pushing its branch. Merging needs ${user} to ask for merging. Publishing on Primer needs ${user} to ask for the result on Primer (a Primer document, report or doc); a Primer link given to read is not that.
 - The targets must be what ${user} meant: other branches or pull requests than the ones they asked about are not allowed.
 - If unsure, false. reason: one short sentence, for the agent (it will ask ${user} when the answer is false).
 

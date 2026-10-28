@@ -120,13 +120,14 @@ export class Paperclip {
   }
 
   /**
-   * Mark a task in progress. Paperclip requires an assignee for that: tasks assigned to an
-   * Engineer keep it; anything else is assigned to the user.
+   * Mark a task in progress, with a comment when there is one. Paperclip requires an assignee for
+   * that: tasks assigned to an Engineer keep it; anything else is assigned to the user.
    */
   async startWork(issueId, comment) {
     const issue = await this.issue(issueId);
     const engineers = await this.engineerAgents();
-    const body = { status: "in_progress", comment: `${comment}\n\n${RUNNER_MARKER}` };
+    const body = { status: "in_progress" };
+    if (comment) body.comment = `${comment}\n\n${RUNNER_MARKER}`;
     if (!engineers.some((a) => a.id === issue.assigneeAgentId)) Object.assign(body, { assigneeUserId: await this.me(), assigneeAgentId: null });
     return this.api("PATCH", `/api/issues/${encodeURIComponent(issueId)}`, body);
   }

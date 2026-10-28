@@ -1,8 +1,8 @@
-// End to end: the real runner (src/main.mjs) as a child process, from a task on a fake Paperclip
-// to a finished job, with fake engines (nix, bwrap, codex, claude, gh) and local repositories for
-// GitHub. Unit tests cover the pieces; this covers how they are put together in startJob, where a
-// missing repository, a variable used before it was set or a broken engine command line only
-// show up when a whole request goes through.
+// End to end: the real runner (src/main.mjs) as a child process, talking to a fake Paperclip, with
+// fake engines (test/fakes: nix, bwrap, codex, claude, gh) and local repositories for GitHub. Unit
+// tests cover the pieces; this replays conversations on a task (PEN-2713/PEN-2714's shape: the user's
+// task lists the repositories, Ada's part of it says "go ahead") turn by turn, the way the user has
+// them, and checks what reached the agent, GitHub and the task.
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
@@ -12,97 +12,22 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 const RUNNER = join(import.meta.dirname, "../src/main.mjs");
+const FAKES = join(import.meta.dirname, "fakes");
 const COMPANY = "00000000-0000-4000-8000-000000000001";
 const USER = "user-1";
-
-// Each fake logs its argv (and stdin, for the engines) to $FAKE_LOG, then does the least it can.
-const FAKES = {
-  // nix develop <flake>#<shell> --command … → …
-  nix: `const i = process.argv.indexOf("--command");
-log("nix", process.argv.slice(2, i));
-exec(process.argv.slice(i + 1));`,
-  // bwrap … -- … → … (the job's wrapper that hides the gcloud sign-ins, D-48)
-  bwrap: `const i = process.argv.indexOf("--");
-log("bwrap", process.argv.slice(2, i));
-exec(process.argv.slice(i + 1));`,
-  // codex exec --output-schema … (the intake) or codex sandbox … -- … (around Claude Code)
-  codex: `const args = process.argv.slice(2);
-if (args[0] === "sandbox") exec(args.slice(args.indexOf("--") + 1));
-else {
-  const prompt = readFileSync(0, "utf8");
-  if (prompt.includes("<<<RECENT_COMMENTS_FROM_")) {
-    // The write check: allowed only when the user's recent words say "go ahead".
-    const recent = /<<<RECENT_COMMENTS_FROM_\\w+\\n([\\s\\S]*?)\\nRECENT_COMMENTS_FROM_/.exec(prompt)?.[1] ?? "";
-    log("authorize", prompt);
-    writeFileSync(args[args.indexOf("-o") + 1], JSON.stringify({ allowed: /go ahead/i.test(recent), reason: /go ahead/i.test(recent) ? "asked" : "not asked" }));
-    process.exit(0);
-  }
-  log("intake", prompt);
-  const candidates = (/^Candidate repositories: (.*)$/m.exec(prompt)?.[1] ?? "").split(", ").filter((c) => c && c !== "(none)");
-  if (!prompt.includes("Candidate repositories:")) process.exit(1); // a PR description: falls back to the commits
-  const newest = (/<<<COMMENT\\n([\\s\\S]*?)\\nCOMMENT>>>/.exec(prompt) ?? /<<<REQUEST\\n([\\s\\S]*?)\\nREQUEST>>>/.exec(prompt))?.[1] ?? "";
-  // Like the real intake on PEN-2714: every repository listed, none picked, and a question.
-  const answer = { action: "run", repo: "", references: candidates, mode: "implement", engine: "", model: "", primer: false, question: "Which repository should I use?", gap_minutes: -1, merge_after: false };
-  if (/start merging/i.test(newest)) Object.assign(answer, { action: "merge", gap_minutes: 0 });
-  if (/then merge/i.test(newest)) Object.assign(answer, { merge_after: true });
-  writeFileSync(args[args.indexOf("-o") + 1], JSON.stringify(answer));
-}`,
-  // Claude Code: one session, and a report with the summary a finished run must have.
-  claude: `log("claude", { argv: process.argv.slice(2), prompt: readFileSync(0, "utf8") });
-const repo = [join(process.cwd(), "app"), join(process.cwd(), "acme/app")].find((d) => existsSync(join(d, ".git")));
-const run = (...args) => spawnSync("git", ["-C", repo, ...args], { stdio: "ignore" });
-const [step, ...tools] = (existsSync(process.env.FAKE_STEP) ? readFileSync(process.env.FAKE_STEP, "utf8").trim() : "commit").split("\\n");
-if (step === "none") {
-} else if (step === "second") {
-  run("switch", "-qc", "feat/second", "origin/main");
-  writeFileSync(join(repo, "second.txt"), "second\\n");
-  run("add", "second.txt");
-  run("commit", "-qm", "feat: second change");
-} else if (step === "commit") {
-  run("switch", "-qc", "fix/remove-telos", "origin/main");
-  writeFileSync(join(repo, "chains.txt"), "polygon\\n");
-  run("add", "chains.txt");
-  run("commit", "-qm", "fix: drop Telos");
-} else {
-  // Rewrites the pushed commit, as a rebase does.
-  run("switch", "-q", "fix/remove-telos");
-  writeFileSync(join(repo, "chains.txt"), "polygon\\n# " + Date.now() + "\\n");
-  run("add", "chains.txt");
-  run("commit", "-q", "--amend", "-m", "fix: drop Telos");
-}
-// The agent's tools, as it would call them from its shell.
-for (const line of tools) {
-  const [cmd, ...cmdArgs] = line.split(" ");
-  const out = spawnSync(cmd, cmdArgs, { cwd: process.cwd(), encoding: "utf8" });
-  log("tool", { line, code: out.status, out: (out.stdout ?? "") + (out.stderr ?? "") });
-}
-console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "session-1" }));
-console.log(JSON.stringify({ type: "result", result: "## Summary\\n\\nChecked every repository; nothing needed changing." }));`,
-  // No GitHub API: every gh call fails (so PRs can't open), as it may on a bad day.
-  gh: `process.exit(1);`,
-};
-
-const fakeScript = (body) => `#!${process.execPath}
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { spawnSync } from "node:child_process";
-const log = (kind, data) => appendFileSync(process.env.FAKE_LOG, JSON.stringify({ kind, data }) + "\\n");
-const exec = (argv) => process.exit(spawnSync(argv[0], argv.slice(1), { stdio: "inherit" }).status ?? 1);
-${body}
-`;
 
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, env: { ...process.env, ...gitEnv }, stdio: "pipe" }).toString().trim();
 let gitEnv = {};
 
 /** A Paperclip with one parent task (the user's) and one part of it for Ada (D-45). */
-function fakePaperclip({ parent, part, engineer }) {
+function fakePaperclip({ parent, part, engineers }) {
   const issues = new Map([parent, part].map((i) => [i.id, i]));
   const comments = new Map([[parent.id, []], [part.id, []]]);
   const patches = [];
   const activity = [];
   const unknown = [];
   let n = 0;
-  const addComment = (issueId, body) => comments.get(issueId).push({ id: `comment-${++n}`, authorType: "user", authorUserId: USER, body, createdAt: new Date().toISOString() });
+  const addComment = (issueId, body) => comments.get(issueId).push({ id: `comment-${++n}`, authorType: "user", authorUserId: USER, body, createdAt: new Date(Date.now() + n).toISOString() });
   const find = (ref) => issues.get(ref) ?? [...issues.values()].find((i) => i.identifier === ref);
   const server = createServer(async (req, res) => {
     let body = "";
@@ -115,7 +40,7 @@ function fakePaperclip({ parent, part, engineer }) {
     const path = url.pathname;
     const issue = /^\/api\/issues\/([^/]+)/.exec(path)?.[1];
     if (req.method === "GET" && path === `/api/companies/${COMPANY}/labels`) return send([{ id: "label-engineer", name: "engineer" }]);
-    if (req.method === "GET" && path === `/api/companies/${COMPANY}/agents`) return send([engineer]);
+    if (req.method === "GET" && path === `/api/companies/${COMPANY}/agents`) return send(engineers);
     if (req.method === "GET" && path === `/api/companies/${COMPANY}/routines`) return send([]);
     if (req.method === "GET" && path === `/api/companies/${COMPANY}/issues`) {
       const q = url.searchParams;
@@ -145,7 +70,7 @@ function fakePaperclip({ parent, part, engineer }) {
       }
       if (req.method === "GET") return send(i);
     }
-    // The board's internal API (job activity for the Crew view): accepted, not checked.
+    // The board's internal API: the runner's activity for the Crew view.
     if (path.startsWith("/internal/")) {
       if (path.endsWith("/runner/activity")) activity.push(JSON.parse(body));
       return send({});
@@ -156,10 +81,33 @@ function fakePaperclip({ parent, part, engineer }) {
   return { server, comments, patches, activity, unknown, addComment };
 }
 
-describe("runner end to end", () => {
-  let dir, runner, paperclip, reportedAtPr = 0, output = "";
+describe("talking to an Engineer, end to end", () => {
+  let dir, runner, paperclip, output = "";
   const fakeLog = () => (existsSync(join(dir, "fake.log")) ? readFileSync(join(dir, "fake.log"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
   const partComments = () => paperclip.comments.get("part").map((c) => c.body);
+  const claudeRuns = () => fakeLog().filter((e) => e.kind === "claude").map((e) => e.data);
+  const toolRuns = () => fakeLog().filter((e) => e.kind === "tool").map((e) => e.data);
+  const step = (text) => writeFileSync(join(dir, "claude-step"), text);
+  const say = (text) => paperclip.addComment("part", text);
+  const context = () => `\nrunner output:\n${output.slice(-3000)}\ncomments on the part:\n${partComments().join("\n---\n")}\nunknown requests: ${paperclip.unknown.join(", ")}`;
+  const waitFor = async (what, ok, ms = 60_000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end && runner.exitCode === null) {
+      if (ok()) return;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    assert.fail(`timed out waiting for ${what}${context()}`);
+  };
+  const reviews = () => paperclip.patches.filter((p) => p.issue === "PEN-2" && p.status === "in_review");
+  const starts = () => paperclip.patches.filter((p) => p.issue === "PEN-2" && p.status === "in_progress");
+  /** One turn: the user's comment, then the agent's reply (the part back in review). */
+  const turn = async (comment) => {
+    const n = reviews().length;
+    say(comment);
+    await waitFor(`the reply to "${comment}"`, () => reviews().length > n);
+    return reviews().at(-1);
+  };
+  const githubTip = (branch = "fix/remove-telos") => git(dir, "--git-dir", join(dir, "github/acme/app.git"), "rev-parse", branch);
 
   before(async () => {
     dir = mkdtempSync(join(tmpdir(), "pennyworth-flow-"));
@@ -182,9 +130,8 @@ describe("runner end to end", () => {
       mkdirSync(dirname(join(dir, "github", slug)), { recursive: true });
       git(dir, "clone", "-q", "--bare", src, join(dir, "github", `${slug}.git`));
     }
-
-    for (const [name, body] of Object.entries(FAKES)) {
-      writeFileSync(join(bin, name), fakeScript(body));
+    for (const name of ["nix", "bwrap", "codex", "claude", "gh"]) {
+      writeFileSync(join(bin, name), `#!/bin/sh\nexec "${process.execPath}" "${join(FAKES, `${name}.mjs`)}" "$@"\n`);
       chmodSync(join(bin, name), 0o755);
     }
 
@@ -226,13 +173,17 @@ recurring:
     writeFileSync(join(secrets, "board_internal_token"), "board-token\n", { mode: 0o600 });
 
     // PEN-2713/PEN-2714: the repositories are on the user's task; Ada's part only says go.
-    const engineer = { id: "engineer-claude", name: "Engineer · Claude", status: "idle", adapterType: "claude_local", adapterConfig: {}, metadata: { setupKey: "pennyworth:engineer-claude", persona: { name: "Ada" } } };
+    const engineers = [
+      { id: "engineer-claude", name: "Engineer · Claude", status: "idle", adapterType: "claude_local", adapterConfig: {}, metadata: { setupKey: "pennyworth:engineer-claude", persona: { name: "Ada" } } },
+      { id: "engineer-codex", name: "Engineer · Codex", status: "idle", adapterType: "codex_local", adapterConfig: {}, metadata: { setupKey: "pennyworth:engineer-codex", persona: { name: "Grace" } } },
+    ];
     const parent = { id: "parent", identifier: "PEN-1", title: "Drop Telos support", status: "todo", assigneeUserId: USER, createdByUserId: USER, createdByAgentId: null, labels: [], description: "Remove Telos from these repos:\n\n- acme/app\n- acme/infra\n" };
-    const part = { id: "part", identifier: "PEN-2", title: "Drop Telos support", status: "todo", parentId: "parent", assigneeAgentId: engineer.id, assigneeUserId: null, createdByUserId: USER, createdByAgentId: null, labels: [], description: "Ada, go ahead and start this on dev please" };
-    paperclip = fakePaperclip({ parent, part, engineer });
+    const part = { id: "part", identifier: "PEN-2", title: "Drop Telos support", status: "todo", parentId: "parent", assigneeAgentId: "engineer-claude", assigneeUserId: null, createdByUserId: USER, createdByAgentId: null, labels: [], description: "Ada, go ahead and start this on dev please" };
+    paperclip = fakePaperclip({ parent, part, engineers });
     await new Promise((r) => paperclip.server.listen(0, "127.0.0.1", r));
     const url = `http://127.0.0.1:${paperclip.server.address().port}`;
 
+    step("commit");
     runner = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", RUNNER], {
       env: {
         PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin:${process.env.PATH}`,
@@ -250,22 +201,6 @@ recurring:
     });
     runner.stdout.on("data", (d) => (output += d));
     runner.stderr.on("data", (d) => (output += d));
-
-    // Done when the job has reported back: the part goes to review with a comment.
-    const deadline = Date.now() + 90_000;
-    while (Date.now() < deadline && !paperclip.patches.some((p) => p.issue === "PEN-2" && p.status === "in_review")) {
-      if (runner.exitCode !== null) break;
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    // Then "pr": publishing shows on the board as Ada's work until the results are posted.
-    reportedAtPr = paperclip.activity.length;
-    paperclip.addComment("part", "pr");
-    const prDeadline = Date.now() + 60_000;
-    while (Date.now() < prDeadline && !partComments().some((c) => c.includes("| Branch | Result |"))) {
-      if (runner.exitCode !== null) break;
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    await new Promise((r) => setTimeout(r, 500)); // the last activity report
   });
 
   after(() => {
@@ -274,151 +209,90 @@ recurring:
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
-  const say = (text) => paperclip.addComment("part", text);
-  const waitFor = async (what, ok, ms = 60_000) => {
-    const end = Date.now() + ms;
-    while (Date.now() < end && runner.exitCode === null) {
-      if (ok()) return;
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    assert.fail(`timed out waiting for ${what}${context()}`);
-  };
-  const githubTip = () => git(dir, "--git-dir", join(dir, "github/acme/app.git"), "rev-parse", "fix/remove-telos");
-  const context = () => `\nrunner output:\n${output.slice(-3000)}\ncomments on the part:\n${partComments().join("\n---\n")}\nunknown requests: ${paperclip.unknown.join(", ")}`;
-
-  it("never asks which repository, and reports no error", () => {
-    const comments = partComments();
-    assert.ok(!comments.some((c) => /which repositor/i.test(c)), `asked for a repository${context()}`);
-    assert.ok(!comments.some((c) => /Runner error|Failed/.test(c)), `the job failed${context()}`);
-    assert.ok(!/"msg":"error"/.test(output), `the runner logged an error${context()}`);
-  });
-
-  it("starts the job in every repository the user's task lists", () => {
+  it("starts from the user's own words on assignment, in every repository their task lists, without asking", async () => {
+    await waitFor("the first reply", () => reviews().length > 0);
     const started = output.split("\n").filter((l) => l.includes('"job started"')).map((l) => JSON.parse(l));
-    assert.equal(started.length, 1, `one job${context()}`);
     assert.deepEqual([...started[0].repos].sort(), ["acme/app", "acme/infra"]);
     assert.equal(started[0].engine, "claude");
-    for (const slug of ["acme/app", "acme/infra"]) assert.ok(existsSync(join(dir, "work/tasks/PEN-2", slug.split("/")[1], ".git")) || existsSync(join(dir, "work/tasks/PEN-2", slug, ".git")), `${slug} cloned into the workspace`);
+    assert.ok(!partComments().some((c) => /which repositor|Runner error|Failed/i.test(c)), `no questions or errors${context()}`);
+    const { prompt, argv } = claudeRuns()[0];
+    assert.match(prompt, /acme\/app[\s\S]*acme\/infra|acme\/infra[\s\S]*acme\/app/);
+    assert.match(prompt, /The task this is part of[\s\S]*Drop Telos support/);
+    assert.match(prompt, /## Instructions from Taylan \(authoritative\)[\s\S]*Ada, go ahead and start this on dev please/);
+    assert.match(prompt, /The engineering agents, by name: Ada \(claude\), Grace \(codex\)/);
+    assert.doesNotMatch(prompt, /Mode: \*\*|## Summary/, "no modes, no report template");
+    assert.ok(argv.includes("--strict-mcp-config"), "Claude Code keeps away from the user's own setup");
+    // Engines run in the devshells, with the gcloud sign-ins hidden (D-48).
+    assert.ok(fakeLog().some((e) => e.kind === "nix" && e.data[1].endsWith("#llm")));
+    const bwrap = fakeLog().find((e) => e.kind === "bwrap")?.data ?? [];
+    assert.ok(bwrap.includes("--tmpfs") && bwrap.some((a) => a.endsWith(".config/gcloud")));
   });
 
-  it("gives the intake the user's task the part belongs to", () => {
-    const intake = fakeLog().find((e) => e.kind === "intake")?.data ?? "";
-    assert.match(intake, /Candidate repositories: .*acme\/app/);
-    assert.match(intake, /Candidate repositories: .*acme\/infra/);
-    assert.match(intake, /The task this is part of \(PEN-1\)/);
+  it("posts the agent's reply as its own, with no start notes around it", () => {
+    const reply = reviews()[0].comment;
+    assert.match(reply, /^<!-- pennyworth-reply -->Checked every repository/);
+    assert.match(reply, /fix\/remove-telos/, "the branch it committed, in the footer");
+    assert.ok(starts().length && !starts()[0].comment, "the board shows the work; no \"On it\" comment");
   });
 
-  it("runs Claude Code in the devshells, the sandbox and bwrap, with a prompt naming every repository", () => {
-    const log = fakeLog();
-    const claude = log.find((e) => e.kind === "claude")?.data;
-    assert.ok(claude, `Claude Code never ran${context()}`);
-    assert.match(claude.prompt, /acme\/app/);
-    assert.match(claude.prompt, /acme\/infra/);
-    assert.match(claude.prompt, /Drop Telos support/);
-    assert.ok(claude.argv.includes("--strict-mcp-config"), "Claude Code keeps away from the user's own setup");
-    // The engine's devshell is outermost; the gcloud sign-ins are hidden from the job (D-48).
-    const shells = log.filter((e) => e.kind === "nix").map((e) => e.data[1]);
-    assert.ok(shells.some((s) => s.endsWith("#llm")), `nix develop …#llm${context()}`);
-    const bwrap = log.find((e) => e.kind === "bwrap")?.data ?? [];
-    assert.ok(bwrap.includes("--tmpfs") && bwrap.some((a) => a.endsWith(".config/gcloud")), "bwrap hides ~/.config/gcloud");
+  it("keeps the exact word pr as a shortcut, shown on the board while it publishes", async () => {
+    const reported = paperclip.activity.length;
+    const n = partComments().length;
+    say("pr");
+    await waitFor("the results", () => partComments().slice(n).some((c) => c.includes("| Branch | Result |")));
+    await new Promise((r) => setTimeout(r, 500));
+    const publishing = paperclip.activity.slice(reported).find((a) => a.running.some((r) => r.identifier === "PEN-2"));
+    assert.equal(publishing?.running.find((r) => r.identifier === "PEN-2").mode, "opening PRs");
+    assert.deepEqual(paperclip.activity.at(-1).running, []);
+    assert.ok(git(dir, "--git-dir", join(dir, "github/acme/app.git"), "branch", "--list", "fix/remove-telos"), "pushed");
+    assert.equal(claudeRuns().length, 1, "no agent turn for the shortcut");
   });
 
-  it("shows a pr on the board as work in progress until the results are posted", () => {
-    const reports = paperclip.activity.slice(reportedAtPr);
-    const publishing = reports.find((a) => a.running.some((r) => r.identifier === "PEN-2"));
-    assert.ok(publishing, `never reported as running${context()}`);
-    assert.equal(publishing.running.find((r) => r.identifier === "PEN-2").mode, "opening PRs");
-    assert.match(publishing.running.find((r) => r.identifier === "PEN-2").repo, /acme\/app/);
-    assert.deepEqual(reports.at(-1).running, [], "and no longer running afterwards");
-    const table = partComments().find((c) => c.includes("| Branch | Result |"));
-    assert.match(table, /fix\/remove-telos/);
-    // Pushed for real (to the local "GitHub"); the PR itself can't open without the GitHub API.
-    assert.ok(git(dir, "--git-dir", join(dir, "github/acme/app.git"), "branch", "--list", "fix/remove-telos"), "branch pushed");
-  });
-
-  it("posts the agent's report and moves the part to review", () => {
-    const done = paperclip.patches.find((p) => p.issue === "PEN-2" && p.status === "in_review");
-    assert.ok(done, `no report${context()}`);
-    assert.match(done.comment, /Checked every repository/);
-    assert.ok(paperclip.patches.some((p) => p.issue === "PEN-2" && p.status === "in_progress" && /On it/.test(p.comment)), "On it, first");
-  });
-
-  // PEN-2714: "start merging" with no PRs named, then the list as a reply.
-  it("asks which PRs to merge, and the reply that lists them starts the merges", async () => {
-    let n = partComments().length;
-    say("Start merging approved PRs in order.");
-    await waitFor("the question", () => partComments().slice(n).some((c) => /Which pull requests should I merge/.test(c)));
-    n = partComments().length;
-    say("1. https://github.com/acme/app/pull/1");
-    await waitFor("the merges", () => partComments().slice(n).some((c) => /merging 1 PR.*#1/.test(c)));
-  });
-
-  // PEN-2714: "fix the conflict by rebasing, then merge them as I instructed", then push.
-  it("after a rebase, push replaces the task's own branch and starts the merges asked for", async () => {
-    writeFileSync(join(dir, "claude-step"), "amend");
+  // PEN-2714: a list of PRs, then "fix the conflict by rebasing, then start merging them as I listed".
+  it("reads 'as I listed' from the conversation, then pushes the rebase and queues the merges itself", async () => {
+    step("none");
+    await turn("Here's the order: 1. https://github.com/acme/app/pull/1");
     const before = githubTip();
-    let n = partComments().length;
-    say("Rebase it on main, then merge them one by one as I listed.");
-    await waitFor("the run, and the note about merging", () => partComments().slice(n).some((c) => /merges you asked for: reply \*\*push\*\*/.test(c)));
-    assert.ok(!partComments().slice(n).some((c) => /merging \d+ PR/.test(c)), "no merges before the push");
-    // "As I listed": the run sees the conversation since its last reply, and where the work stands.
-    const prompt = fakeLog().filter((e) => e.kind === "claude").at(-1).data.prompt;
-    assert.match(prompt, /## On this task since your last reply/);
-    assert.match(prompt, /### Taylan [^\n]*\n\n1\. https:\/\/github\.com\/acme\/app\/pull\/1/, "the list the user gave");
-    assert.match(prompt, /<<<RUNNER\nWhich pull requests should I merge/, "the question it answered");
-    assert.match(prompt, /## Where things stand \(read just now\)[\s\S]*\| acme\/app \| `fix\/remove-telos` \|/);
-    assert.match(prompt, /## Instructions from Taylan \(authoritative\)[\s\S]*Rebase it on main, then merge them/);
-    assert.doesNotMatch(prompt.split("## Instructions from Taylan")[0], /Rebase it on main/, "this run's request isn't repeated in the conversation");
-    n = partComments().length;
-    say("push");
-    await waitFor("the push", () => partComments().slice(n).some((c) => /\| Branch \| Result \|/.test(c)));
-    const table = partComments().slice(n).find((c) => /\| Branch \| Result \|/.test(c));
-    assert.match(table, /Replaced the earlier version/, table);
+    step("amend\npennyworth push acme/app fix/remove-telos\npennyworth merge https://github.com/acme/app/pull/1 --gap 0");
+    const n = partComments().length;
+    const reply = await turn("Rebase it on main, then start merging them as I listed.");
+    const [push, merge] = toolRuns().slice(-2);
+    assert.equal(push.code, 0, push.out);
+    assert.match(push.out, /Replaced the earlier version with 1 commit/);
     assert.notEqual(githubTip(), before, "GitHub has the rewritten branch");
-    await waitFor("the merges, from the earlier list", () => partComments().slice(n).some((c) => /merging 1 PR.*#1/.test(c)));
-  });
-
-  const toolRuns = () => fakeLog().filter((e) => e.kind === "tool").map((e) => e.data);
-  const runTurn = async (comment) => {
-    const n = paperclip.patches.length;
-    say(comment);
-    await waitFor("the run", () => paperclip.patches.slice(n).some((p) => p.issue === "PEN-2" && p.status === "in_review"));
-  };
-
-  it("pushes when the user asks in their own words, through the agent's own tool", async () => {
-    writeFileSync(join(dir, "claude-step"), "second\npennyworth push acme/app feat/second");
-    await runTurn("Add the second change, and go ahead and push it.");
-    const call = toolRuns().at(-1);
-    assert.equal(call.code, 0, call.out);
-    assert.match(call.out, /\| Branch \| Result \|[\s\S]*feat\/second[\s\S]*Pushed 1 commit/);
-    assert.ok(git(dir, "--git-dir", join(dir, "github/acme/app.git"), "branch", "--list", "feat/second"), "on GitHub");
-    assert.ok(partComments().some((c) => /\| Branch \| Result \|[\s\S]*feat\/second/.test(c)), "the push is on record on the task");
+    assert.match(merge.out, /Queued #1: the merges start when this run ends/);
+    // The merges start once the run is over, after its reply.
+    await waitFor("the merges", () => partComments().slice(n).some((c) => /merging 1 PR.*#1/.test(c)));
+    const order = partComments().slice(n);
+    assert.ok(order.findIndex((c) => c === reply.comment) < order.findIndex((c) => /merging 1 PR/.test(c)), "reply first, then merges");
+    // The check saw the user's words, never the task's text.
     const check = fakeLog().filter((e) => e.kind === "authorize").at(-1).data;
-    assert.match(check, /RECENT_COMMENTS_FROM_TAYLAN\n[^\n]*go ahead and push it/);
-    assert.doesNotMatch(check, /Remove Telos from these repos/, "the check never sees task text, only the user's words and the agent's reply");
+    assert.match(check, /RECENT_COMMENTS_FROM_TAYLAN\n[^\n]*Rebase it on main, then start merging them as I listed/);
+    assert.doesNotMatch(check, /Remove Telos from these repos/);
   });
 
   it("refuses a write the user didn't ask for, and tells the agent to ask", async () => {
-    const n = partComments().length;
-    writeFileSync(join(dir, "claude-step"), "none\npennyworth merge https://github.com/acme/app/pull/1");
-    await runTurn("Look into why CI is red.");
+    // A new commit to push, so the push really has to be checked.
+    step("amend\npennyworth push acme/app fix/remove-telos");
+    const tip = githubTip();
+    await turn("Look into why CI is red.");
     const call = toolRuns().at(-1);
     assert.equal(call.code, 1);
     assert.match(call.out, /Not done: this needs Taylan's go-ahead \(not asked\)[\s\S]*ask them/);
-    await new Promise((r) => setTimeout(r, 1500));
-    assert.ok(!partComments().slice(n).some((c) => /merging \d+ PR/.test(c)), "no merges");
+    assert.equal(githubTip(), tip, "nothing pushed");
   });
 
-  it("queues merges the user asked for, and starts them when the run ends", async () => {
-    const n = partComments().length;
-    writeFileSync(join(dir, "claude-step"), "none\npennyworth merge https://github.com/acme/app/pull/1 --gap 0");
-    say("Go ahead and merge https://github.com/acme/app/pull/1 when it's green.");
-    await waitFor("the merges", () => partComments().slice(n).some((c) => /merging 1 PR.*#1/.test(c)));
-    assert.match(toolRuns().at(-1).out, /Queued #1: the merges start when this run ends/);
+  it("pushes when the user asks in their own words", async () => {
+    step("second\npennyworth push acme/app feat/second");
+    await turn("Add the second change, and go ahead and push it.");
+    const call = toolRuns().at(-1);
+    assert.equal(call.code, 0, call.out);
+    assert.match(call.out, /feat\/second[\s\S]*Pushed 1 commit/);
+    assert.ok(githubTip("feat/second"), "on GitHub");
+    assert.ok(partComments().some((c) => /\| Branch \| Result \|[\s\S]*feat\/second/.test(c)), "on record on the task");
   });
 
   it("never replaces commits someone else pushed to the branch", async () => {
-    // A reviewer's commit on the PR branch, on "GitHub".
     const other = join(dir, "reviewer");
     git(dir, "clone", "-q", "--branch", "fix/remove-telos", join(dir, "github/acme/app.git"), other);
     writeFileSync(join(other, "review.txt"), "a fix\n");
@@ -426,14 +300,66 @@ recurring:
     git(other, "commit", "-qm", "fix: review comment");
     git(other, "push", "-q", "origin", "fix/remove-telos");
     const theirs = githubTip();
-    writeFileSync(join(dir, "claude-step"), "amend");
-    let n = paperclip.patches.length;
-    say("Reword the commit, please.");
-    await waitFor("the run", () => paperclip.patches.slice(n).some((p) => p.issue === "PEN-2" && p.status === "in_review"));
-    n = partComments().length;
-    say("push");
-    await waitFor("the push", () => partComments().slice(n).some((c) => /\| Branch \| Result \|/.test(c)));
-    assert.match(partComments().slice(n).find((c) => /\| Branch \|/.test(c)), /didn't make/);
+    step("amend\npennyworth push acme/app fix/remove-telos");
+    await turn("Reword the commit, then push it.");
+    assert.match(toolRuns().at(-1).out, /didn't make/);
     assert.equal(githubTip(), theirs, "their commit is still there");
+  });
+
+  it("stops a run when told to, mid-run", async () => {
+    step("slow");
+    const n = starts().length;
+    say("Check the staging logs for errors.");
+    await waitFor("the run to start", () => starts().length > n);
+    await new Promise((r) => setTimeout(r, 1000));
+    say("stop");
+    await waitFor("the stop", () => reviews().some((p) => /Stopped on request/.test(p.comment ?? "")), 30_000);
+  });
+
+  it("answers a progress question mid-run, and keeps other comments for the next turn", async () => {
+    step("slow");
+    const n = starts().length;
+    const c = partComments().length;
+    say("Look at the staging logs again.");
+    await waitFor("the run to start", () => starts().length > n);
+    await new Promise((r) => setTimeout(r, 1000));
+    say("How's it going?");
+    await waitFor("the answer", () => partComments().slice(c).some((x) => /Still running/.test(x)), 20_000);
+    say("Also check the infra repo.");
+    await waitFor("the note", () => partComments().slice(c).some((x) => /Noted: I'll read this/.test(x)), 20_000);
+    await waitFor("the next turn", () => claudeRuns().some((r) => /## Instructions from Taylan[\s\S]*Also check the infra repo/.test(r.prompt)), 40_000);
+    await waitFor("its reply", () => reviews().length >= 2 && !running());
+  });
+  // An agent turn or publishing in progress (the merge queue runs on in the background: GitHub fails here).
+  const running = () => (paperclip.activity.at(-1)?.running ?? []).some((r) => r.identifier === "PEN-2" && r.mode !== "merging PRs");
+
+  it("switches engine when asked, and runs the request again on a fresh session with the whole conversation", async () => {
+    await waitFor("quiet", () => !running());
+    step("none\npennyworth engine claude sonnet");
+    const runs = claudeRuns().length;
+    say("Use Sonnet for this one, and summarise what changed.");
+    await waitFor("the run on the new model", () => claudeRuns().length >= runs + 2);
+    const again = claudeRuns()[runs + 1];
+    assert.equal(again.argv[again.argv.indexOf("--model") + 1], "sonnet");
+    assert.ok(!again.argv.includes("--resume"), "a fresh session");
+    assert.match(again.prompt, /## The conversation on this task[\s\S]*Here's the order: 1\. https:\/\/github\.com\/acme\/app\/pull\/1/, "the whole conversation, from the start");
+    assert.match(again.prompt, /## Instructions from Taylan[\s\S]*Use Sonnet for this one/);
+    assert.ok(paperclip.patches.some((p) => p.issue === "PEN-2" && p.assigneeAdapterOverrides?.adapterConfig?.model === "sonnet"), "the picker shows it");
+    step("none");
+    await waitFor("quiet", () => !running());
+  });
+
+  it("says nothing to a comment that needs no answer", async () => {
+    await new Promise((r) => setTimeout(r, 1500));
+    step("silent");
+    const n = partComments().length;
+    const done = await turn("Thanks!");
+    assert.equal(done.comment, undefined);
+    assert.equal(partComments().length, n + 1, "only the user's comment");
+  });
+
+  it("never errors or asks for a repository along the way", () => {
+    assert.ok(!/"msg":"error"/.test(output), `the runner logged an error${context()}`);
+    assert.ok(!partComments().some((c) => /Which repository|Runner error/.test(c)));
   });
 });

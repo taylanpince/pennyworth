@@ -7,17 +7,17 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { RUNNER_MARKER, isAgentSubtask, isUserPart, ownRequest, findRepos, mentionedRepos, readOnlyRefusal, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveMode, resolveShells, stripHidden } from "./commands.mjs";
+import { RUNNER_MARKER, isAgentSubtask, isUserPart, ownRequest, findRepos, mentionedRepos, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { observes, runAgent } from "./engines.mjs";
 import { gcpSession } from "./gcp.mjs";
 import { syncFiles } from "./files.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureGuardHooks, git, remoteIsEmpty } from "./git.mjs";
-import { codexModels, readApproval, readRequest, resolveModelAlias, withParent } from "./intake.mjs";
+import { codexModels, readApproval, resolveModelAlias, resolveOpenRouterModel, withParent } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
 import { branchGuidance, checkBranchName, chooseBranchName, exampleBranches } from "./branch.mjs";
 import { cleanMessages, leaksInternal, writePrDescription } from "./describe.mjs";
-import { branchesFooter, commitMessage, firstPrompt, followUpPrompt, latestReport, latestResult, prSummary, prTitle, subtaskSummary, runOutcome, stripAnswerHeading, stripCommitLine } from "./prompt.mjs";
+import { branchesFooter, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, subtaskSummary, runOutcome, stripCommitLine } from "./prompt.mjs";
 import { PRIMER_FILE, publishDocument } from "./primer.mjs";
 import { startRepoHelper } from "./repohelper.mjs";
 import { baseRef, branchChanges, carryOver, dirtyCheckouts, ensureRepo, findBranches, keepBranches, messagesSince, moveOffDefault, readManifest, signUnsigned, workspacePath, workspaceRepos } from "./workspace.mjs";
@@ -27,6 +27,7 @@ import * as merges from "./merges.mjs";
 import { State } from "./state.mjs";
 import { REPLY_MARKER, prSnapshot, stateSection, threadEntries, threadSection, wordsAround } from "./thread.mjs";
 import { authorize } from "./authorize.mjs";
+import { readBusy } from "./busy.mjs";
 
 const execFileP = promisify(execFile);
 const cfg = loadConfig();
@@ -267,47 +268,34 @@ async function handleRequest(issue, latest) {
     const own = requestFrom(full);
     if (own) instructions = [`${full.title}\n\n${own}`, instructions].filter(Boolean).join("\n\n");
   }
-  // A request still waiting on an answer (e.g. which repository) is combined with the answer.
-  const pending = state.get(`pending:${issue.id}`);
-  if (pending) instructions = `${pending}\n\n${instructions}`;
+  // A run or merges in progress: the comment may be about that work ("stop", "how's it going?").
+  if (latest && (running.has(issue.id) || mergeQueue(issue.id)?.state === "running")) return whileBusy(issue, latest, instructions);
+  return dispatch({ issue, instructions });
+}
 
-  // An Engineer's part (D-45) is often just "go ahead": the user's task it belongs to names the repositories.
-  const parent = await crewParent(full).catch(() => undefined);
-  const description = withParent(full.description, parent);
-  const candidates = await repoCandidates(`${instructions}\n${full.title}\n${description}`);
-  const before = state.task(issue.id);
-  const busy = running.has(issue.id) || queue.some((j) => j.issue.id === issue.id);
-  const hasWork = await taskHasCommits(before);
-  const engineers = await pc.engineerAgents().catch(() => []);
-  const openrouter = openrouterModels(engineers);
-  const read = await readRequest({ cfg, user: cfg.selfName, title: full.title, description, instructions, latest, candidates, openrouter, crew: crewNames(engineers), known: before.repo, previousMode: before.mode, busy, hasWork, lastResult: await lastResultOf(issue.id).catch(() => undefined) })
-    .catch((err) => (log("intake failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }), undefined));
-  // Publishing needs something to publish: "build X and prepare a PR" on a fresh task is a run.
-  const action = (read?.action === "push" || read?.action === "pr") && !hasWork ? "run" : (read?.action ?? "run");
-  log("request read", { issue: issue.identifier, action, mode: read?.mode });
-
-  // The reply to "which pull requests should I merge?" that links them continues that request.
-  const mergePending = state.get(`merge_pending:${issue.id}`);
-  if (mergePending) {
-    state.set(`merge_pending:${issue.id}`, "");
-    const asked = JSON.parse(mergePending);
-    if ((action === "run" || action === "merge") && merges.findPrs(latest).length) return startMerges(issue, full, `${asked.instructions}\n\n${instructions}`, latest, read?.gapMinutes ?? asked.gapMinutes);
-  }
-  if (action === "merge") return startMerges(issue, full, instructions, latest, read?.gapMinutes);
-  if (["stop", "status", "reset", "cleanup"].includes(action)) {
-    if (action === "stop" && mergeQueue(issue.id)?.state === "running" && !running.has(issue.id)) return stopMerges(issue, "you asked me to stop");
-    if (action === "stop") {
-      const before = queue.length;
+/**
+ * A comment while the task's run (or publishing, or its merge queue) is in progress. The agent can't
+ * read it until its run ends, so a short reading decides: stop the work, answer a progress question
+ * from what the work shows, or keep the comment for the next turn. It never starts anything.
+ */
+async function whileBusy(issue, latest, instructions) {
+  const r = running.get(issue.id);
+  const mq = mergeQueue(issue.id);
+  const activity = r
+    ? `A run started ${r.startedAt} on this request:\n${String(r.request ?? "").slice(0, 3000)}\n\nThe end of its log:\n${r.logPath ? logTail(r.logPath, 30) : "(publishing branches)"}`
+    : merges.summary(mq, "The merge queue is running.");
+  const read = await readBusy({ cfg, user: cfg.selfName, comment: latest, activity }).catch((err) => (log("busy reading failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 200) }), { decision: "later", answer: "" }));
+  log("comment while busy", { issue: issue.identifier, decision: read.decision });
+  if (read.decision === "stop") {
+    if (r) {
+      r.controller.abort();
       for (let i = queue.length - 1; i >= 0; i--) if (queue[i].issue.id === issue.id) queue.splice(i, 1);
-      if (!running.has(issue.id) && queue.length < before) return void (await pc.comment(issue.id, "Cancelled the queued request. Nothing else was running."));
+      return;
     }
-    return runCommand(issue, state.task(issue.id), action);
+    return stopMerges(issue, "you asked me to stop");
   }
-  if (action === "push" || action === "pr") {
-    const what = action === "push" ? "publish the task's branches to GitHub" : "push the task's branches and open draft PRs";
-    return void (await pc.comment(issue.id, `To ${what}, reply with just **${action}**. I only publish on that exact word.`));
-  }
-  return dispatch({ issue, instructions, read, candidates, full });
+  if (read.decision === "answer" && read.answer) return void (await pc.comment(issue.id, read.answer));
+  return dispatch({ issue, instructions });
 }
 
 /**
@@ -341,9 +329,15 @@ async function publicRepo(slug) {
 
 async function dispatch(job) {
   const { issue } = job;
+  // Comments that arrive while a turn waits join it: the agent reads them together.
+  const waiting = queue.find((j) => j.issue.id === issue.id);
+  if (waiting) {
+    waiting.instructions = `${waiting.instructions}\n\n${job.instructions}`;
+    return;
+  }
   if (running.has(issue.id)) {
     queue.push(job);
-    await pc.comment(issue.id, "Queued: I'll pick this up as soon as the current run on this task finishes.");
+    await pc.comment(issue.id, "Noted: I'll read this as soon as the current run on this task finishes.");
   } else if (running.size >= (cfg.max_concurrent ?? 2)) {
     queue.push(job);
     await pc.comment(issue.id, `Queued: ${running.size} job(s) already running.`);
@@ -364,24 +358,16 @@ function saveMerges(issueId, queue) {
 }
 
 /**
- * "Merge these approved PRs, 15 minutes apart": queue the PRs the comment names (else the task's),
- * or carry on with a stopped queue. advanceMerges() does the merging, one poll at a time.
+ * The PRs the agent queued with `pennyworth merge` (the user's words allowed it), in its order, or
+ * carrying on with a stopped queue. advanceMerges() does the merging, one poll at a time (D-46).
  */
-async function startMerges(issue, full, instructions, latest, gapMinutes, { prs: given } = {}) {
-  // Merge requests are requests too: a later "merge them as I listed" finds their PRs (listedPrs).
-  if (latest) remember(issue.id, latest);
+async function startMerges(issue, { prs = [], gapMinutes } = {}) {
   const existing = mergeQueue(issue.id);
-  let prs = given ?? merges.findPrs(latest);
-  if (!prs.length && !existing?.prs.some((p) => p.status === "pending")) prs = merges.findPrs(`${instructions}\n${full.description ?? ""}`);
-  // "Merge them as I instructed you": the newest earlier request that lists PRs.
-  if (!prs.length && !existing?.prs.some((p) => p.status === "pending")) prs = listedPrs(issue.id);
   const outside = prs.filter((p) => !repoAllowed(normalizeRepo(p.repo), cfg.allowed_orgs));
   if (outside.length) return void (await pc.comment(issue.id, `I only merge in your orgs (${cfg.allowed_orgs.join(", ")}), so I didn't start: ${outside.map((p) => p.url).join(", ")}.`));
   if (running.has(issue.id)) return void (await pc.comment(issue.id, "Can't start merging while a run is in progress on this task. Comment **stop** first, or wait for it to finish."));
   const queue = merges.startOrResume(existing, prs, { gapMinutes: gapMinutes ?? existing?.gapMinutes ?? cfg.merges?.gap_minutes ?? 15 });
-  // Asked which PRs: the reply that links them continues this request.
-  state.set(`merge_pending:${issue.id}`, queue ? "" : JSON.stringify({ instructions, gapMinutes }));
-  if (!queue) return void (await pc.comment(issue.id, existing?.state === "done" ? "Every PR on this task is already merged. Link the ones you want merged next." : "Which pull requests should I merge? Link them in a comment (or in the task), in the order you want them merged."));
+  if (!queue) return void (await pc.comment(issue.id, "Nothing to merge: those PRs are merged already."));
   const engine = state.task(issue.id)?.engine;
   Object.assign(queue, { identifier: issue.identifier, engine: engine ? engineLabel(engine) : undefined });
   saveMerges(issue.id, queue);
@@ -395,19 +381,10 @@ async function startMerges(issue, full, instructions, latest, gapMinutes, { prs:
   reportActivity();
 }
 
-/** Add a request to the task's history: context for a fresh agent session, and PR lists for merges. */
+/** Add a request to the task's history (the first turn on a task also takes its own description). */
 function remember(issueId, request) {
   const key = `history:${issueId}`;
   state.set(key, `${state.get(key) || ""}\n\n---\n\n${request}`.trim().slice(-20_000));
-}
-
-/** The PRs of the newest earlier request on the task that lists any, in its order. */
-function listedPrs(issueId) {
-  for (const request of (state.get(`history:${issueId}`) || "").split("\n\n---\n\n").reverse()) {
-    const prs = merges.findPrs(request);
-    if (prs.length) return prs;
-  }
-  return [];
 }
 
 async function stopMerges(issue, why) {
@@ -583,7 +560,6 @@ async function applySettings(issue, task, settings) {
   if (settings.base) fields.base = settings.base.trim();
   if (settings.model && settings.engine !== "openrouter" && !isClaudeModel(settings.model)) settings.model = resolveModelAlias(settings.model, codexModels()) ?? settings.model;
   if (settings.engine || settings.model) fields.engine = resolveEngine(settings, cfg, task.engine);
-  if (settings.mode) fields.mode = resolveMode(settings, task.mode);
   if (Object.keys(fields).length) state.updateTask(issue.id, fields);
   return state.task(issue.id);
 }
@@ -690,6 +666,41 @@ async function agentPublish(ctx, command, args) {
   return stripHidden(text).trim();
 }
 
+/** `pennyworth engine <claude|codex|openrouter> [model]`: this request again, on another engine or model. */
+async function agentEngine(ctx, args) {
+  const kind = String(args.engine ?? "").trim().toLowerCase();
+  if (!["claude", "codex", "openrouter"].includes(kind)) throw new UserError("Name the engine: claude, codex or openrouter, and optionally a model.");
+  const engineers = await pc.engineerAgents();
+  if (!pickerFor({ kind }, engineers)) throw new UserError(`There's no ${kind} Engineer set up.`);
+  const raw = String(args.model ?? "").trim();
+  let model;
+  if (raw) {
+    model = kind === "openrouter" ? resolveOpenRouterModel(raw, openrouterModels(engineers)) : kind === "claude" ? (isClaudeModel(raw) ? raw.toLowerCase() : undefined) : resolveModelAlias(raw, codexModels());
+    if (!model) throw new UserError(`"${raw}" isn't a ${kind} model I know.`);
+  }
+  ctx.engine = resolveEngine({ engine: kind, model }, cfg);
+  return `This request starts again on ${engineLabel(ctx.engine)} when your run ends, with the whole conversation. End your turn now without doing the work, saying in one line that you're handing over.`;
+}
+
+/** `pennyworth primer`: publish the task's document on Primer after this run and later ones (D-44). */
+async function agentPrimer(ctx) {
+  await allowWrite(ctx, "primer", [`the document the agent writes to ${PRIMER_FILE} in the workspace`]);
+  if (!primerRecord(ctx.issue.id)) savePrimer(ctx.issue.id, {});
+  return `When your run ends, the runner publishes ${PRIMER_FILE} on Primer, and republishes it after every later run that changes it. Write the whole document there.`;
+}
+
+/** `pennyworth reset`: the next turn starts a fresh session (the conversation and the workspace stay). */
+async function agentReset(ctx) {
+  ctx.reset = true;
+  return "Your session ends with this run: the next turn starts afresh, with the whole conversation and the workspace as they are.";
+}
+
+/** `pennyworth cleanup`: remove the workspace when the run ends (branches stay in the runner's copies). */
+async function agentCleanup(ctx) {
+  ctx.cleanup = true;
+  return "The workspace is removed when your run ends, unless it has uncommitted changes. Its branches are kept in the runner's copies of the repositories, and pushed ones are on GitHub.";
+}
+
 /** `pennyworth merge`: PRs for the merge queue (D-46), which starts on them when this run ends. */
 async function agentMerge(ctx, args) {
   const prs = merges.findPrs((Array.isArray(args.prs) ? args.prs : []).join("\n"));
@@ -729,65 +740,39 @@ async function crewContext(full) {
 
 class UserError extends Error {}
 
-async function startJob({ issue, instructions, read, candidates }) {
+/**
+ * One turn of the Engineer's conversation on a task (docs/design/conversational-engineers.md): the
+ * user's new comments (or their own task's description) go to the agent with the whole task in context;
+ * its reply goes on the task. The agent decides what to do; its GitHub writes go through its tools.
+ */
+async function startJob({ issue, instructions }) {
   const controller = new AbortController();
   let gcp;
-  running.set(issue.id, { controller, identifier: issue.identifier, startedAt: new Date().toISOString() });
+  running.set(issue.id, { controller, identifier: issue.identifier, startedAt: new Date().toISOString(), request: instructions });
   reportActivity();
   let jobId;
-  let then; // "…then merge them": after the job is off the running list
-  let tools; // the run's `pennyworth` context: merges it queued start after the run
+  let tools; // the run's `pennyworth` context: what it asked for after the run (merges, engine, reset, cleanup)
   try {
     const full = await pc.issue(issue.id);
-    const pendingKey = `pending:${issue.id}`;
-    // Settings from the intake's reading of the request (handleRequest), checked in applyDirectives.
-    const before = state.task(issue.id);
-    const inferred = {};
-    // Several repositories named and none picked: they all join the workspace, so the first leads.
-    const lead = read?.repo ?? read?.references?.[0];
-    if (lead && !before.repo) inferred.repo = lead;
-    inferred.mode = read?.mode ?? "investigate"; // judged per request; if unreadable, change nothing
-    if (read?.engine === "openrouter") Object.assign(inferred, { engine: "openrouter" }, read.model ? { model: read.model } : {});
-    else if (read?.engine === "claude") Object.assign(inferred, { engine: "claude" }, read.model ? { model: read.model } : {});
-    else if (read?.model) Object.assign(inferred, { engine: "codex", model: read.model });
-    let task = await applySettings(issue, before, inferred);
-    task = await syncPicker(issue, full, task, Boolean(inferred.engine || inferred.model));
-
-    // Questions and investigations can run without a repository (D-48): logs, metrics and
-    // infrastructure, with pennyworth-repo for any code they turn out to need. Changes need one.
-    const repoless = !task.repo && !candidates.length && (task.mode ?? "investigate") !== "implement";
-    if (!task.repo && !repoless) {
-      if (candidates.length === 1) state.updateTask(issue.id, { repo: candidates[0] });
-      else {
-        state.set(pendingKey, instructions);
-        throw new UserError(
-          read?.question ??
-            (candidates.length
-              ? `Which repository should I work in: ${candidates.map((c) => `\`${c}\``).join(" or ")}? Just reply with the name.`
-              : "Which repository should I work in? Reply with its GitHub link or org/name."),
-        );
-      }
-      task = state.task(issue.id);
-    }
-    state.set(pendingKey, "");
-    // Once asked for, the task's document goes to Primer after every run that changes it (D-44).
-    if (read?.primer && !primerRecord(issue.id)) savePrimer(issue.id, {});
-    // Every repository the request names joins the workspace (D-41), remembered for follow-ups.
-    rememberRepos(issue.id, (read?.references ?? []).filter((r) => r.toLowerCase() !== String(task.repo).toLowerCase()));
+    // Every repository the request, the task and the task it is part of (D-45) name joins the workspace
+    // (D-41); the first leads. None named: the workspace starts empty, and the agent clones what it needs.
+    const parent = await crewParent(full).catch(() => undefined);
+    const candidates = await repoCandidates(`${instructions}\n${full.title}\n${withParent(full.description, parent)}`);
+    let task = state.task(issue.id);
+    if (!task.repo && candidates.length) task = await applySettings(issue, task, { repo: candidates[0] });
+    rememberRepos(issue.id, candidates.filter((c) => c.toLowerCase() !== String(task.repo).toLowerCase()));
+    task = await syncPicker(issue, full, task, false);
     const engine = task.engine ?? resolveEngine({}, cfg);
-    const mode = task.mode ?? "investigate";
-    const readOnly = mode === "implement" && readOnlyRefusal(task.repo, cfg.allowed_orgs, "change code there");
-    if (readOnly) throw new UserError(readOnly);
 
     const workspace = await prepareWorkspace(issue, state.task(issue.id));
     // PRs merged or closed since the last run: never keep working on them.
     const prNotes = await leaveFinishedPrs(issue, workspace);
     if (prNotes.length) instructions = `(Runner note: ${prNotes.join(" ")} Build on what is there now.)\n\n${instructions}`;
-    const repos = await repoInfo(workspace, { naming: mode === "implement" ? issue : undefined });
+    const repos = await repoInfo(workspace, { naming: issue });
     // Devshells: the ones chosen for this task earlier, else detected in every repository.
     const detected = [...new Set(repos.flatMap((r) => detectShells(r.path, cfg.devshells.detect)))];
     const shells = task.shells ?? resolveShells({}, detected, instructions, cfg);
-    state.updateTask(issue.id, { shells, engine, mode });
+    state.updateTask(issue.id, { shells, engine });
     // Grafana and Google Cloud reads for Claude Code and Codex (D-48): gcloud's devshell, and a
     // read-only token of the job's own.
     const runShells = observes(engine.kind) && cfg.gcp.shell && !shells.includes(cfg.gcp.shell) ? [...shells, cfg.gcp.shell] : shells;
@@ -798,7 +783,7 @@ async function startJob({ issue, instructions, read, candidates }) {
 
     const logPath = join(logsDir, `${issue.identifier}-${Date.now()}.log`);
     jobId = state.startJob(issue.id, engineLabel(engine), logPath);
-    Object.assign(running.get(issue.id), { jobId, info: { engine: engineLabel(engine), mode, repo: task.repo } });
+    Object.assign(running.get(issue.id), { jobId, logPath, info: { engine: engineLabel(engine), mode: "working", repo: repos.map((r) => r.slug).join(", ").slice(0, 200) } });
     reportActivity();
     // A saved session can only be continued by the engine that created it (Codex, Claude Code and
     // opencode sessions are not interchangeable). After a switch the new engine starts fresh, with the
@@ -806,14 +791,9 @@ async function startJob({ issue, instructions, read, candidates }) {
     const sessionEngine = state.get(`session_engine:${issue.id}`) || (String(task.session_id).startsWith("ses_") ? "openrouter" : "codex");
     const resumed = Boolean(state.task(issue.id).session_id && sessionEngine === engine.kind);
     remember(issue.id, instructions);
-    const where = repos.length ? repos.map((r) => `\`${r.slug}\``).join(", ") : "no repository";
-    await pc.startWork(
-      issue.id,
-      mode === "answer"
-        ? `Looking into your question${repos.length ? ` in ${where}` : ""} with ${engineLabel(engine)}. I'll answer here.`
-        : `${prNotes.length && mode === "implement" ? `${prNotes.join(" ")}\n\n` : ""}${resumed ? "Continuing" : "On it"}: ${mode === "implement" ? "making the changes" : "investigating"}${repos.length ? ` in ${where}` : ""}, with ${engineLabel(engine)}. I'll post the result here.\n\n_Workspace \`${workspace}\` · shells ${runShells.join(", ")}${gcp && gcp.state !== "ok" ? ` · Google Cloud: ${gcp.detail}` : ""}_`,
-    );
-    log("job started", { issue: issue.identifier, repos: repos.map((r) => r.slug), engine: engine.kind, mode, resumed });
+    // The board shows the Engineer at work (D-45); the reply is the next comment.
+    await pc.startWork(issue.id, "");
+    log("job started", { issue: issue.identifier, repos: repos.map((r) => r.slug), engine: engine.kind, resumed });
 
     const branches = state.branches(issue.id);
     const files = await syncFiles(pc, full, workspace, log);
@@ -825,14 +805,15 @@ async function startJob({ issue, instructions, read, candidates }) {
     const crew = crewCtx && (!resumed || state.get(crewKey) !== crewHash) ? crewCtx : undefined;
     if (crewHash) state.set(crewKey, crewHash);
     const observe = observes(engine.kind) ? { grafana: existsSync(cfg.grafanaTokenFile), gcp: { state: gcp.state, detail: gcp.detail, projects: cfg.gcp.projects } } : undefined;
-    const persona = personaFor(engine.kind, await pc.engineerAgents().catch(() => []));
+    const engineers = await pc.engineerAgents().catch(() => []);
+    const persona = personaFor(engine.kind, engineers);
     // The conversation (all of it for a new session, what's new for a resumed one) and where the work stands.
     const { thread, stand, words } = await conversation(issue, workspace, { instructions, resumed, persona });
     const prompt = resumed
-      ? followUpPrompt({ user: cfg.selfName, mode, instructions, workspace, repos, branches, files, primer, crew, observe, thread, stand })
-      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, mode, shells: runShells, instructions, files, primer, persona, crew, observe, thread, stand });
+      ? followUpPrompt({ user: cfg.selfName, instructions, workspace, repos, branches, files, primer, crew, observe, thread, stand })
+      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, shells: runShells, instructions, files, primer, persona, crew, observe, thread, stand, team: crewNames(engineers) });
     const tipsBefore = await branchTips(workspace);
-    tools = { issue, workspace, words, signal: controller.signal };
+    tools = { issue, workspace, words, instructions, signal: controller.signal };
     const helper = repoHelper.register(tools);
     let result;
     try {
@@ -852,56 +833,68 @@ async function startJob({ issue, instructions, read, candidates }) {
     }
 
     const after = await workspaceRepos(workspace);
-    const dirty = await dirtyCheckouts(after);
     // Agents commit as they go: the run changed something if any branch moved or appeared.
     const committedNow = (await branchTips(workspace)) !== tipsBefore;
-    const outcome = runOutcome({ ...result, timeoutMinutes: cfg.timeout_minutes ?? 60, mode, dirty: dirty.length > 0, committed: committedNow });
-    const whereNow = after.length ? after.map((r) => `\`${r.slug}\``).join(", ") : "no repository";
-    // Commit what's left uncommitted (implement, finished runs only), put every commit on a properly
-    // named branch, and sign the agent's commits.
-    const tidy = await tidyBranches(issue, workspace, { commitDirty: mode === "implement" && outcome.finished, message: publicSubject(commitMessage(result.lastMessage, `chore: ${full.title}`)) });
+    const outcome = runOutcome({ ...result, timeoutMinutes: cfg.timeout_minutes ?? 60 });
+    // Put every commit on a properly named branch and sign the agent's commits. What's left
+    // uncommitted stays as it is: the agent commits what it means to keep.
+    const tidy = await tidyBranches(issue, workspace, { commitDirty: false });
     const rows = await branchRows(issue, workspace);
-
-    const report = stripCommitLine(result.lastMessage);
     const stillDirty = (await dirtyCheckouts(after)).length > 0;
     const primerNote = outcome.finished ? await publishToPrimer(issue, full, workspace) : "";
-    if (mode === "answer" && outcome.finished) {
-      await pc.setStatus(issue.id, "in_review", `${REPLY_MARKER}${stripAnswerHeading(report)}${primerNote ? `\n\n${primerNote}` : ""}\n\n_${engineLabel(engine)} · ${whereNow}${stillDirty ? " · note: the workspace has uncommitted changes" : ""}_`);
-      state.finishJob(jobId, "done");
-      log("job finished", { issue: issue.identifier, code: result.code, mode });
-      return;
+    const footer = [
+      committedNow || tidy.notes.length ? branchesFooter(rows, { multiRepo: new Set(rows.map((r) => r.repo)).size > 1 }) : "",
+      ...tidy.notes.map((n) => `_${n}_`),
+      stillDirty ? "_The workspace has uncommitted changes._" : "",
+    ].filter(Boolean);
+    if (outcome.finished) {
+      // The agent's reply, in its own words. None: a comment that needed no answer ("thanks").
+      const reply = [outcome.silent ? "" : stripCommitLine(result.lastMessage), primerNote, ...(footer.length ? ["---", ...footer] : [])].filter(Boolean).join("\n\n");
+      await pc.setStatus(issue.id, "in_review", reply.trim() ? `${REPLY_MARKER}${reply}` : undefined);
+    } else {
+      // Failures also go to review (Paperclip refuses "blocked" without a blocker); the runner says what failed.
+      const report = stripCommitLine(result.lastMessage);
+      await pc.setStatus(issue.id, "in_review", [
+        outcome.headline,
+        `Last lines of the log:\n\`\`\`\n${logTail(logPath)}\n\`\`\``,
+        report ? `The agent's last message:\n\n> ${report.slice(0, 1500).replace(/\n/g, "\n> ")}` : "",
+        ...(footer.length ? ["---", ...footer] : []),
+        `_${engineLabel(engine)} · log: \`${logPath}\`_`,
+      ].filter(Boolean).join("\n\n"));
     }
-    const parts = [
-      outcome.headline,
-      outcome.finished ? "" : `\nLast lines of the log:\n\`\`\`\n${logTail(logPath)}\n\`\`\`${report ? `\n\nThe agent's last message:\n\n> ${report.slice(0, 1500).replace(/\n/g, "\n> ")}` : ""}`,
-      outcome.finished ? `\n${report}` : "",
-      primerNote ? `\n${primerNote}` : "",
-      "",
-      "---",
-      `${engineLabel(engine)} · ${mode} · ${whereNow}`,
-      branchesFooter(rows, { multiRepo: new Set(rows.map((r) => r.repo)).size > 1 }),
-      ...tidy.notes.map((n) => `\n_${n}_`),
-    ];
-    if (stillDirty) parts.push("\n_Note: the workspace has uncommitted changes._");
-    parts.push(`Workspace: \`${workspace}\` · log: \`${logPath}\``);
-    // Failures also go to review (Paperclip refuses "blocked" without a blocker); the report says what failed.
-    await pc.setStatus(issue.id, "in_review", `${REPLY_MARKER}${parts.filter(Boolean).join("\n")}`);
     state.finishJob(jobId, result.timedOut ? "timeout" : result.code ? "failed" : outcome.finished ? "done" : "incomplete", rows.some((r) => r.unpublished.length) ? "committed" : undefined);
-    if (read?.mergeAfter) then = () => mergeAfterRun(issue, instructions, read.gapMinutes, { finished: outcome.finished, unpublished: rows.some((r) => r.unpublished.length && !r.merged) });
-    log("job finished", { issue: issue.identifier, code: result.code, timedOut: result.timedOut, branches: rows.length, committed: tidy.committed });
+    log("job finished", { issue: issue.identifier, code: result.code, timedOut: result.timedOut, finished: outcome.finished, branches: rows.length });
   } catch (err) {
     if (jobId) state.finishJob(jobId, "failed", String(err).slice(0, 500));
     await reportError(issue, err);
   } finally {
     gcp?.done();
     running.delete(issue.id);
-    // Merges the agent queued with `pennyworth merge` (the user's words allowed them) win over merge_after.
-    if (tools?.merge) then = async () => startMerges(issue, await pc.issue(issue.id), "", "", tools.merge.gap, { prs: tools.merge.prs });
-    if (then) await then().catch((err) => reportError(issue, err));
+    await afterTurn(issue, tools).catch((err) => reportError(issue, err));
     drainQueue();
     reportActivity();
     void reportToParent(issue).catch((err) => log("parent summary failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }));
   }
+}
+
+/**
+ * What the agent asked for with its tools that has to wait for the run to end: a fresh session, an
+ * engine switch (then the same request again on the new engine), merges, or removing the workspace.
+ */
+async function afterTurn(issue, tools) {
+  if (!tools) return;
+  if (tools.reset || tools.engine) state.updateTask(issue.id, { session_id: null });
+  if (tools.engine) {
+    const engineers = await pc.engineerAgents();
+    const fields = pickerFor(tools.engine, engineers);
+    if (fields) await pc.setPicker(issue.id, fields);
+    state.updateTask(issue.id, { engine: tools.engine });
+    state.set(`picker:${issue.id}`, new Date().toISOString());
+    log("engine switched by the agent", { issue: issue.identifier, engine: tools.engine.kind, model: tools.engine.model });
+    return dispatch({ issue, instructions: tools.instructions, full: await pc.issue(issue.id) });
+  }
+  if (tools.merge) await startMerges(issue, { prs: tools.merge.prs, gapMinutes: tools.merge.gap });
+  if (tools.cleanup) await runCommand(issue, state.task(issue.id), "cleanup");
 }
 
 // ------------------------------------------------------------------ Primer (D-44)
@@ -1055,32 +1048,13 @@ async function runCommand(issue, task, command) {
   const repos = (await workspaceRepos(workspace)).map((r) => r.slug).join(", ").slice(0, 200);
   running.set(issue.id, { controller, identifier: issue.identifier, startedAt: new Date().toISOString(), info: { mode: command === "pr" ? "opening PRs" : "pushing branches", repo: repos, ...(task.engine ? { engine: engineLabel(task.engine) } : {}) } });
   reportActivity();
-  let published = false;
   try {
-    published = (await publish(issue, workspace, command, controller.signal)).ok;
+    await publish(issue, workspace, command, controller.signal);
   } finally {
     running.delete(issue.id);
     reportActivity();
   }
-  // Merges asked for after a run that changed PRs ("…then merge them") wait for this push.
-  const after = state.get(`merge_after:${issue.id}`);
-  if (after && published) {
-    state.set(`merge_after:${issue.id}`, "");
-    const asked = JSON.parse(after);
-    await startMerges(issue, await pc.issue(issue.id), asked.instructions, "", asked.gapMinutes);
-  }
   drainQueue();
-}
-
-/**
- * After a run asked to be followed by merges (merge_after): start them now if GitHub already has
- * everything, else once "push" publishes the run's changes. Publishing still needs the exact word.
- */
-async function mergeAfterRun(issue, instructions, gapMinutes, { finished, unpublished }) {
-  if (!finished) return void (await pc.comment(issue.id, "I didn't start the merges you asked for: the run didn't finish. Ask again once it's sorted."));
-  if (!unpublished) return startMerges(issue, await pc.issue(issue.id), instructions, "", gapMinutes);
-  state.set(`merge_after:${issue.id}`, JSON.stringify({ instructions, gapMinutes }));
-  await pc.comment(issue.id, "Next, the merges you asked for: reply **push** to publish these changes, and I'll start merging as soon as GitHub has them.");
 }
 
 /**
@@ -1326,6 +1300,10 @@ const repoHelper = startRepoHelper(async ({ issue, workspace }, raw) => {
   push: (ctx, args) => agentPublish(ctx, "push", args),
   pr: (ctx, args) => agentPublish(ctx, "pr", args),
   merge: agentMerge,
+  engine: agentEngine,
+  primer: agentPrimer,
+  reset: agentReset,
+  cleanup: agentCleanup,
 });
 
 /** Each repository in the workspace for the prompt; with `naming`, its branch naming rules and examples. */
@@ -1448,12 +1426,6 @@ function logTail(path, lines = 6) {
 async function lastReport(issueId) {
   const comments = [...(await pc.comments(issueId))].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
   return latestReport(comments.map((c) => c.body), RUNNER_MARKER);
-}
-
-/** The newest report or answer on a task: what the user's reply is about. */
-async function lastResultOf(issueId) {
-  const comments = [...(await pc.comments(issueId))].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
-  return latestResult(comments.map((c) => c.body), RUNNER_MARKER);
 }
 
 /**
