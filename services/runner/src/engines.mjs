@@ -52,10 +52,24 @@ function primer(cfg) {
  */
 export const observes = (kind) => kind === "claude" || kind === "codex";
 
-/** grafana-mcp on loopback (read and query scopes only, D-48); skipped until it's set up. */
-function grafana(cfg) {
-  if (!cfg.grafanaMcpUrl || !cfg.grafanaTokenFile || !existsSync(cfg.grafanaTokenFile)) return undefined;
-  return { url: cfg.grafanaMcpUrl, token: readFileSync(cfg.grafanaTokenFile, "utf8").trim() };
+/**
+ * The private reads for Claude Code and Codex (observes): Grafana (D-48), and Slack and Glean (D-51),
+ * the user's own messages and the company's documents. Each is an MCP server on loopback that serves
+ * reads only, with a token the job gets through the environment, never on the command line. Skipped
+ * until set up. OpenRouter never gets them: its prompts go to third-party model providers.
+ */
+const PRIVATE_READS = [
+  { name: "grafana", url: "grafanaMcpUrl", tokenFile: "grafanaTokenFile", env: "GRAFANA_MCP_TOKEN" },
+  { name: "slack", url: "slackMcpUrl", tokenFile: "slackTokenFile", env: "SLACK_MCP_TOKEN" },
+  { name: "glean", url: "gleanMcpUrl", tokenFile: "gleanTokenFile", env: "GLEAN_MCP_TOKEN" },
+];
+export function privateReads(cfg) {
+  return PRIVATE_READS.filter((s) => cfg[s.url] && cfg[s.tokenFile] && existsSync(cfg[s.tokenFile])).map((s) => ({
+    name: s.name,
+    url: cfg[s.url],
+    env: s.env,
+    token: readFileSync(cfg[s.tokenFile], "utf8").trim(),
+  }));
 }
 
 /**
@@ -78,8 +92,8 @@ export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile
 
 function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp }) {
   const p = primer(cfg);
-  const g = observes(engine.kind) ? grafana(cfg) : undefined;
-  const mcpEnv = { ...(p ? { PRIMER_MCP_TOKEN: p.token } : {}), ...(g ? { GRAFANA_MCP_TOKEN: g.token } : {}), ...(gcp?.env ?? {}) };
+  const reads = observes(engine.kind) ? privateReads(cfg) : [];
+  const mcpEnv = { ...(p ? { PRIMER_MCP_TOKEN: p.token } : {}), ...Object.fromEntries(reads.map((r) => [r.env, r.token])), ...(gcp?.env ?? {}) };
   const gcpRoots = gcp ? [gcp.root] : [];
   if (engine.kind === "codex") {
     const base = sessionId ? ["codex", "exec", "resume", sessionId] : ["codex", "exec"];
@@ -92,11 +106,11 @@ function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp 
         "-c", 'mcp_servers.primer.default_tools_approval_mode="approve"',
       );
     }
-    if (g) {
+    for (const r of reads) {
       args.push(
-        "-c", `mcp_servers.grafana.url=${JSON.stringify(g.url)}`,
-        "-c", 'mcp_servers.grafana.bearer_token_env_var="GRAFANA_MCP_TOKEN"',
-        "-c", 'mcp_servers.grafana.default_tools_approval_mode="approve"',
+        "-c", `mcp_servers.${r.name}.url=${JSON.stringify(r.url)}`,
+        "-c", `mcp_servers.${r.name}.bearer_token_env_var="${r.env}"`,
+        "-c", `mcp_servers.${r.name}.default_tools_approval_mode="approve"`,
       );
     }
     if (engine.model) args.push("-m", engine.model);
@@ -135,10 +149,10 @@ function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp 
     mkdirSync(cfg.claudeConfigDir, { recursive: true, mode: 0o700 });
     // Headless, no prompts (the codex sandbox is the write boundary), and nothing from your own
     // Claude setup: a runner-owned config dir, no settings files (yours or the repo's: no hooks),
-    // no MCP servers but Primer's and Grafana's read-only endpoints, and no claude.ai connectors.
+    // no MCP servers but the read-only endpoints (Primer; Grafana, Slack, Glean), and no claude.ai connectors.
     const mcpServers = {
       ...(p ? { primer: { type: "http", url: p.url, headers: { Authorization: "Bearer ${PRIMER_MCP_TOKEN}" } } } : {}),
-      ...(g ? { grafana: { type: "http", url: g.url, headers: { Authorization: "Bearer ${GRAFANA_MCP_TOKEN}" } } } : {}),
+      ...Object.fromEntries(reads.map((r) => [r.name, { type: "http", url: r.url, headers: { Authorization: `Bearer \${${r.env}}` } }])),
     };
     const claude = [
       // Streamed input, so the user's comments can reach a run in progress; each one is echoed back

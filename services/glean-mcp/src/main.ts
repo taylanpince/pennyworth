@@ -25,6 +25,9 @@ const signIn = UPSTREAM ? new SignIn(UPSTREAM.toString(), `${stateDir}/client.js
 const allowlist = new Set((process.env.GLEAN_TOOL_ALLOWLIST ?? DEFAULT_ALLOWLIST.join(",")).split(",").map((s) => s.trim()).filter(Boolean));
 const readToken = (env: string | undefined) => (env && existsSync(env) ? readFileSync(env, "utf8").trim() : undefined);
 const inboundToken = readToken(process.env.MCP_TOKEN_FILE);
+// /mcp/read, for the runner's Engineer jobs on the host (D-51): its own token, and nothing else
+// (not the sign-in endpoints). Every Glean tool here is a read.
+const readOnlyToken = readToken(process.env.MCP_READ_TOKEN_FILE);
 const authToken = readToken(process.env.GLEAN_AUTH_TOKEN_FILE);
 
 let upstream: { client: Client; tools: Tool[]; at: number } | undefined;
@@ -156,8 +159,9 @@ const http = createServer(async (req, res) => {
       return sendJson(res, ok ? 200 : 503, { ok, state: s.state, ...(detail ? { detail } : {}) });
     }
     if (url.pathname.startsWith("/auth/")) return await handleAuth(req, res, url.pathname);
-    if (url.pathname !== "/mcp") return void res.writeHead(404).end();
-    if (!bearer(req, inboundToken, false)) return void res.writeHead(401).end();
+    const read = url.pathname === "/mcp/read";
+    if (url.pathname !== "/mcp" && !(read && readOnlyToken)) return void res.writeHead(404).end();
+    if (!bearer(req, read ? readOnlyToken : inboundToken, read)) return void res.writeHead(401).end();
     if (req.method !== "POST") return void res.writeHead(405).end();
     const body = await readJson(req, 8 * 1024 * 1024);
     const server = buildServer();

@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { allowedTools, DEFAULT_ALLOWLIST, DRAFT_TOOL, isAllowed, upstreamArgs } from "../src/policy.js";
+import { allowedTools, DEFAULT_ALLOWLIST, DRAFT_TOOL, isAllowed, readOnly, upstreamArgs } from "../src/policy.js";
 import { parseTokenResponse, READ_SCOPES, TokenStore, writeScopes } from "../src/tokens.js";
 
 const tool = (name: string) => ({ name, inputSchema: { type: "object" as const }, annotations: { readOnlyHint: false } });
@@ -35,6 +35,18 @@ describe("slack-mcp policy", () => {
   it("requests no write scopes", () => {
     expect(writeScopes(READ_SCOPES.join(" "))).toEqual([]);
     expect(writeScopes("chat:write channels:history reactions:write")).toEqual(["chat:write", "reactions:write"]);
+  });
+});
+
+describe("the Engineer jobs' read endpoint (D-51)", () => {
+  it("serves the reads without the draft tool, whatever the allowlist says", () => {
+    const read = readOnly(new Set([...DEFAULT_ALLOWLIST, "slack_send_message", "slack_schedule_message"]));
+    expect(read.has(DRAFT_TOOL)).toBe(false);
+    expect(read.has("slack_send_message")).toBe(false);
+    expect(read.has("slack_schedule_message")).toBe(false);
+    expect([...read].sort()).toEqual(DEFAULT_ALLOWLIST.filter((t) => t !== DRAFT_TOOL).sort());
+    for (const t of read) expect(isAllowed(t, read)).toBe(true);
+    expect(isAllowed(DRAFT_TOOL, read)).toBe(false);
   });
 });
 

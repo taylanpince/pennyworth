@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-50) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-51) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -8,7 +8,7 @@ Guidance for coding agents working on **Pennyworth**, a personal executive assis
 host (NixOS, user taylan)
 ├── pennyworth-runner (systemd --user, node, runs AS THE USER)   services/runner/
 │     polls Paperclip: engineer tasks → Codex/Claude Code/OpenRouter jobs in per-task workspaces under ~/pennyworth/tasks (D-41),
-│                      Claude Code and Codex jobs read Grafana and Google Cloud, read-only (D-48),
+│                      Claude Code and Codex jobs read Grafana and Google Cloud (D-48), Slack and Glean (D-51), read-only,
 │                      or a merge queue for the PRs a task lists, in code (D-46)
 │                      review-request tasks → closed once gh shows the PR reviewed/merged (D-21)
 │                      user replies on own tasks → "Process task replies" routine (Assistant)
@@ -19,12 +19,14 @@ host (NixOS, user taylan)
     ├── ops-mcp              TypeScript: transcripts, matcher, vault writer, routing, review replies, tasks; reference docs (D-38);
     │                        the user's writing voice guide, lessons added on their word (D-47)
     ├── google-workspace-mcp read-only Calendar/Drive/Docs/Gmail, multi-account; sign-in state and board reconnect (D-36)
-    ├── slack-mcp            proxy to mcp.slack.com (allowlisted read tools, plus drafts for the Assistant, D-46)
+    ├── slack-mcp            proxy to mcp.slack.com (allowlisted read tools, plus drafts for the Assistant, D-46);
+    │                        reads only on 127.0.0.1:3125/mcp/read, with their own token, for Engineer jobs (D-51)
     ├── telegram-mcp         the user's own Telegram session, reads only by a request guard; live updates + sweep; board sign-in (D-37)
     ├── primer-mcp           proxy to the org's Primer: read, plus publish documents/versions for the Assistant (D-31);
-    │                        reads only on 127.0.0.1:3123/mcp/read for the runner's Engineer jobs (D-40);
+    │                        reads only on 127.0.0.1:3123/mcp/read, with their own token, for the runner's Engineer jobs (D-40, D-51);
     │                        the runner itself publishes an Engineer task's document on /mcp (D-44)
-    ├── glean-mcp            proxy to the org's Glean: read-only search for the Assistant; board sign-in (D-38)
+    ├── glean-mcp            proxy to the org's Glean: read-only search for the Assistant; board sign-in (D-38);
+    │                        127.0.0.1:3126/mcp/read, with its own token, for Engineer jobs (D-51)
     ├── grafana-mcp          proxy to Grafana's hosted MCP (GRAFANA_URL): read/query scopes only, for Engineer jobs on 127.0.0.1:3124;
     │                        board sign-in (D-48)
     ├── github-mcp           GitHub issues/PRs with the user's gh token: read; when asked, in GITHUB_COMMENT_ORGS: comment, open issues (on a project board),
@@ -181,7 +183,9 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Tasks from before D-41** (one worktree of the cache, `tasks.branch`/`pr_url`) move into a workspace on their next run or command (`moveIntoWorkspace`): branch, PR and uncommitted changes come along, the session restarts.
 - **Sessions are engine-specific.** A Codex thread ID can't be resumed by opencode (`ses_…` IDs) or Claude Code; switching engines starts fresh with the task's earlier requests as context.
 - **Claude Code must not inherit the user's Claude setup.** By default `claude -p` loads every MCP server, plugin, hook and claude.ai connector (Slack send, Calendar writes, GitHub MCP pushes…). The runner uses its own `CLAUDE_CONFIG_DIR`, a `setup-token` OAuth token, `--setting-sources ""`, `--strict-mcp-config` with no servers, `ENABLE_CLAUDEAI_MCP_SERVERS=false` and a `--tools` allowlist. Don't point it at `~/.claude`: writable hooks or settings there would run unsandboxed in the user's own sessions.
-- **Primer is the one MCP server every engine gets (D-40),** read-only through primer-mcp's loopback `/mcp/read`. Primer links redirect to Okta for WebFetch, so without it a job can't read a linked spec. The bearer token goes in as `PRIMER_MCP_TOKEN` in the environment, never on the command line. Don't add other servers to Engineer jobs. When the user asks for a Primer report, the agent writes `.pennyworth/primer.md` and the *runner* publishes it after the run (D-44); never give a job the publishing endpoint.
+- **Primer is the one MCP server every engine gets (D-40),** read-only through primer-mcp's loopback `/mcp/read`. Primer links redirect to Okta for WebFetch, so without it a job can't read a linked spec. The bearer token goes in as `PRIMER_MCP_TOKEN` in the environment, never on the command line. When the user asks for a Primer report, the agent asks with `pennyworth primer`, writes `.pennyworth/primer.md`, and the *runner* publishes it after the run (D-44, D-50); never give a job the publishing endpoint.
+- **Jobs hold read tokens only (D-51).** Every MCP server a job reaches serves `/mcp/read` with a token of its own (`*_mcp_read_token`): `/mcp`, with drafts or publishing, refuses it, and the main token doesn't open `/mcp/read`. Until 2026-10-28 jobs got Primer's main token, which also opened its publishing tools. A new server for jobs needs the same split, a loopback port, `privateReads` in `engines.mjs` (or every engine, like Primer, only if its content may go to OpenRouter's providers), and a `read_split` line in `verify-security.sh`.
+- **Slack and Glean go to Claude Code and Codex only (D-51)**, like Grafana: the user's own Slack (DMs included) and the company's search. The prompt points the agent at the Slack message a task came from (`slackSources`: channel and timestamp from its permalink), because a task's summary of a message is never the whole context (PEN-2799). Glean being connected also settles the organization instruction Claude Code gets through the user's account, which otherwise makes the agent reply that Glean isn't connected.
 - **Grafana and Google Cloud go to Claude Code and Codex only (D-48),** never OpenRouter (`observes`). Grafana is grafana-mcp's loopback `/mcp` (`GRAFANA_MCP_TOKEN` in the environment, like Primer). Google Cloud is a one-hour token narrowed to `READ_SCOPES` in `services/runner/src/gcp.mjs`, in the job's own gcloud config; the sign-in itself (`scripts/gcloud-auth.sh`) is broad and never reaches a job.
   - **Never add `cloud-platform.read-only` or `devstorage.read_only` to `READ_SCOPES`:** some APIs accept them for writes (Agent Registry deletes, liens, BigQuery DML jobs). Before adding any scope, check every API in Google's discovery directory for non-GET methods that accept it.
   - **Codex drops variables named `*TOKEN*`/`*KEY*`/`*SECRET*` from its tool calls,** so gcloud's token file goes in as a property in `CLOUDSDK_CONFIG`, not `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE`. The same applies to anything else a Codex job's shell must see.

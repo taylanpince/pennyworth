@@ -47,10 +47,16 @@ export function loadConfig() {
     primerMcpUrl: env.PRIMER_RUNNER_URL ?? cfg.primer?.url ?? "http://127.0.0.1:3123/mcp/read",
     // The runner itself publishes a task's document there (D-44); jobs never get this endpoint.
     primerPublishUrl: env.PRIMER_RUNNER_PUBLISH_URL ?? cfg.primer?.publish_url ?? "http://127.0.0.1:3123/mcp",
-    primerTokenFile: join(secrets, "primer_mcp_token"),
+    // Its own token, which /mcp (publishing) refuses (D-51).
+    primerTokenFile: join(secrets, "primer_mcp_read_token"),
     // Grafana and Google Cloud reads for Claude Code and Codex jobs (D-48).
     grafanaMcpUrl: env.GRAFANA_RUNNER_URL ?? cfg.grafana?.url ?? "http://127.0.0.1:3124/mcp",
     grafanaTokenFile: join(secrets, "grafana_mcp_token"),
+    // Slack and Glean reads for Claude Code and Codex jobs (D-51): /mcp/read with tokens of their own.
+    slackMcpUrl: env.SLACK_RUNNER_URL ?? cfg.slack?.url ?? "http://127.0.0.1:3125/mcp/read",
+    slackTokenFile: join(secrets, "slack_mcp_read_token"),
+    gleanMcpUrl: env.GLEAN_RUNNER_URL ?? cfg.glean?.url ?? "http://127.0.0.1:3126/mcp/read",
+    gleanTokenFile: join(secrets, "glean_mcp_read_token"),
     gcp: {
       credentialsFile: gcpCredentials,
       projects: (cfg.gcp?.projects ?? []).filter(Boolean),

@@ -17,7 +17,7 @@ import { codexModels, readApproval, resolveModelAlias, resolveOpenRouterModel, w
 import { Paperclip } from "./paperclip.mjs";
 import { branchGuidance, checkBranchName, chooseBranchName, exampleBranches } from "./branch.mjs";
 import { cleanMessages, leaksInternal, writePrDescription } from "./describe.mjs";
-import { branchesFooter, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, subtaskSummary, runOutcome, stripCommitLine } from "./prompt.mjs";
+import { branchesFooter, slackSources, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, subtaskSummary, runOutcome, stripCommitLine } from "./prompt.mjs";
 import { PRIMER_FILE, publishDocument } from "./primer.mjs";
 import { startRepoHelper } from "./repohelper.mjs";
 import { baseRef, branchChanges, carryOver, dirtyCheckouts, ensureRepo, findBranches, keepBranches, messagesSince, moveOffDefault, readManifest, signUnsigned, workspacePath, workspaceRepos } from "./workspace.mjs";
@@ -812,7 +812,16 @@ async function startJob({ issue, instructions }) {
     const crewHash = crewCtx ? createHash("sha256").update(JSON.stringify(crewCtx)).digest("hex") : "";
     const crew = crewCtx && (!resumed || state.get(crewKey) !== crewHash) ? crewCtx : undefined;
     if (crewHash) state.set(crewKey, crewHash);
-    const observe = observes(engine.kind) ? { grafana: existsSync(cfg.grafanaTokenFile), gcp: { state: gcp.state, detail: gcp.detail, projects: cfg.gcp.projects } } : undefined;
+    // Private reads for Claude Code and Codex (D-48, D-51), and the Slack messages the task came from.
+    const observe = observes(engine.kind)
+      ? {
+          grafana: existsSync(cfg.grafanaTokenFile),
+          slack: existsSync(cfg.slackTokenFile),
+          glean: existsSync(cfg.gleanTokenFile),
+          sources: slackSources(`${full.description ?? ""}\n${parent?.description ?? ""}\n${instructions}`),
+          gcp: { state: gcp.state, detail: gcp.detail, projects: cfg.gcp.projects },
+        }
+      : undefined;
     const engineers = await pc.engineerAgents().catch(() => []);
     const persona = personaFor(engine.kind, engineers);
     // Comments while it works reach a session that takes them (Claude Code: stage 4 of the design).

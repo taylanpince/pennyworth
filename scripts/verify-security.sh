@@ -11,6 +11,22 @@ project="${COMPOSE_PROJECT_NAME:-pennyworth}"
 fails=0
 pass() { printf '  ok    %s\n' "$1"; }
 fail() { printf '  FAIL  %s\n' "$1"; fails=$((fails + 1)); }
+# A service's /mcp/read for the runner's jobs (D-51): its read token opens only /mcp/read, which lists
+# no write tools, and the service's main token doesn't open it. Jobs hold only the read token.
+read_split() { # service port
+  local rt mt list
+  rt="$(cat "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/$1_mcp_read_token" 2>/dev/null)"
+  mt="$(cat "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/$1_mcp_token" 2>/dev/null)"
+  call() { curl -s -m 30 -o "${3:-/dev/null}" -w '%{http_code}' -X POST "http://127.0.0.1:$2/$1" -H "Authorization: Bearer $4" -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'; }
+  list="$(mktemp)"
+  if [ -n "$rt" ] && [ "$(call mcp "$2" "" "$rt")" = 401 ] && [ "$(call mcp/read "$2" "" "$mt")" = 401 ] && [ "$(call mcp/read "$2" "$list" "$rt")" = 200 ] \
+    && ! grep -qiE '"name":"[a-z_]*(send|draft|post|create|add_version|update|delete|publish|write)' "$list"; then
+    pass "$1-mcp: jobs' read token opens /mcp/read only, which lists no writes; the main token doesn't open it"
+  else
+    fail "$1-mcp: the read endpoint's token split or tool list is wrong"
+  fi
+  rm -f "$list"
+}
 
 containers="$(docker ps --filter "label=com.docker.compose.project=$project" --format '{{.Names}}')"
 [ -n "$containers" ] || { echo "no running containers for project $project"; exit 1; }
@@ -50,17 +66,26 @@ for c in $containers; do
       docker exec "$c" sh -c 'for f in /state/session /state/api.json; do [ ! -e "$f" ] || [ "$(stat -c %a "$f")" = 600 ] || exit 1; done' \
         && pass "telegram-mcp: session and api.json are 0600" || fail "telegram-mcp: session or api.json is readable by others"
       ;;
+    *slack-mcp*)
+      # Loopback only, for the runner's Engineer jobs: /mcp/read with its own token, reads only (D-51).
+      [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = '{"8082/tcp":[{"HostIp":"127.0.0.1","HostPort":"3125"}]}' ] \
+        && pass "slack-mcp: published on 127.0.0.1:3125 only" || fail "slack-mcp ports are not loopback 3125 only"
+      read_split slack 3125
+      ;;
     *primer-mcp*)
       # Loopback only, for the runner's Engineer jobs (D-40); bearer token required.
       [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = '{"8084/tcp":[{"HostIp":"127.0.0.1","HostPort":"3123"}]}' ] \
         && pass "primer-mcp: published on 127.0.0.1:3123 only" || fail "primer-mcp ports are not loopback 3123 only"
       [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3123/mcp/read)" = "401" ] \
         && pass "primer-mcp: loopback endpoint requires the token" || fail "primer-mcp: loopback endpoint answers without the token"
+      read_split primer 3123
       [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
         && pass "primer-mcp: only its own token directory mounted" || fail "primer-mcp has unexpected mounts: $mounts"
       ;;
     *glean-mcp*)
-      [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "glean-mcp: no published ports" || fail "glean-mcp publishes ports"
+      [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = '{"8085/tcp":[{"HostIp":"127.0.0.1","HostPort":"3126"}]}' ] \
+        && pass "glean-mcp: published on 127.0.0.1:3126 only" || fail "glean-mcp ports are not loopback 3126 only"
+      read_split glean 3126
       [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
         && pass "glean-mcp: only its own token directory mounted" || fail "glean-mcp has unexpected mounts: $mounts"
       ;;
@@ -191,7 +216,11 @@ tools="$(grep -oE '^export const TOOLS = \[[^]]*\]' services/runner/src/repohelp
   && [ "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "merge"' | cut -d: -f1)" -lt "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'ctx.merge = ' | cut -d: -f1)" ] \
   && [ "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "primer"' | cut -d: -f1)" -lt "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'savePrimer(' | cut -d: -f1)" ] \
   && grep -q '^export function authorizePrompt({ user, action, earlier = \[\], recent = \[\], lastReply = "" })' services/runner/src/authorize.mjs \
-  && pass "runner: the Engineer's push, pr, merge and Primer publishing are checked against the user's words only (services/runner/src/authorize.mjs)" || fail "runner: the Engineer's tools or their check changed: $tools"
+  && grep -q 'primerTokenFile: join(secrets, "primer_mcp_read_token")' services/runner/src/config.mjs \
+  && grep -q 'slackTokenFile: join(secrets, "slack_mcp_read_token")' services/runner/src/config.mjs \
+  && grep -q 'gleanTokenFile: join(secrets, "glean_mcp_read_token")' services/runner/src/config.mjs \
+  && grep -q 'const reads = observes(engine.kind) ? privateReads(cfg) : \[\];' services/runner/src/engines.mjs \
+  && pass "runner: the Engineer's push, pr, merge and Primer publishing are checked against the user's words only (services/runner/src/authorize.mjs); jobs hold only read tokens, and Slack and Glean go to Claude Code and Codex only" || fail "runner: the Engineer's tools or their check changed: $tools"
 pass "no email/Slack/Telegram send or calendar write tool is configured for any agent"
 
 echo

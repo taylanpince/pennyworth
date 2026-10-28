@@ -51,10 +51,13 @@ gen_secret ops_mcp_token
 gen_secret google_mcp_token
 gen_secret google_auth_token     # the board's Google sign-in state and reconnect (D-36)
 gen_secret slack_mcp_token
+gen_secret slack_mcp_read_token    # the runner's Engineer jobs, /mcp/read on 127.0.0.1:3125 (D-51)
 gen_secret telegram_mcp_token
 gen_secret telegram_auth_token   # the board's Telegram sign-in state and sign-in (D-37)
 gen_secret primer_mcp_token
+gen_secret primer_mcp_read_token   # the runner's Engineer jobs, /mcp/read on 127.0.0.1:3123 (D-51)
 gen_secret glean_mcp_token
+gen_secret glean_mcp_read_token    # the runner's Engineer jobs, /mcp/read on 127.0.0.1:3126 (D-51)
 gen_secret glean_auth_token      # the board's Glean sign-in state and sign-in (D-38)
 gen_secret grafana_mcp_token     # the runner's Engineer jobs, on 127.0.0.1:3124
 gen_secret grafana_auth_token    # the board's Grafana sign-in state and sign-in

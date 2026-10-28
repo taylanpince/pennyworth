@@ -20,6 +20,11 @@ export const DEFAULT_ALLOWLIST = [
 export const DRAFT_TOOL = "slack_send_message_draft";
 export const DRAFT_ARGS = ["channel_id", "message", "thread_ts"];
 
+/** What /mcp/read serves to the runner's Engineer jobs (D-51): the allowlist without the draft tool. */
+export function readOnly(allowlist: Set<string>): Set<string> {
+  return new Set([...allowlist].filter((n) => n !== DRAFT_TOOL && !NEVER.test(n)));
+}
+
 // Defense in depth: even if an operator adds one of these to the allowlist, it is never exposed.
 const NEVER = /(send|post|schedule|update|create|delete|add_|remove|upload|reaction|edit|draft|write|invite|join|leave|archive|complete_file)/i;
 

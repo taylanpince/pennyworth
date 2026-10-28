@@ -254,6 +254,8 @@ While a run is going, a comment can't reach the Engineer until it finishes, so a
 
 Repositories outside your orgs are read-only (D-35): their branches are listed but never published.
 
+**Slack and Glean:** Ada and Grace read your Slack (DMs included) and search Glean, read-only, like Alfred does ([D-51](docs/DECISIONS.md)). A task that came from a Slack message points them at it, so they work from what was actually said, not the task's summary. Linus never gets either.
+
 **Logs, metrics and infrastructure:** Ada (Claude Code) and Grace (Codex) read Grafana and Google Cloud, read-only, like you do locally with the Grafana MCP and `gcloud` ([D-48](docs/DECISIONS.md)). A question or investigation doesn't need a repository: "why did the bridge API 5xx at 3am?" runs straight against logs and metrics, and the agent clones the code it needs. Linus (OpenRouter) never gets them: those prompts go to third-party providers.
 
 - **Grafana:** set `GRAFANA_URL` in `.env` (e.g. `https://polygonprod.grafana.net`), `docker compose up -d grafana-mcp board`, and press **Connect** in the Grafana banner on the board (`http://127.0.0.1:3120`). Pennyworth asks Grafana for read and query scopes only, so Grafana itself refuses any change; grafana-mcp also exposes only queries and reads.

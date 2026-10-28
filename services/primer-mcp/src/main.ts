@@ -23,6 +23,10 @@ const tokens = new TokenStore(process.env.PRIMER_TOKEN_FILE ?? "/state/token.jso
 const allowlist = new Set((process.env.PRIMER_TOOL_ALLOWLIST ?? DEFAULT_ALLOWLIST.join(",")).split(",").map((s) => s.trim()).filter(Boolean));
 const tokenFile = process.env.MCP_TOKEN_FILE;
 const inboundToken = tokenFile && existsSync(tokenFile) ? readFileSync(tokenFile, "utf8").trim() : undefined;
+// /mcp/read has its own token (D-51): the runner's jobs hold only that one, so they can't reach the
+// publishing tools on /mcp. Without it, /mcp/read is off.
+const readTokenFile = process.env.MCP_READ_TOKEN_FILE;
+const readToken = readTokenFile && existsSync(readTokenFile) ? readFileSync(readTokenFile, "utf8").trim() : undefined;
 
 let upstream: { client: Client; tools: Tool[]; at: number } | undefined;
 
@@ -93,10 +97,10 @@ function buildServer(exposed: Set<string>): Server {
   return server;
 }
 
-function authorized(req: IncomingMessage): boolean {
-  if (!inboundToken) return true;
+function authorized(req: IncomingMessage, token: string | undefined): boolean {
+  if (!token) return true;
   const presented = Buffer.from((req.headers.authorization ?? "").replace(/^Bearer\s+/i, ""));
-  const expected = Buffer.from(inboundToken);
+  const expected = Buffer.from(token);
   return presented.length === expected.length && timingSafeEqual(presented, expected);
 }
 
@@ -107,14 +111,15 @@ const http = createServer(async (req, res) => {
     res.writeHead(ok ? 200 : 503, { "content-type": "application/json" }).end(JSON.stringify({ ok, detail: ok ? undefined : UPSTREAM ? "Primer not connected (run scripts/primer-auth.sh)" : "PRIMER_MCP_URL not set" }));
     return;
   }
-  if (url.pathname !== "/mcp" && url.pathname !== "/mcp/read") return void res.writeHead(404).end();
-  if (!authorized(req)) return void res.writeHead(401).end();
+  const read = url.pathname === "/mcp/read";
+  if (url.pathname !== "/mcp" && !(read && readToken)) return void res.writeHead(404).end();
+  if (!authorized(req, read ? readToken : inboundToken)) return void res.writeHead(401).end();
   if (req.method !== "POST") return void res.writeHead(405).end();
   try {
     const chunks: Buffer[] = [];
     for await (const c of req) chunks.push(c as Buffer);
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : undefined;
-    const server = buildServer(url.pathname === "/mcp/read" ? readOnly(allowlist) : allowlist);
+    const server = buildServer(read ? readOnly(allowlist) : allowlist);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on("close", () => {
       void transport.close();
