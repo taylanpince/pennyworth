@@ -16,6 +16,12 @@ const INTERNAL = /pennyworth|paperclip|\bPEN-\d+\b|\/home\/|~\/|\bworktree\b|\bo
 /** True when text mentions our tooling, task numbers or local paths. */
 export const leaksInternal = (text) => INTERNAL.test(String(text ?? ""));
 
+/** The first internal name in text, for telling the agent what to reword. */
+export const leakIn = (text) => String(text ?? "").match(INTERNAL)?.[0];
+
+/** Claude Code ends PR descriptions with its own footer out of habit; the reviewers don't need it. */
+export const stripAttribution = (body) => String(body ?? "").replace(/^[^\S\n]*(?:🤖[^\S\n]*)?Generated with \[?Claude Code\]?(?:\([^)\n]*\))?[^\S\n]*$/gim, "").trim();
+
 /** Commit messages (\x1e-separated, oldest first) without trailers from older runner versions. */
 export function cleanMessages(raw) {
   return String(raw ?? "")

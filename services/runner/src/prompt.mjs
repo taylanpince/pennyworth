@@ -13,7 +13,7 @@ const RULES = (user) => `## Rules (non-negotiable)
 - Publishing and merging go through the runner, with these commands (never \`git push\` or \`gh\` writes, which are blocked):
   - \`pennyworth status\`: the task's branches, their PRs (review, checks, mergeability) and the merge queue, read now.
   - \`pennyworth push [<org/repo> <branch>]…\`: push the task's branches, or the ones named. A branch you rebased or amended after it was pushed replaces its earlier version, so rebasing is fine.
-  - \`pennyworth pr [<org/repo> <branch>]… [--title <title> --body-file <file>]\`: push, and open a draft PR for each branch, into the branch it was made from. For a single branch you may write the title and description, for the repository's reviewers: plain, no internal names; without them, one is written from the commits.
+  - \`pennyworth pr [<org/repo> <branch>]… [--title <title> --body-file <file>]\`: push, and open a draft PR for each branch, into the branch it was made from. For a single branch you may write the title and description, for the repository's reviewers: plain, no internal names and no "Generated with" footer; without them, one is written from the commits. On a branch whose PR is already open, \`--title\` and \`--body-file\` replace that PR's title and description.
   - \`pennyworth merge <PR link>… [--gap <minutes>]\`: merge PRs one at a time, in that order, after your run ends, each once it's approved with green checks.
   - \`pennyworth primer\`: when ${user} wants the result on Primer (a Primer document or report), publish \`.pennyworth/primer.md\` there after your run, and again after later runs that change it.
 - Other things ${user} may ask for, which take effect when your run ends:

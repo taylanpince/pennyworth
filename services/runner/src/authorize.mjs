@@ -17,7 +17,7 @@ export const AUTH_SCHEMA = {
 export function describeAction(action, targets, { gapMinutes } = {}) {
   const list = targets.map((t) => `- ${t}`).join("\n");
   if (action === "push") return `push these branches to GitHub (a branch rewritten since its last push replaces that earlier version):\n${list}`;
-  if (action === "pr") return `push these branches to GitHub and open a draft pull request for each:\n${list}`;
+  if (action === "pr") return `push these branches to GitHub and open a draft pull request for each (for a branch whose pull request is already open, rewrite that pull request's title and description instead):\n${list}`;
   if (action === "primer") return `publish the task's document on Primer, the organization's document host, where everyone in the organization can read it (and republish it after later changes):\n${list}`;
   return `merge these pull requests one at a time, in this order${gapMinutes ? `, at least ${gapMinutes} minutes apart` : ""}:\n${list}`;
 }

@@ -16,7 +16,7 @@ import { changesSummary, defaultBranch, detectShells, ensureClone, ensureGuardHo
 import { codexModels, readApproval, resolveModelAlias, resolveOpenRouterModel, withParent } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
 import { branchGuidance, checkBranchName, chooseBranchName, exampleBranches } from "./branch.mjs";
-import { cleanMessages, leaksInternal, writePrDescription } from "./describe.mjs";
+import { cleanMessages, leakIn, leaksInternal, stripAttribution, writePrDescription } from "./describe.mjs";
 import { branchesFooter, slackSources, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, subtaskSummary, runOutcome, stripCommitLine } from "./prompt.mjs";
 import { PRIMER_FILE, publishDocument } from "./primer.mjs";
 import { startRepoHelper } from "./repohelper.mjs";
@@ -1080,17 +1080,26 @@ async function runCommand(issue, task, command) {
 /**
  * Push the task's branches (or the `only` ones) and, for "pr", open a draft PR for each. `check(ordered)`
  * runs once the branches are known, before anything is published, and refuses by throwing. `text` is the
- * agent's own PR title and description, for a single branch. Resolves with { ok, text }: whether
- * everything went out, and the results comment.
+ * agent's own PR title and description, for a single branch: a new PR gets it, and an open one is
+ * updated to it. Resolves with { ok, text }: whether everything went out, and the results comment.
  */
 async function publish(issue, workspace, command, signal, { only = [], text, check } = {}) {
+  if (text) {
+    // Refused before anything is pushed, and back to the agent to reword: a description quietly
+    // replaced by a generated one is worse than none (PEN-3024).
+    text = { title: String(text.title).replace(/\s+/g, " ").trim().slice(0, 200), body: stripAttribution(text.body).slice(0, 60_000) };
+    const leak = leakIn(`${text.title}\n${text.body}`);
+    if (leak) throw new UserError(`Not done: the PR title or description mentions "${leak}". The repository's reviewers mustn't see internal names, tools, task numbers or local paths; reword it and run the command again.`);
+  }
   const notes = await leaveFinishedPrs(issue, workspace);
   const tidy = await tidyBranches(issue, workspace, { commitDirty: false });
   const rows = await branchRows(issue, workspace);
   const named = (r) => !only.length || only.some((o) => o.repo.toLowerCase() === r.repo.toLowerCase() && o.branch === r.branch);
   const unknown = only.filter((o) => !rows.some((r) => o.repo.toLowerCase() === r.repo.toLowerCase() && o.branch === r.branch));
   if (unknown.length) throw new UserError(`not a branch of this task: ${unknown.map((o) => `${o.repo} ${o.branch}`).join(", ")}. Its branches: ${rows.map((r) => `${r.repo} ${r.branch}`).join(", ") || "none yet"}`);
-  const publishable = rows.filter((r) => named(r) && !r.merged && (r.unpublished.length || (command === "pr" && !r.prUrl)));
+  // The agent's own text for a single branch whose PR is open: that PR's title and description to update.
+  const editing = command === "pr" && Boolean(text) && rows.filter((r) => named(r) && !r.merged).length === 1;
+  const publishable = rows.filter((r) => named(r) && !r.merged && (r.unpublished.length || (command === "pr" && !r.prUrl) || (editing && r.prUrl)));
   if (!publishable.length) {
     const open = rows.filter((r) => named(r) && r.prUrl && !r.merged);
     // GitHub already has everything: as good as published.
@@ -1171,6 +1180,13 @@ async function publishBranch(issue, full, r, command, rows, text) {
     log("branch pushed", { issue: issue.identifier, repo: r.repo, branch: r.branch, target });
     if (target !== r.branch) return `The repository was empty: pushed as its first commits on \`${target}\` → https://github.com/${r.repo}/tree/${encodeURIComponent(target)}`;
     pushed = `${lease ? "Replaced the earlier version with" : "Pushed"} ${r.unpublished.length} commit${r.unpublished.length === 1 ? "" : "s"}`;
+  }
+  if (r.prUrl && text?.title && command === "pr") {
+    await execFileP(await findRealGh(), ["pr", "edit", r.prUrl, "--title", text.title, "--body", text.body], { cwd: r.path }).catch((err) => {
+      throw new UserError(`couldn't update the PR. GitHub said: ${String(err.stderr || "gh pr edit failed").trim().slice(-400)}`);
+    });
+    log("pr description updated", { issue: issue.identifier, url: r.prUrl });
+    return `${pushed ? `${pushed}, updated` : "Updated"} the title and description of ${r.prUrl}`;
   }
   if (r.prUrl) return `${pushed || "Up to date"}. PR: ${r.prUrl}`;
   if (command === "push") return `${pushed} → https://github.com/${r.repo}/compare/${r.base}...${encodeURIComponent(r.branch)}?expand=1`;

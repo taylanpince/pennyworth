@@ -11,6 +11,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { State } from "../src/state.mjs";
+
 const RUNNER = join(import.meta.dirname, "../src/main.mjs");
 const FAKES = join(import.meta.dirname, "fakes");
 const COMPANY = "00000000-0000-4000-8000-000000000001";
@@ -353,6 +355,28 @@ recurring:
     assert.ok(paperclip.patches.some((p) => p.issue === "PEN-2" && p.assigneeAdapterOverrides?.adapterConfig?.model === "sonnet"), "the picker shows it");
     step("none");
     await waitFor("quiet", () => !running());
+  });
+
+  // PEN-3024: Ada's description was swapped for a generated one over Claude Code's footer, and an
+  // open PR's description couldn't be changed at all.
+  it("updates an open PR's description with the agent's own, and sends a leaky one back to it", async () => {
+    new State(join(dir, "state")).updateBranch("part", "acme/app", "feat/second", { pr_url: "https://github.com/acme/app/pull/7" });
+    const edits = () => fakeLog().filter((e) => e.kind === "gh");
+    step("describe-leak\npennyworth pr acme/app feat/second --title fix:-drop-Telos --body-file .pennyworth/pr-body.md");
+    await turn("Go ahead and write a proper description on the PR.");
+    const refused = toolRuns().at(-1);
+    assert.equal(refused.code, 1);
+    assert.match(refused.out, /mentions "Paperclip"[\s\S]*reword it/);
+    assert.equal(edits().length, 0, "nothing sent to GitHub");
+
+    step("describe\npennyworth pr acme/app feat/second --title fix:-drop-Telos --body-file .pennyworth/pr-body.md");
+    await turn("Go ahead, without the internal name.");
+    const call = toolRuns().at(-1);
+    assert.equal(call.code, 0, call.out);
+    assert.match(call.out, /Updated the title and description of https:\/\/github.com\/acme\/app\/pull\/7/);
+    const edit = edits().at(-1).data;
+    assert.deepEqual(edit.slice(0, 5), ["pr", "edit", "https://github.com/acme/app/pull/7", "--title", "fix:-drop-Telos"]);
+    assert.equal(edit[6], "## Why\n\nTelos is gone.", "the agent's text, without the footer");
   });
 
   it("says nothing to a comment that needs no answer", async () => {

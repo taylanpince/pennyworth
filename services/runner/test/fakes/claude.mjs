@@ -3,7 +3,7 @@
 // then any `pennyworth …` commands to run, as the agent would from its shell), and replies. Messages
 // that arrive while it works are taken in and answered in the same turn; later ones get a turn each.
 // It exits when stdin closes, like the real one.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -53,6 +53,10 @@ if (step === "commit") {
   writeFileSync(join(repo, "chains.txt"), `polygon\n# ${Date.now()}\n`);
   git("add", "chains.txt");
   git("commit", "-q", "--amend", "-m", "fix: drop Telos");
+} else if (step.startsWith("describe")) {
+  // A PR description in the workspace, with Claude Code's own footer (and an internal name, for "describe-leak").
+  mkdirSync(join(process.cwd(), ".pennyworth"), { recursive: true });
+  writeFileSync(join(process.cwd(), ".pennyworth/pr-body.md"), `## Why\n\nTelos is gone.${step === "describe-leak" ? " Tracked in Paperclip." : ""}\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n`);
 } else if (step === "slow") {
   await new Promise((r) => setTimeout(r, 6000));
 }
