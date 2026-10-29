@@ -929,7 +929,7 @@ const savePrimer = (issueId, record) => state.set(`primer:${issueId}`, JSON.stri
 async function publishToPrimer(issue, full, workspace) {
   const record = primerRecord(issue.id);
   if (!record) return "";
-  const token = existsSync(cfg.primerTokenFile) ? readFileSync(cfg.primerTokenFile, "utf8").trim() : "";
+  const token = existsSync(cfg.primerPublishTokenFile) ? readFileSync(cfg.primerPublishTokenFile, "utf8").trim() : "";
   try {
     if (!token) throw new Error("primer-mcp isn't set up (no primer_mcp_token)");
     const res = await publishDocument({ endpoint: { url: cfg.primerPublishUrl, token }, workspace, record, fallbackTitle: full.title });

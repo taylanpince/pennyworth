@@ -47,7 +47,8 @@ export function loadConfig() {
     primerMcpUrl: env.PRIMER_RUNNER_URL ?? cfg.primer?.url ?? "http://127.0.0.1:3123/mcp/read",
     // The runner itself publishes a task's document there (D-44); jobs never get this endpoint.
     primerPublishUrl: env.PRIMER_RUNNER_PUBLISH_URL ?? cfg.primer?.publish_url ?? "http://127.0.0.1:3123/mcp",
-    // Its own token, which /mcp (publishing) refuses (D-51).
+    primerPublishTokenFile: join(secrets, "primer_mcp_token"),
+    // Jobs hold their own token, which /mcp (publishing) refuses (D-51).
     primerTokenFile: join(secrets, "primer_mcp_read_token"),
     // Grafana and Google Cloud reads for Claude Code and Codex jobs (D-48).
     grafanaMcpUrl: env.GRAFANA_RUNNER_URL ?? cfg.grafana?.url ?? "http://127.0.0.1:3124/mcp",

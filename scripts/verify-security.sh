@@ -217,6 +217,7 @@ tools="$(grep -oE '^export const TOOLS = \[[^]]*\]' services/runner/src/repohelp
   && [ "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "primer"' | cut -d: -f1)" -lt "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'savePrimer(' | cut -d: -f1)" ] \
   && grep -q '^export function authorizePrompt({ user, action, earlier = \[\], recent = \[\], lastReply = "" })' services/runner/src/authorize.mjs \
   && grep -q 'primerTokenFile: join(secrets, "primer_mcp_read_token")' services/runner/src/config.mjs \
+  && ! grep -q primerPublishTokenFile services/runner/src/engines.mjs \
   && grep -q 'slackTokenFile: join(secrets, "slack_mcp_read_token")' services/runner/src/config.mjs \
   && grep -q 'gleanTokenFile: join(secrets, "glean_mcp_read_token")' services/runner/src/config.mjs \
   && grep -q 'const reads = observes(engine.kind) ? privateReads(cfg) : \[\];' services/runner/src/engines.mjs \
