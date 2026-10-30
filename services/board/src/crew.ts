@@ -51,6 +51,23 @@ export function foldedChildren(issues: Issue[], assignees: Assignee[]): Map<stri
   return out;
 }
 
+/**
+ * Crew parts left open on a task closed somewhere other than the board (a scout's "Answered in Telegram",
+ * the inbox): they close with it, as a close on the board does (D-45). Otherwise a part outlives its parent
+ * on the board's recent list and lands in Triage as a card of its own. A part the user took up again after
+ * the task closed (a comment there reopens it) stays open. `parents` holds every parent the caller found.
+ */
+export function partsToClose(open: Issue[], parents: Map<string, Issue>, assignees: Assignee[]): { part: Issue; status: "done" | "cancelled" }[] {
+  const out: { part: Issue; status: "done" | "cancelled" }[] = [];
+  for (const part of open) {
+    const parent = part.parentId ? parents.get(part.parentId) : undefined;
+    if (!parent || !crewAgent(part, assignees) || (parent.status !== "done" && parent.status !== "cancelled")) continue;
+    const closedAt = (parent.status === "done" ? parent.completedAt : parent.cancelledAt) ?? parent.updatedAt;
+    if ((part.lastActivityAt ?? part.updatedAt) <= closedAt) out.push({ part, status: parent.status });
+  }
+  return out;
+}
+
 /** Where one issue stands for its agent. */
 export function issueState(i: Issue, agent: Assignee, input: CrewInput): CrewState {
   const w = input.working.get(i.identifier);

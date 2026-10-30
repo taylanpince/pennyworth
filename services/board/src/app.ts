@@ -7,7 +7,7 @@ import { z } from "zod";
 import { RunnerReportSchema, agentsView, runTasks, workingOn, type RunContext, type RunnerReport } from "./activity.js";
 import { RecurringSchema, RunStateSchema, ScheduleSchema, changeRecurring, claimDue, recurringView, scheduleMove } from "./automation.js";
 import { AddAgentSchema, BadRequest, CreateSchema, HandOverSchema, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
-import { crewOf, foldedChildren, handOverText, summaryOf } from "./crew.js";
+import { crewOf, foldedChildren, handOverText, partsToClose, summaryOf } from "./crew.js";
 import { inNetworks } from "./config.js";
 import { INLINE_TYPES, MAX_UPLOAD_BODY, UploadSchema, decode, fileType, fileViews, isPdf, pdfText, safeName } from "./files.js";
 import { McpAuthFailed, type GleanAuth, type GrafanaAuth } from "./mcpauth.js";
@@ -158,6 +158,30 @@ export function createApp(opts: AppOptions): Server {
       log.warn({ err: String((err as Error).message ?? err).slice(0, 300) }, "agent activity unavailable");
       return { map: new Map<string, never>(), active: 0 };
     }
+  }
+
+  /** Close the crew parts of tasks closed elsewhere (`partsToClose`), and return the open tasks left. */
+  async function closeLeftoverParts(open: Issue[], closed: Issue[], ctx: Awaited<ReturnType<typeof context>>): Promise<Issue[]> {
+    const known = new Map([...open, ...closed].map((i) => [i.id, i]));
+    const crew = (i: Issue) => ctx.assignees.some((a) => a.kind !== "me" && a.key === i.assigneeAgentId);
+    // A parent closed before the recent window isn't loaded: fetch it.
+    const missing = [...new Set(open.filter((i) => i.parentId && crew(i) && !known.has(i.parentId)).map((i) => i.parentId!))];
+    for (const p of await Promise.all(missing.map((id) => pc.issue(id).catch(() => null)))) if (p) known.set(p.id, p);
+    const leftover = partsToClose(open, known, ctx.assignees);
+    if (!leftover.length) return open;
+    const busy = (await working(ctx)).map;
+    const gone = new Set<string>();
+    for (const { part, status } of leftover) {
+      if (busy.has(part.identifier)) continue;
+      try {
+        await pc.updateIssue(part.id, { status });
+        gone.add(part.id);
+        log.info({ issue: part.identifier, status }, "crew part closed with its task");
+      } catch (err) {
+        log.warn({ issue: part.identifier, err: String((err as Error).message ?? err).slice(0, 300) }, "could not close a crew part");
+      }
+    }
+    return open.filter((i) => !gone.has(i.id));
   }
 
   /**
@@ -410,7 +434,8 @@ export function createApp(opts: AppOptions): Server {
       handle: async () => {
         const ctx = await context();
         const since = new Date(Date.now() - RECENT_MS).toISOString();
-        const [open, closed] = await Promise.all([pc.openIssues().then((l) => mine(l, ctx)), pc.closedSince(since).then((l) => mine(l, ctx))]);
+        const [all, closed] = await Promise.all([pc.openIssues().then((l) => mine(l, ctx)), pc.closedSince(since).then((l) => mine(l, ctx))]);
+        const open = await closeLeftoverParts(all, closed, ctx);
         // Agents' sub-tasks are part of their parent's card (D-45): they never get a place of their own.
         const folded = foldedChildren([...open, ...closed], ctx.assignees);
         store.placeNew(open.filter((i) => !folded.has(i.id)).map((i) => ({ id: i.id, createdAt: i.createdAt, status: i.status })));

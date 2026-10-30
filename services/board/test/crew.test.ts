@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assignees, buildBoard } from "../src/board.js";
-import { crewOf, foldedChildren, handOverText, issueState, mostUrgent, summaryOf, type CrewInput } from "../src/crew.js";
+import { crewOf, foldedChildren, handOverText, issueState, mostUrgent, partsToClose, summaryOf, type CrewInput } from "../src/crew.js";
 import type { Agent, Issue } from "../src/paperclip.js";
 
 const ME = "user-1";
@@ -45,6 +45,31 @@ describe("folding sub-tasks into their card (D-45)", () => {
     const board = buildBoard({ open: [parent], closed: [done], placements: new Map(), seen: new Map(), installedAt: SEEN, assignees: list, crew: { working: new Map(), jobs: new Map() } });
     expect(board.done).toEqual([]);
     expect(board.buckets.triage[0]!.crew).toEqual([{ agent: "a-ada", state: "done", issues: [{ id: done.id, identifier: done.identifier, title: "t", state: "done" }] }]);
+  });
+});
+
+describe("parts of a task closed elsewhere (D-45)", () => {
+  const closed = (o: Partial<Issue>) => issue({ assigneeUserId: ME, status: "done", completedAt: "2026-10-28T17:15:50Z", ...o });
+
+  it("close with the task when they went quiet before it closed", () => {
+    const parent = closed({});
+    const part = issue({ parentId: parent.id, assigneeAgentId: "a-alfred", lastActivityAt: "2026-10-28T16:51:10Z" });
+    const dropped = closed({ status: "cancelled", completedAt: null, cancelledAt: "2026-10-28T18:00:00Z" });
+    const other = issue({ parentId: dropped.id, assigneeAgentId: "a-grace", lastActivityAt: "2026-10-28T17:00:00Z" });
+    const res = partsToClose([part, other], new Map([parent, dropped].map((p) => [p.id, p])), list);
+    expect(res.map((r) => [r.part.id, r.status])).toEqual([[part.id, "done"], [other.id, "cancelled"]]);
+  });
+
+  it("stay open when the task is open, the user took the part up again, or it's the user's own", () => {
+    const open = issue({ assigneeUserId: ME });
+    const parent = closed({});
+    const parts = [
+      issue({ parentId: open.id, assigneeAgentId: "a-alfred" }),
+      issue({ parentId: parent.id, assigneeAgentId: "a-alfred", lastActivityAt: "2026-10-28T18:00:00Z" }),
+      issue({ parentId: parent.id, assigneeUserId: ME, lastActivityAt: "2026-10-28T16:00:00Z" }),
+      issue({ parentId: "i-unknown", assigneeAgentId: "a-alfred" }),
+    ];
+    expect(partsToClose(parts, new Map([open, parent].map((p) => [p.id, p])), list)).toEqual([]);
   });
 });
 
