@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { crewNames, findRepos, personaFor, mentionedRepos, readOnlyRefusal, normalizeRepo, parseCommand, repoAllowed, resolveEngine, resolveShells } from "../src/commands.mjs";
 import { buildCommand, inDevshells } from "../src/engines.mjs";
 import { firstPrompt, followUpPrompt, latestReport, observeSection, prTitle, stripCommitLine } from "../src/prompt.mjs";
-import { gcpSession, LOGIN_SCOPES, READ_SCOPES, readOnlyToken } from "../src/gcp.mjs";
+import { accessToken, gcpSession } from "../src/gcp.mjs";
 import { diskName, plan, syncFiles } from "../src/files.mjs";
 
 const cfg = {
@@ -1087,33 +1087,28 @@ describe("Grafana and Google Cloud for Engineer jobs (D-48)", () => {
     }
   });
 
-  it("only ever asks Google for read-only scopes, and refuses a wider token", async () => {
-    for (const s of READ_SCOPES) assert.match(s, /\.(read|readonly|read-only)$/);
-    // Despite the names, some APIs take these for writes.
-    for (const bad of ["cloud-platform", "cloud-platform.read-only", "devstorage.read_only", "userinfo.email"]) assert.ok(!READ_SCOPES.includes(`https://www.googleapis.com/auth/${bad}`), bad);
-    assert.equal(LOGIN_SCOPES[0], "https://www.googleapis.com/auth/cloud-platform");
+  it("refreshes the plain gcloud sign-in into a one-hour token, and says when the session ended", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pw-gcp-"));
     const creds = join(dir, "adc.json");
     writeFileSync(creds, JSON.stringify({ type: "authorized_user", client_id: "c", client_secret: "s", refresh_token: "r" }));
     const seen = [];
-    let answer = { access_token: "at", expires_in: 3599, scope: READ_SCOPES.join(" ") };
+    let answer = { access_token: "at", expires_in: 3599, scope: "https://www.googleapis.com/auth/cloud-platform" };
     let status = 200;
     const fetchImpl = async (_url, init) => (seen.push(Object.fromEntries(init.body)), new Response(JSON.stringify(answer), { status }));
-    assert.equal((await readOnlyToken(creds, fetchImpl)).token, "at");
-    assert.deepEqual(seen[0].scope.split(" "), READ_SCOPES);
-    answer = { ...answer, scope: [...READ_SCOPES, "https://www.googleapis.com/auth/cloud-platform"].join(" ") };
-    await assert.rejects(readOnlyToken(creds, fetchImpl), (e) => e.state === "refused");
+    assert.equal((await accessToken(creds, fetchImpl)).token, "at");
+    // No scope parameter: the sign-in's own scopes (asking for others got gcloud's client blocked).
+    assert.equal(seen[0].scope, undefined);
     status = 400;
     answer = { error: "invalid_grant", error_description: "reauth related error (rapt_required)" };
-    await assert.rejects(readOnlyToken(creds, fetchImpl), (e) => e.state === "expired" && /16-hour/.test(e.message));
-    await assert.rejects(readOnlyToken(join(dir, "missing.json"), fetchImpl), (e) => e.state === "missing");
+    await assert.rejects(accessToken(creds, fetchImpl), (e) => e.state === "expired" && /16-hour/.test(e.message));
+    await assert.rejects(accessToken(join(dir, "missing.json"), fetchImpl), (e) => e.state === "missing");
   });
 
   it("gives a job its own gcloud config pointing at the token file, and removes it afterwards", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pw-gcp-"));
     const creds = join(dir, "adc.json");
     writeFileSync(creds, JSON.stringify({ client_id: "c", client_secret: "s", refresh_token: "r" }));
-    const fetchImpl = async () => Response.json({ access_token: "at", expires_in: 3599, scope: READ_SCOPES.join(" ") });
+    const fetchImpl = async () => Response.json({ access_token: "at", expires_in: 3599 });
     const s = await gcpSession({ credentialsFile: creds, dir: join(dir, "job"), project: "proj-a", fetchImpl });
     assert.equal(s.state, "ok");
     const props = readFileSync(join(dir, "job/config/configurations/config_default"), "utf8");
@@ -1136,7 +1131,8 @@ describe("Grafana and Google Cloud for Engineer jobs (D-48)", () => {
     assert.match(ok, /Loki logs/);
     assert.match(ok, /gcloud logging read/);
     assert.match(ok, /proj-a/);
-    assert.match(ok, /Secret Manager/);
+    assert.match(ok, /\*\*Read only:\*\*[^\n]*nothing that creates, changes, deletes[^\n]*Never read secret values/);
+    assert.match(ok, /pennyworth task PEN-N/);
     assert.match(observeSection("Taylan", { grafana: true, gcp: { state: "expired", detail: "the Google Cloud session ended" } }), /isn't available for this run:\*\* the Google Cloud session ended/);
     assert.doesNotMatch(observeSection("Taylan", { grafana: false, gcp: { state: "missing" } }), /gcloud/);
     assert.equal(observeSection("Taylan", undefined), "");

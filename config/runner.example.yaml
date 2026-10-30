@@ -38,7 +38,7 @@ primer:
 # Grafana and Google Cloud, read-only, for Claude Code and Codex jobs only (D-48); never OpenRouter.
 # Grafana: grafana-mcp on loopback (token: $PENNYWORTH_SECRETS_DIR/grafana_mcp_token).
 # Google Cloud: scripts/gcloud-auth.sh signs in (again after the 16-hour session); each job gets a
-# one-hour token narrowed to read-only scopes, never the sign-in itself.
+# one-hour token with the user's access and the prompt's read-only rule, never the sign-in itself (D-53).
 grafana:
   url: http://127.0.0.1:3124/mcp
 gcp:

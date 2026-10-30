@@ -2,29 +2,12 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { join } from "node:path";
 
 /**
- * Google Cloud for Engineer jobs, read-only (D-48). The sign-in (scripts/gcloud-auth.sh) grants
- * cloud-platform, which gcloud insists on, plus each API's read-only scope. A job never gets that
- * refresh token: the runner refreshes it narrowed to the read-only scopes below and hands the job a
- * one-hour access token in a file its gcloud reads (auth/access_token_file). Google enforces
- * the scope on every call, so writes fail whatever the user's IAM roles allow. APIs without a
- * read-only scope (Secret Manager, KMS, IAM, Cloud SQL, Pub/Sub…) are out of reach entirely.
+ * Google Cloud for Engineer jobs (D-48, D-53). The sign-in is plain `gcloud auth application-default
+ * login` (scripts/gcloud-auth.sh): the user's own access, cloud-platform. Narrower scopes on gcloud's
+ * client got the sign-in blocked by Google's app policy (2026-10-30). A job never gets the refresh
+ * token: the runner hands it a one-hour access token in a file its gcloud reads
+ * (auth/access_token_file). Keeping to reads is the prompt's rule, and the user's IAM roles.
  */
-export const READ_SCOPES = [
-  "https://www.googleapis.com/auth/logging.read",
-  "https://www.googleapis.com/auth/monitoring.read",
-  "https://www.googleapis.com/auth/compute.readonly",
-  "https://www.googleapis.com/auth/container.read-only", // the GKE API; kubectl needs userinfo.email, left out on purpose
-  "https://www.googleapis.com/auth/run.readonly",
-  "https://www.googleapis.com/auth/redis.read-only",
-  "https://www.googleapis.com/auth/ndev.clouddns.readonly",
-  // Not cloud-platform.read-only or devstorage.read_only: despite the names, some APIs accept them
-  // for writes (Agent Registry create/delete, BigQuery jobs that can be DML, liens). Checked against
-  // every API in Google's discovery directory.
-];
-
-/** What the sign-in asks for: gcloud refuses an application-default login without cloud-platform. */
-export const LOGIN_SCOPES = ["https://www.googleapis.com/auth/cloud-platform", ...READ_SCOPES];
-
 export class GcpAuthError extends Error {
   constructor(message, state = "expired") {
     super(message);
@@ -32,24 +15,17 @@ export class GcpAuthError extends Error {
   }
 }
 
-/** A read-only access token from the sign-in's refresh token: { token, expiresAt }. */
-export async function readOnlyToken(credentialsFile, fetchImpl = fetch) {
+/** A one-hour access token from the sign-in's refresh token: { token, expiresAt }. */
+export async function accessToken(credentialsFile, fetchImpl = fetch) {
   if (!existsSync(credentialsFile)) throw new GcpAuthError("Google Cloud isn't signed in for Pennyworth (run scripts/gcloud-auth.sh)", "missing");
   const c = JSON.parse(readFileSync(credentialsFile, "utf8"));
-  const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh_token, client_id: c.client_id, client_secret: c.client_secret ?? "", scope: READ_SCOPES.join(" ") });
+  const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh_token, client_id: c.client_id, client_secret: c.client_secret ?? "" });
   const res = await fetchImpl("https://oauth2.googleapis.com/token", { method: "POST", body, signal: AbortSignal.timeout(15_000) });
   const json = await res.json().catch(() => ({}));
-  if (typeof json.access_token === "string" && json.access_token) {
-    // Never trust a token wider than asked for: a write scope here would undo the whole boundary.
-    const granted = String(json.scope ?? "").split(/\s+/).filter(Boolean);
-    const extra = granted.filter((s) => !READ_SCOPES.includes(s));
-    if (extra.length) throw new GcpAuthError(`Google granted more than read-only (${extra.join(", ")})`, "refused");
-    return { token: json.access_token, expiresAt: Date.now() + Number(json.expires_in ?? 3600) * 1000 };
-  }
+  if (typeof json.access_token === "string" && json.access_token) return { token: json.access_token, expiresAt: Date.now() + Number(json.expires_in ?? 3600) * 1000 };
   if (res.status >= 500) throw new GcpAuthError(`Google's token endpoint answered ${res.status}`, "unavailable");
   const detail = String(json.error_description ?? "");
   if (/rapt|reauth/i.test(detail)) throw new GcpAuthError("the Google Cloud session ended (16-hour reauth): run scripts/gcloud-auth.sh");
-  if (json.error === "invalid_scope") throw new GcpAuthError("the sign-in is missing the read-only scopes: run scripts/gcloud-auth.sh again");
   throw new GcpAuthError(`Google refused the sign-in (${json.error ?? res.status}${detail ? `: ${detail}` : ""}): run scripts/gcloud-auth.sh`);
 }
 
@@ -80,7 +56,7 @@ export async function gcpSession({ credentialsFile, dir, project, log = () => {}
   let state = "ok";
   let detail;
   try {
-    write(await readOnlyToken(credentialsFile, fetchImpl));
+    write(await accessToken(credentialsFile, fetchImpl));
     properties(true);
   } catch (err) {
     properties(false);
@@ -91,7 +67,7 @@ export async function gcpSession({ credentialsFile, dir, project, log = () => {}
   const timer =
     state === "ok"
       ? setInterval(() => {
-          readOnlyToken(credentialsFile, fetchImpl).then(write, (err) => log("gcp token refresh failed", { err: String(err.message ?? err).slice(0, 200) }));
+          accessToken(credentialsFile, fetchImpl).then(write, (err) => log("gcp token refresh failed", { err: String(err.message ?? err).slice(0, 200) }));
         }, refreshMinutes * 60_000)
       : undefined;
   timer?.unref();
