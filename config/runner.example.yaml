@@ -43,7 +43,7 @@ grafana:
   url: http://127.0.0.1:3124/mcp
 gcp:
   credentials: ~/.config/pennyworth/gcloud/application_default_credentials.json
-  # Projects jobs are told about (the token can't list projects); the first is gcloud's default.
+  # Projects jobs are told to start with; the first is gcloud's default.
   projects: []
   shell: pulumi                       # the devshell with gcloud, added to every Claude Code and Codex job
 

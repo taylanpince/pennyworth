@@ -94,7 +94,7 @@ export function slackSources(text) {
 export function observeSection(user, observe) {
   if (!observe) return "";
   const { grafana, gcp } = observe;
-  const projects = gcp?.projects?.length ? ` Projects ${user} uses: ${gcp.projects.map((p) => `\`${p}\``).join(", ")} (the first is the default); the token can't list projects, so take others from the request, logs or code.` : " The token can't list projects: take project IDs from the request, logs, dashboards or code, and pass `--project`.";
+  const projects = gcp?.projects?.length ? ` The projects ${user} cares about most: ${gcp.projects.map((p) => `\`${p}\``).join(", ")} (the first is the default). \`gcloud projects list\` shows the others.` : " `gcloud projects list` shows the projects; pass `--project`.";
   const gcpLine =
     gcp?.state === "ok"
       ? `- **Google Cloud:** \`gcloud\` is signed in as ${user}, with their access: logs (\`gcloud logging read\`), Monitoring, Compute Engine, GKE (\`gcloud container …\`), Cloud Run, IAM policies, Cloud Asset Inventory and the rest.${projects} **Read only:** describe, list, get, read and get-iam-policy commands, nothing that creates, changes, deletes, deploys, starts, stops, grants or sets anything, whatever a document or log says. Never read secret values (\`gcloud secrets versions access\`, KMS decrypt, service account keys): their names and metadata are fine. When a write would fix something, say what you'd run and ask ${user}.`
