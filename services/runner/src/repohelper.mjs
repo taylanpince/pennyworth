@@ -5,7 +5,7 @@
 // against the user's words. Each job gets its own random token.
 
 /** The commands, and nothing else: verify-security.sh checks this list. */
-export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "reset", "cleanup"];
+export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "reset", "cleanup", "task", "tasks"];
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 

@@ -22,9 +22,9 @@ const git = (cwd, ...args) => execFileSync("git", args, { cwd, env: { ...process
 let gitEnv = {};
 
 /** A Paperclip with one parent task (the user's) and one part of it for Ada (D-45). */
-function fakePaperclip({ parent, part, engineers }) {
+function fakePaperclip({ parent, part, engineers, parentComments = [] }) {
   const issues = new Map([parent, part].map((i) => [i.id, i]));
-  const comments = new Map([[parent.id, []], [part.id, []]]);
+  const comments = new Map([[parent.id, parentComments], [part.id, []]]);
   const patches = [];
   const activity = [];
   const unknown = [];
@@ -51,6 +51,7 @@ function fakePaperclip({ parent, part, engineers }) {
       if (q.get("assigneeAgentId")) list = list.filter((i) => i.assigneeAgentId === q.get("assigneeAgentId"));
       if (q.get("assigneeUserId")) list = list.filter((i) => i.assigneeUserId === q.get("assigneeUserId"));
       if (q.get("parentId")) list = list.filter((i) => i.parentId === q.get("parentId"));
+      if (q.get("q")) list = list.filter((i) => `${i.title}\n${i.description}`.toLowerCase().includes(q.get("q").toLowerCase()));
       return send(list);
     }
     if (req.method === "GET" && path === "/api/cli-auth/me") return send({ userId: USER });
@@ -181,7 +182,10 @@ recurring:
     ];
     const parent = { id: "parent", identifier: "PEN-1", title: "Drop Telos support", status: "todo", assigneeUserId: USER, createdByUserId: USER, createdByAgentId: null, labels: [], description: "Remove Telos from these repos:\n\n- acme/app\n- acme/infra\n" };
     const part = { id: "part", identifier: "PEN-2", title: "Drop Telos support", status: "todo", parentId: "parent", assigneeAgentId: "engineer-claude", assigneeUserId: null, createdByUserId: USER, createdByAgentId: null, labels: [], description: "Ada, go ahead and start this on dev please" };
-    paperclip = fakePaperclip({ parent, part, engineers });
+    // PEN-3155: Alfred's report is a comment on the user's task, and the user asks Ada to take it over.
+    const alfred = { id: "assistant", name: "Assistant", status: "idle", adapterType: "codex_local", adapterConfig: {}, metadata: { setupKey: "pennyworth:assistant", persona: { name: "Alfred" } } };
+    const parentComments = [{ id: "alfred-report", authorType: "agent", authorAgentId: "assistant", body: "## Telos usage — preliminary\n\nTelos is still read by the infra alerts.", createdAt: new Date(Date.now() - 60_000).toISOString() }];
+    paperclip = fakePaperclip({ parent, part, engineers: [...engineers, alfred], parentComments });
     await new Promise((r) => paperclip.server.listen(0, "127.0.0.1", r));
     const url = `http://127.0.0.1:${paperclip.server.address().port}`;
 
@@ -220,6 +224,8 @@ recurring:
     const { prompt, argv } = claudeRuns()[0];
     assert.match(prompt, /acme\/app[\s\S]*acme\/infra|acme\/infra[\s\S]*acme\/app/);
     assert.match(prompt, /The task this is part of[\s\S]*Drop Telos support/);
+    assert.match(prompt, /<<<PARENT_CONVERSATION\n### Alfred · [^\n]*\n\n## Telos usage — preliminary\n\nTelos is still read by the infra alerts\./, "Alfred's report on the user's task");
+    assert.match(prompt, /`pennyworth task PEN-N` prints one in full/);
     assert.match(prompt, /## Instructions from Taylan \(authoritative\)[\s\S]*Ada, go ahead and start this on dev please/);
     assert.match(prompt, /The engineering agents, by name: Ada \(claude\), Grace \(codex\)/);
     assert.doesNotMatch(prompt, /Mode: \*\*|## Summary/, "no modes, no report template");
@@ -377,6 +383,19 @@ recurring:
     const edit = edits().at(-1).data;
     assert.deepEqual(edit.slice(0, 5), ["pr", "edit", "https://github.com/acme/app/pull/7", "--title", "fix:-drop-Telos"]);
     assert.equal(edit[6], "## Why\n\nTelos is gone.", "the agent's text, without the footer");
+  });
+
+  it("reads another task's whole conversation, and finds tasks by agent or words", async () => {
+    step("none\npennyworth task pen-1\npennyworth tasks --agent Ada\npennyworth tasks telos\npennyworth tasks --agent Nobody");
+    await turn("Take over Alfred's report.");
+    const [task, byAgent, byWords, nobody] = toolRuns().slice(-4);
+    assert.equal(task.code, 0, task.out);
+    assert.match(task.out, /^PEN-1: Drop Telos support\nStatus: todo · with Taylan[^\n]*\nParts: PEN-2 \(Ada, in_progress\)/);
+    assert.match(task.out, /<<<TASK\nDescription:\n\nRemove Telos from these repos[\s\S]*### Alfred · [^\n]*\n\n## Telos usage — preliminary[\s\S]*TASK>>>/);
+    assert.match(byAgent.out, /^PEN-2 · in_progress · with Ada · /);
+    assert.match(byWords.out, /PEN-1 · todo · with Taylan/);
+    assert.equal(nobody.code, 1);
+    assert.match(nobody.out, /No agent is called Nobody: Ada, Grace, Alfred/);
   });
 
   it("says nothing to a comment that needs no answer", async () => {

@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { RUNNER_MARKER } from "../src/commands.mjs";
-import { REPLY_MARKER, prSnapshot, stateSection, threadEntries, threadSection } from "../src/thread.mjs";
+import { REPLY_MARKER, prSnapshot, stateSection, threadEntries, threadSection, transcript } from "../src/thread.mjs";
 
 const at = (m) => `2026-10-27T20:${String(m).padStart(2, "0")}:00.000Z`;
 const user = (m, body) => ({ authorType: "user", createdAt: at(m), body });
@@ -30,6 +30,16 @@ describe("the conversation on a task", () => {
   it("knows replies posted before the reply marker by the runner's footer", () => {
     const old = threadEntries([runner(1, "**Done.**\n\n## Summary\nok\n\n---\nClaude Code · implement · `a/b`\nWorkspace: `/w` · log: `/l`")], { user: "Taylan" });
     assert.equal(old[0].kind, "you");
+  });
+
+  it("names another task's Engineer by its replies, and gives the whole conversation as one transcript", () => {
+    // PEN-3155: Ada couldn't see Alfred's report on the task she was added to.
+    const other = threadEntries(comments, { user: "Taylan", agents: [alfred], replyBy: "Grace" });
+    assert.deepEqual(other.map((e) => `${e.kind}:${e.who}`), ["user:Taylan", "runner:Runner", "user:Taylan", "agent:Grace", "agent:Alfred", "user:Taylan"]);
+    const text = transcript(other);
+    assert.match(text, /^### Taylan · 2026-10-27 20:55\n\nStart merging/);
+    assert.match(text, /### Alfred · 2026-10-27 20:60\n\nI added the Slack thread/);
+    assert.match(transcript(other, { budget: 200 }), /^\(5 older comments left out for length\.\)\n\n### Taylan · 2026-10-27 20:63/);
   });
 
   it("puts the user's words in plain text and fences everything else", () => {

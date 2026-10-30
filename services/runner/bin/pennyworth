@@ -12,21 +12,23 @@
 //   pennyworth primer                                   publish .pennyworth/primer.md on Primer after runs
 //   pennyworth reset                                    start the next turn with a fresh session
 //   pennyworth cleanup                                  remove the workspace when this run ends
+//   pennyworth task <PEN-N>                             read one of the user's tasks: description, parts, conversation
+//   pennyworth tasks [<words>] [--agent <name>]         find tasks, closed ones too
 import { readFileSync } from "node:fs";
 
-const usage = `usage: pennyworth status | push [<org/repo> <branch>]... | pr [<org/repo> <branch>]... [--title <title>] [--body-file <file>] | merge <PR link>... [--gap <minutes>] | repo <org/name> | engine <claude|codex|openrouter> [model] | primer | reset | cleanup`;
+const usage = `usage: pennyworth status | push [<org/repo> <branch>]... | pr [<org/repo> <branch>]... [--title <title>] [--body-file <file>] | merge <PR link>... [--gap <minutes>] | repo <org/name> | engine <claude|codex|openrouter> [model] | primer | reset | cleanup | task <PEN-N> | tasks [<words>] [--agent <name>]`;
 const [command, ...rest] = process.argv.slice(2);
 const fail = (msg, code = 1) => {
   console.error(`pennyworth: ${msg}`);
   process.exit(code);
 };
-if (!["status", "push", "pr", "merge", "repo", "engine", "primer", "reset", "cleanup"].includes(command)) fail(usage, 2);
+if (!["status", "push", "pr", "merge", "repo", "engine", "primer", "reset", "cleanup", "task", "tasks"].includes(command)) fail(usage, 2);
 if (!process.env.PENNYWORTH_REPO_URL) fail("only available inside a task run", 2);
 
 const flags = {};
 const words = [];
 for (let i = 0; i < rest.length; i++) {
-  if (rest[i] === "--title" || rest[i] === "--body-file" || rest[i] === "--gap") flags[rest[i].slice(2)] = rest[++i];
+  if (rest[i] === "--title" || rest[i] === "--body-file" || rest[i] === "--gap" || rest[i] === "--agent") flags[rest[i].slice(2)] = rest[++i];
   else words.push(rest[i]);
 }
 let body;
@@ -36,6 +38,11 @@ if (command === "repo") {
 } else if (command === "engine") {
   if (!words.length || words.length > 2) fail("usage: pennyworth engine <claude|codex|openrouter> [model]", 2);
   body = { engine: words[0], model: words[1] };
+} else if (command === "task") {
+  if (words.length !== 1) fail("usage: pennyworth task <PEN-N>", 2);
+  body = { task: words[0] };
+} else if (command === "tasks") {
+  body = { query: words.join(" "), agent: flags.agent };
 } else if (command === "merge") {
   if (!words.length) fail("name the pull requests to merge, in order", 2);
   body = { prs: words, gap: flags.gap === undefined ? undefined : Number(flags.gap) };

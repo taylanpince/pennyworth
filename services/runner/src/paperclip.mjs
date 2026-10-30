@@ -70,6 +70,15 @@ export class Paperclip {
     return (await this.api("GET", `/api/companies/${this.company}/issues?${q}`)).filter((i) => i.parentId === parentId);
   }
 
+  /** Tasks by text and/or assignee agent, any status, newest first; routine runs left out. */
+  async searchIssues({ query, assigneeAgentId }) {
+    const q = new URLSearchParams({ status: "backlog,todo,in_progress,in_review,blocked,done,cancelled", limit: "50", excludeRoutineExecutions: "true" });
+    if (query) q.set("q", query);
+    if (assigneeAgentId) q.set("assigneeAgentId", assigneeAgentId);
+    const list = await this.api("GET", `/api/companies/${this.company}/issues?${q}`);
+    return list.sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
+  }
+
   async myOpenIssues(updatedSince) {
     const q = new URLSearchParams({ assigneeUserId: "me", status: "backlog,todo,in_progress,in_review,blocked", limit: "300", excludeRoutineExecutions: "true" });
     if (updatedSince) q.set("updatedSince", updatedSince);

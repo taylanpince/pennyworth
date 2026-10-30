@@ -6,7 +6,7 @@ import { RUNNER_MARKER, stripHidden } from "./commands.mjs";
 /** Marks the runner's posts of the Engineer's own replies, so a fresh session knows them as its own. */
 export const REPLY_MARKER = "<!-- pennyworth-reply -->";
 
-const fence = (label, text) => `<<<${label}\n${String(text ?? "").replace(/<<<|>>>/g, "‹‹‹")}\n${label}>>>`;
+export const fence = (label, text) => `<<<${label}\n${String(text ?? "").replace(/<<<|>>>/g, "‹‹‹")}\n${label}>>>`;
 const when = (iso) => String(iso ?? "").slice(0, 16).replace("T", " ");
 
 // The runner's notes that a run started or was queued say nothing the conversation needs.
@@ -16,9 +16,10 @@ const LEGACY_REPLY = /^Workspace: `[^`]*` · log: `|^_[^\n]* · (answer|investig
 
 /**
  * The comments as entries, oldest first: { kind: "user" | "you" | "runner" | "agent", who, at, body }.
- * `current(c)` marks comments that are this run's instructions (left out: they come separately).
+ * `current(c)` marks comments that are this run's instructions (left out: they come separately). On
+ * another task, `replyBy` names the Engineer whose replies the runner posted there (kind "agent").
  */
-export function threadEntries(comments, { user, you, agents = [], current = () => false }) {
+export function threadEntries(comments, { user, you, agents = [], current = () => false, replyBy }) {
   const out = [];
   for (const c of comments) {
     const raw = String(c.body ?? "");
@@ -29,6 +30,8 @@ export function threadEntries(comments, { user, you, agents = [], current = () =
       out.push({ kind: "agent", who: agent?.metadata?.persona?.name || agent?.name || "Another agent", at: c.createdAt, body });
     } else if (!raw.includes(RUNNER_MARKER)) {
       if (!current(c)) out.push({ kind: "user", who: user, at: c.createdAt, body });
+    } else if ((raw.includes(REPLY_MARKER) || LEGACY_REPLY.test(body)) && replyBy !== undefined) {
+      out.push({ kind: "agent", who: replyBy || "An Engineer", at: c.createdAt, body: body.replace(/^Workspace: `.*$/m, "").trim() });
     } else if (raw.includes(REPLY_MARKER) || LEGACY_REPLY.test(body)) {
       out.push({ kind: "you", who: you ? `You (${you})` : "You", at: c.createdAt, body: body.replace(/^Workspace: `.*$/m, "").trim() });
     } else if (!START_NOTE.test(body)) {
@@ -77,6 +80,23 @@ ${omitted ? `\n(${omitted} older comment${omitted === 1 ? "" : "s"} left out for
 ${kept.join("\n\n")}
 
 `;
+}
+
+/**
+ * Another task's conversation as text, for context (the caller fences it): who said what, oldest
+ * first, the newest kept past `budget`. "" when there's nothing.
+ */
+export function transcript(entries, { each = 12_000, budget = 60_000 } = {}) {
+  const cut = (s) => (s.length > each ? `${s.slice(0, each)}\n… (cut)` : s);
+  const blocks = entries.map((e) => `### ${e.who} · ${when(e.at)}\n\n${cut(e.body)}`);
+  const kept = [];
+  let size = 0;
+  for (let i = blocks.length - 1; i >= 0 && size + blocks[i].length <= budget; i--) {
+    kept.unshift(blocks[i]);
+    size += blocks[i].length;
+  }
+  const omitted = blocks.length - kept.length;
+  return `${omitted ? `(${omitted} older comment${omitted === 1 ? "" : "s"} left out for length.)\n\n` : ""}${kept.join("\n\n")}`;
 }
 
 /** One PR's state from `gh pr view --json state,isDraft,reviewDecision,mergeStateStatus,statusCheckRollup`. */

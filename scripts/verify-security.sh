@@ -173,11 +173,11 @@ grafana_scopes="$(sed -n 's/^export const SCOPES = \[\(.*\)\];/\1/p' services/gr
 grafana_tools="$(sed -n '/^export const READ_TOOLS = \[/,/^\];/p' services/grafana-mcp/src/policy.ts | grep -oE '^  "[a-z0-9_]+"' | tr -d '" ')"
 bad_grafana="$(echo "$grafana_tools" | grep -Ev '^(query|list|get|search|analyze|diff|check|run_panel_query$|alerting_(rules|silences)_read$)' ; echo "$grafana_tools" | grep -E 'creat|add_|update|delete|remove|manage|exec|write|edit|patch|send|post|resolve|investigation|assistant|handler|gcx|sql' || true)"
 [ -n "$grafana_tools" ] && [ -z "$bad_grafana" ] && pass "grafana-mcp exposes only read/query tools (services/grafana-mcp/src/policy.ts)" || fail "grafana-mcp: unexpected tools allowed: $bad_grafana"
-# Engineer jobs' Google Cloud token (D-48): per-API read-only scopes only. cloud-platform.read-only and
-# devstorage.read_only are accepted for writes by some APIs; userinfo.email would let kubectl act.
-gcp_scopes="$(sed -n '/^export const READ_SCOPES = \[/,/^\];/p' services/runner/src/gcp.mjs | grep -oE '^  "https://www.googleapis.com/auth/[a-z._-]+"' | sed 's|.*/auth/||; s/"//')"
-bad_gcp="$(echo "$gcp_scopes" | grep -Ev '^(logging\.read|monitoring\.read|compute\.readonly|container\.read-only|run\.readonly|redis\.read-only|ndev\.clouddns\.readonly)$' || true)"
-[ -n "$gcp_scopes" ] && [ -z "$bad_gcp" ] && pass "runner: Google Cloud tokens for jobs are per-API read-only scopes (services/runner/src/gcp.mjs)" || fail "runner: unexpected Google Cloud scopes for jobs: $bad_gcp"
+# Engineer jobs' Google Cloud (D-53): the user's own access, read-only by the prompt's rule; jobs get a
+# one-hour access token only, never the sign-in's refresh token.
+grep -q '\*\*Read only:\*\* describe, list, get, read and get-iam-policy commands' services/runner/src/prompt.mjs \
+  && ! grep -q 'refresh_token' services/runner/src/engines.mjs \
+  && pass "runner: Google Cloud jobs get a one-hour token and the read-only rule (services/runner/src/gcp.mjs, prompt.mjs)" || fail "runner: Google Cloud jobs lost the read-only rule, or got the refresh token"
 grep -q '"bwrap", "--dev-bind", "/", "/"' services/runner/src/engines.mjs && grep -q 'join(homedir(), ".config/gcloud")' services/runner/src/config.mjs \
   && pass "runner: jobs can't read the gcloud sign-ins (bwrap tmpfs)" || fail "runner: the gcloud sign-ins aren't hidden from jobs"
 # GitHub: the user's gh token can push and delete; the guard allows fixed reads plus issue comments, new issues,
@@ -211,7 +211,8 @@ merge_writes="$(sed -n '/^export const WRITES/,/^\];/p' services/runner/src/merg
 # The Engineer's own tools (docs/design/conversational-engineers.md): a fixed command list on the per-run
 # loopback endpoint, every write checked against the user's words, and the check given nothing else.
 tools="$(grep -oE '^export const TOOLS = \[[^]]*\]' services/runner/src/repohelper.mjs)"
-[ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "reset", "cleanup"]' ] \
+[ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "reset", "cleanup", "task", "tasks"]' ] \
+  && [ "$(awk '/^async function agentTasks?\(/,/^}/' services/runner/src/main.mjs | grep -c '^  requireTaskReads(ctx);')" = 2 ] \
   && grep -q 'check: (ordered) => allowWrite(ctx, command,' services/runner/src/main.mjs \
   && [ "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "merge"' | cut -d: -f1)" -lt "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'ctx.merge = ' | cut -d: -f1)" ] \
   && [ "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "primer"' | cut -d: -f1)" -lt "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'savePrimer(' | cut -d: -f1)" ] \
@@ -221,7 +222,7 @@ tools="$(grep -oE '^export const TOOLS = \[[^]]*\]' services/runner/src/repohelp
   && grep -q 'slackTokenFile: join(secrets, "slack_mcp_read_token")' services/runner/src/config.mjs \
   && grep -q 'gleanTokenFile: join(secrets, "glean_mcp_read_token")' services/runner/src/config.mjs \
   && grep -q 'const reads = observes(engine.kind) ? privateReads(cfg) : \[\];' services/runner/src/engines.mjs \
-  && pass "runner: the Engineer's push, pr, merge and Primer publishing are checked against the user's words only (services/runner/src/authorize.mjs); jobs hold only read tokens, and Slack and Glean go to Claude Code and Codex only" || fail "runner: the Engineer's tools or their check changed: $tools"
+  && pass "runner: the Engineer's push, pr, merge and Primer publishing are checked against the user's words only (services/runner/src/authorize.mjs); jobs hold only read tokens, and Slack, Glean and other tasks go to Claude Code and Codex only" || fail "runner: the Engineer's tools or their check changed: $tools"
 pass "no email/Slack/Telegram send or calendar write tool is configured for any agent"
 
 echo
