@@ -18,7 +18,7 @@ import { Paperclip } from "./paperclip.mjs";
 import { branchGuidance, checkBranchName, chooseBranchName, exampleBranches } from "./branch.mjs";
 import { cleanMessages, leakIn, leaksInternal, stripAttribution, writePrDescription } from "./describe.mjs";
 import { branchesFooter, slackSources, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, subtaskSummary, runOutcome, stripCommitLine } from "./prompt.mjs";
-import { PRIMER_FILE, primerLink, publishDocument, readDocument } from "./primer.mjs";
+import { PRIMER_FILES, primerLink, publishDocument, readDocument } from "./primer.mjs";
 import { startRepoHelper } from "./repohelper.mjs";
 import { baseRef, branchChanges, carryOver, dirtyCheckouts, ensureRepo, findBranches, keepBranches, messagesSince, moveOffDefault, readManifest, signUnsigned, workspacePath, workspaceRepos } from "./workspace.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
@@ -701,13 +701,13 @@ async function agentPrimer(ctx, args) {
   const link = String(args.link ?? "").trim();
   const target = link ? primerLink(link) : undefined;
   if (link && !target) throw new UserError("That isn't a link to a Primer document (…/d/<id>). Use the link the document has in Primer.");
-  await allowWrite(ctx, "primer", [target ? `a new version of the existing Primer document ${target.url} (its earlier versions stay in its history), made from the document the agent writes to ${PRIMER_FILE}` : `the document the agent writes to ${PRIMER_FILE} in the workspace`]);
+  await allowWrite(ctx, "primer", [target ? `a new version of the existing Primer document ${target.url} (its earlier versions stay in its history), made from the document the agent writes to ${PRIMER_FILES}` : `the document the agent writes to ${PRIMER_FILES} in the workspace`]);
   const record = primerRecord(ctx.issue.id);
   if (target && record?.documentId !== target.documentId) savePrimer(ctx.issue.id, { documentId: target.documentId, url: target.url, linked: true });
   else if (!record) savePrimer(ctx.issue.id, {});
   return target
-    ? `When your run ends, the runner adds ${PRIMER_FILE} as a new version of ${target.url}, and again after every later run that changes it. Write the whole document there.`
-    : `When your run ends, the runner publishes ${PRIMER_FILE} on Primer, and republishes it after every later run that changes it. Write the whole document there.`;
+    ? `When your run ends, the runner adds ${PRIMER_FILES} as a new version of ${target.url}, and again after every later run that changes it. Write the whole document there.`
+    : `When your run ends, the runner publishes ${PRIMER_FILES} on Primer, and republishes it after every later run that changes it. Write the whole document there.`;
 }
 
 /**
@@ -1050,7 +1050,7 @@ async function publishToPrimer(issue, full, workspace) {
   try {
     if (!token) throw new Error("primer-mcp isn't set up (no primer_mcp_token)");
     const res = await publishDocument({ endpoint: { url: cfg.primerPublishUrl, token }, workspace, record, fallbackTitle: full.title });
-    if (res.outcome === "missing") return `_No Primer document: the run didn't write \`${PRIMER_FILE}\`._`;
+    if (res.outcome === "missing") return `_No Primer document: the run didn't write ${PRIMER_FILES}._`;
     if (res.outcome === "unchanged") return record.url ? `**Primer:** ${record.url} (unchanged)` : "";
     savePrimer(issue.id, res.record);
     log("published to Primer", { issue: issue.identifier, outcome: res.outcome, document: res.record.documentId });
@@ -1058,7 +1058,7 @@ async function publishToPrimer(issue, full, workspace) {
     return res.outcome === "created" ? `**Published to Primer:** ${link}` : `**New version on Primer:** ${link}`;
   } catch (err) {
     log("Primer publish failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) });
-    return `_Couldn't publish to Primer: ${String(err.message ?? err).slice(0, 200)}. The document is in \`${join(workspace, PRIMER_FILE)}\`; the next run tries again._`;
+    return `_Couldn't publish to Primer: ${String(err.message ?? err).slice(0, 200)}. The document is in ${join(workspace, ".pennyworth")}; the next run tries again._`;
   }
 }
 

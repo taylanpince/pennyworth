@@ -1,22 +1,38 @@
 // Publishing an Engineer task's document to Primer (D-44). The agent writes the document to a
-// file in the workspace; after a finished run the runner publishes it through primer-mcp: a new
+// file in the workspace, Markdown or a self-contained HTML page (D-55); after a finished run the runner publishes it through primer-mcp: a new
 // document the first time, then a new version of that same document whenever the file changed.
 // The agent never gets a publishing tool.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 export const PRIMER_FILE = join(".pennyworth", "primer.md");
+/** A designed page instead (colours, sections, filtering): Primer serves HTML with its scripts, sandboxed (D-55). */
+export const PRIMER_HTML = join(".pennyworth", "primer.html");
+/** Both, for the agent and the check on writes. */
+export const PRIMER_FILES = `${PRIMER_FILE} (or ${PRIMER_HTML})`;
 
-/** The document's title (its first `# ` heading) and content; undefined when the file is missing or empty. */
+const decode = (s) => s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+
+/**
+ * The document's title, content and format; undefined when there's none. With both files, the one
+ * written last is the document. A Markdown title is its first `# ` heading; an HTML one its <title> or <h1>.
+ */
 export function readDocument(workspace, fallbackTitle) {
-  const path = join(workspace, PRIMER_FILE);
-  if (!existsSync(path)) return undefined;
+  const found = [PRIMER_FILE, PRIMER_HTML]
+    .map((f) => join(workspace, f))
+    .filter((path) => existsSync(path) && readFileSync(path, "utf8").trim())
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+  const path = found[0];
+  if (!path) return undefined;
   const content = readFileSync(path, "utf8").trim();
-  if (!content) return undefined;
-  const heading = /^#\s+(.+?)\s*#*\s*$/m.exec(content)?.[1];
+  const format = path.endsWith(".html") ? "html" : "markdown";
+  const heading =
+    format === "html"
+      ? decode((/<title[^>]*>([\s\S]*?)<\/title>/i.exec(content) ?? /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(content))?.[1]?.replace(/<[^>]*>/g, "") ?? "").replace(/\s+/g, " ").trim() || undefined
+      : /^#\s+(.+?)\s*#*\s*$/m.exec(content)?.[1];
   const title = (heading ?? fallbackTitle ?? "Report").replace(/[*_`]/g, "").trim().slice(0, 200);
-  return { path, title, content, hash: createHash("sha256").update(content).digest("hex") };
+  return { path, title, content, format, hash: createHash("sha256").update(content).digest("hex") };
 }
 
 /** A Primer document's ID and link from a create_document result (JSON or text with the link). */
@@ -75,10 +91,10 @@ export async function publishDocument({ endpoint, workspace, record = {}, fallba
   if (!doc) return { outcome: "missing", record };
   if (doc.hash === record.hash) return { outcome: "unchanged", record };
   if (record.documentId) {
-    await primerCall(endpoint, "primer_add_version", { documentId: record.documentId, content: doc.content, format: "markdown" });
+    await primerCall(endpoint, "primer_add_version", { documentId: record.documentId, content: doc.content, format: doc.format });
     return { outcome: "updated", record: { ...record, hash: doc.hash } };
   }
-  const text = await primerCall(endpoint, "primer_create_document", { title: doc.title, content: doc.content, format: "markdown" });
+  const text = await primerCall(endpoint, "primer_create_document", { title: doc.title, content: doc.content, format: doc.format });
   let ref = documentRef(text);
   if (!ref.documentId && ref.url) ref = { ...ref, ...documentRef(await primerCall(endpoint, "primer_resolve_url", { url: ref.url })) };
   // Without an ID a later change makes a new document instead of a version; the hash is kept

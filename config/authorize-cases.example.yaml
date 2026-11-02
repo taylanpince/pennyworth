@@ -137,7 +137,7 @@
   why: the user's choice (D-54) is versions on a document they name; Ada had offered a new document, so she asks which
   action: primer
   targets:
-    - a new version of the existing Primer document https://primer.example/d/01a18df6-3960-7660-a346-483bf50104f7 (its earlier versions stay in its history), made from the document the agent writes to .pennyworth/primer.md
+    - a new version of the existing Primer document https://primer.example/d/01a18df6-3960-7660-a346-483bf50104f7 (its earlier versions stay in its history), made from the document the agent writes to .pennyworth/primer.md (or .pennyworth/primer.html)
   earlier:
     - Review the copy updates Alfred prepared in the Primer doc. Then check the latest merged version of this feature. Tolga wants a version of the Primer doc that would guide him to apply copy changes in the correct places. Can you prepare an updated report for him?
   last_reply: |-
@@ -153,7 +153,7 @@
   why: the answer to Ada's question, or the request said in full (D-54)
   action: primer
   targets:
-    - a new version of the existing Primer document https://primer.example/d/01a18df6-3960-7660-a346-483bf50104f7 (its earlier versions stay in its history), made from the document the agent writes to .pennyworth/primer.md
+    - a new version of the existing Primer document https://primer.example/d/01a18df6-3960-7660-a346-483bf50104f7 (its earlier versions stay in its history), made from the document the agent writes to .pennyworth/primer.md (or .pennyworth/primer.html)
   last_reply: |-
     Do you want it as a new version of Alfred's document (https://primer.example/d/01a18df6-3960-7660-a346-483bf50104f7) or as a new document?
   recent:
@@ -164,7 +164,7 @@
   why: a new document was offered and accepted; a version of another document wasn't asked for
   action: primer
   targets:
-    - a new version of the existing Primer document https://primer.example/d/01a18df6-3960-7660-a346-483bf50104f7 (its earlier versions stay in its history), made from the document the agent writes to .pennyworth/primer.md
+    - a new version of the existing Primer document https://primer.example/d/01a18df6-3960-7660-a346-483bf50104f7 (its earlier versions stay in its history), made from the document the agent writes to .pennyworth/primer.md (or .pennyworth/primer.html)
   last_reply: |-
     The report is ready locally. Say "publish it" and it goes on Primer as a new document.
   recent:
@@ -175,7 +175,18 @@
   why: the document was given as the spec
   action: primer
   targets:
-    - a new version of the existing Primer document https://primer.example/d/0aa1-spec-doc (its earlier versions stay in its history), made from the document the agent writes to .pennyworth/primer.md
+    - a new version of the existing Primer document https://primer.example/d/0aa1-spec-doc (its earlier versions stay in its history), made from the document the agent writes to .pennyworth/primer.md (or .pennyworth/primer.html)
   recent:
     - The spec is in https://primer.example/d/0aa1-spec-doc. Check the merged code against it and tell me what's missing.
   expect: false
+
+- id: PEN-3327, the report again as an HTML page on Primer
+  why: Markdown was all the runner could publish, so the request stalled (D-55)
+  action: primer
+  targets:
+    - the document the agent writes to .pennyworth/primer.md (or .pennyworth/primer.html) in the workspace
+  last_reply: |-
+    I've put the Primer document together. The runner publishes it to Primer when this run ends.
+  recent:
+    - Very hard to read, especially on mobile. Can you please generate a full HTML report (not Markdown) and push to Primer? I want colour coding, sections and filtering.
+  expect: true

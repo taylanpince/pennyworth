@@ -1007,6 +1007,26 @@ describe("publishing a task's document to Primer (D-44)", async () => {
     assert.equal(calls.length, 2);
   });
 
+  it("publishes an HTML page as HTML, titled from <title> or <h1>, whichever file was written last (D-55)", async () => {
+    const { PRIMER_HTML } = await import("../src/primer.mjs");
+    const { utimesSync } = await import("node:fs");
+    const dir = workspace();
+    const { calls, endpoint } = fake();
+    writeFileSync(join(dir, PRIMER_FILE), "# Report\n\nv1");
+    writeFileSync(join(dir, PRIMER_HTML), "<!doctype html><html><head><title>CI audit &amp; fixes</title></head><body><script>filter()</script></body></html>");
+    utimesSync(join(dir, PRIMER_FILE), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+    assert.equal(readDocument(dir, "T").title, "CI audit & fixes");
+    const res = await publishDocument({ endpoint, workspace: dir, record: { documentId: "doc-1", hash: "md-hash" } });
+    assert.equal(res.outcome, "updated");
+    assert.equal(calls[0].arguments.format, "html");
+    assert.match(calls[0].arguments.content, /<script>filter\(\)<\/script>/, "scripts go as they are: Primer sandboxes them");
+    writeFileSync(join(dir, PRIMER_HTML), "<h1>Only <em>a</em> heading</h1>");
+    assert.equal(readDocument(dir, "T").title, "Only a heading");
+    // The Markdown written after it is the document again.
+    utimesSync(join(dir, PRIMER_HTML), new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
+    assert.equal(readDocument(dir, "T").format, "markdown");
+  });
+
   it("reads a Primer document link the user gives, and nothing else (D-54)", async () => {
     const { primerLink } = await import("../src/primer.mjs");
     assert.deepEqual(primerLink("https://primer.polygon.tools/d/01a18df6-3960-7660-a346-483bf50104f7"), { url: "https://primer.polygon.tools/d/01a18df6-3960-7660-a346-483bf50104f7", documentId: "01a18df6-3960-7660-a346-483bf50104f7" });

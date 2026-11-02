@@ -10,7 +10,7 @@ export const FILES_DIR = join(".pennyworth", "files");
 export const OUT_DIR = join(".pennyworth", "out");
 const MAX_SHARED = 10 * 1024 * 1024; // Paperclip's limit for one file
 const MAX_SHARED_FILES = 20;
-const TYPES = { md: "text/markdown", txt: "text/plain", csv: "text/csv", json: "application/json", yaml: "text/plain", yml: "text/plain", log: "text/plain", pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+const TYPES = { md: "text/markdown", html: "text/html", txt: "text/plain", csv: "text/csv", json: "application/json", yaml: "text/plain", yml: "text/plain", log: "text/plain", pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
 
 /** A file name that is safe on disk: no paths, control characters or leading dots. */
 export function diskName(name) {
@@ -70,7 +70,10 @@ export async function syncFiles(pc, issue, workspace, log = () => {}, skip = new
  */
 export function outputs(workspace, primer) {
   const out = [];
-  if (primer) out.push({ name: `${diskName(primer.title).replace(/\.md$/i, "")}.md`, path: primer.path });
+  if (primer) {
+    const ext = extname(primer.path);
+    out.push({ name: `${diskName(primer.title).replace(/\.(md|html?)$/i, "")}${ext}`, path: primer.path });
+  }
   const dir = join(workspace, OUT_DIR);
   if (existsSync(dir)) {
     for (const name of readdirSync(dir).sort()) {

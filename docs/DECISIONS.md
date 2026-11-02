@@ -583,3 +583,11 @@ Pennyworth reads work email, Slack, calendars and documents. The user cleared ru
 - **`--help`:** `pennyworth --help` (or `-h` anywhere) prints the commands without calling the runner, and stray arguments are refused before a request is made.
 - **Rejected:** mentions in the user's own Slack or Telegram messages (the scouts would watch for them, and colleagues would see `@Alfred`); Alfred publishing an Engineer's attached document himself (650 KB of base64 screenshots through a model's context); relaying across tasks.
 - **Verified:** board tests for routing, passing on and its refusals (`test/mentions.test.ts`); the runner's flow test answers `--help` itself, attaches the report and a screenshot once, passes a message to Alfred, and gives Ada Alfred's chat when the user wrote to her from it; `eval:authorize` 20/20.
+
+## D-55: Engineers publish HTML pages to Primer
+
+- **Problem:** on PEN-3327 (Ada's part of PEN-3069, the CI security audit of 188 repositories) the user found the Markdown report "very hard to read, especially on mobile" and asked for "a full HTML report (not Markdown) … colour coding, sections and filtering". Ada built it, but the runner only read `.pennyworth/primer.md` and always sent `format: "markdown"`, and raw HTML inside Markdown is escaped by Primer, so the page never reached Primer.
+- **Decision:** an Engineer may write `.pennyworth/primer.html` instead; the runner publishes it with `format: "html"` (both `primer_create_document` and `primer_add_version` take it). With both files, the one written last is the document, so a task can move between the two. An HTML page is titled from its `<title>` or first `<h1>`, and attached to the part as `<title>.html` (D-54).
+- **What Primer does with HTML:** it serves the page in a sandboxed iframe (`allow-scripts`, no same origin), keeps inline `<script>`, strips `<iframe>` and refresh `<meta>`, blocks the clipboard API, and takes up to 10 MB. The prompt asks for one self-contained page within those limits, with data embedded as JSON for large tables.
+- **Unchanged:** the runner still publishes, never the job (D-44); the check on writes covers both files (`config/authorize-cases.yaml` has PEN-3327's request).
+- **Verified:** Ada's 660 KB report went up as version 2 of the audit document through this code; Primer stored it with the report's scripts and data intact.
