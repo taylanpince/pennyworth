@@ -211,11 +211,11 @@ merge_writes="$(sed -n '/^export const WRITES/,/^\];/p' services/runner/src/merg
 # The Engineer's own tools (docs/design/conversational-engineers.md): a fixed command list on the per-run
 # loopback endpoint, every write checked against the user's words, and the check given nothing else.
 tools="$(grep -oE '^export const TOOLS = \[[^]]*\]' services/runner/src/repohelper.mjs)"
-[ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "reset", "cleanup", "task", "tasks"]' ] \
+[ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "pass", "reset", "cleanup", "task", "tasks"]' ] \
   && [ "$(awk '/^async function agentTasks?\(/,/^}/' services/runner/src/main.mjs | grep -c '^  requireTaskReads(ctx);')" = 2 ] \
   && grep -q 'check: (ordered) => allowWrite(ctx, command,' services/runner/src/main.mjs \
   && [ "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "merge"' | cut -d: -f1)" -lt "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'ctx.merge = ' | cut -d: -f1)" ] \
-  && [ "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "primer"' | cut -d: -f1)" -lt "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'savePrimer(' | cut -d: -f1)" ] \
+  && [ "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "primer"' | cut -d: -f1)" -lt "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'savePrimer(' | head -1 | cut -d: -f1)" ] \
   && grep -q '^export function authorizePrompt({ user, action, earlier = \[\], recent = \[\], lastReply = "" })' services/runner/src/authorize.mjs \
   && grep -q 'primerTokenFile: join(secrets, "primer_mcp_read_token")' services/runner/src/config.mjs \
   && ! grep -q primerPublishTokenFile services/runner/src/engines.mjs \

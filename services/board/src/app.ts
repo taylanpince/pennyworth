@@ -6,8 +6,8 @@ import type { Logger } from "pino";
 import { z } from "zod";
 import { RunnerReportSchema, agentsView, runTasks, workingOn, type RunContext, type RunnerReport } from "./activity.js";
 import { RecurringSchema, RunStateSchema, ScheduleSchema, changeRecurring, claimDue, recurringView, scheduleMove } from "./automation.js";
-import { AddAgentSchema, BadRequest, CreateSchema, HandOverSchema, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
-import { crewOf, foldedChildren, handOverText, partsToClose, summaryOf } from "./crew.js";
+import { AddAgentSchema, BadRequest, CreateSchema, HandOverSchema, PassSchema, RUNNER_MARKER, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
+import { FOR_OTHERS, crewOf, deliveredFrom, deliveredText, foldedChildren, fromMarker, handOverText, mentionedAgents, partsToClose, summaryOf, type DeliveredFrom } from "./crew.js";
 import { inNetworks } from "./config.js";
 import { INLINE_TYPES, MAX_UPLOAD_BODY, UploadSchema, decode, fileType, fileViews, isPdf, pdfText, safeName } from "./files.js";
 import { McpAuthFailed, type GleanAuth, type GrafanaAuth } from "./mcpauth.js";
@@ -189,10 +189,12 @@ export function createApp(opts: AppOptions): Server {
    * description as the user's request (D-45). An agent already on the task gets the instructions as a
    * comment on its part instead: one part per agent.
    */
-  async function addToCrew(ctx: Awaited<ReturnType<typeof context>>, parent: Issue, agent: Assignee, instructions: string, executor: { model?: string; effort?: string }) {
+  async function addToCrew(ctx: Awaited<ReturnType<typeof context>>, parent: Issue, agent: Assignee, instructions: string, executor: { model?: string; effort?: string }, marker = "") {
+    // The user's words lose any hidden markers; only the board's own (where a message came from, D-54) stay.
+    const text = marker ? `${displayText(instructions)}\n\n${marker}` : displayText(instructions);
     const existing = (await pc.children(parent.id)).find((k) => k.assigneeAgentId === agent.key && !["done", "cancelled"].includes(k.status));
     if (existing) {
-      await pc.addComment(existing.id, displayText(instructions));
+      await pc.addComment(existing.id, text);
       log.info({ issue: parent.identifier, part: existing.identifier, agent: agent.name }, "instructions to the crew");
       return existing;
     }
@@ -204,7 +206,7 @@ export function createApp(opts: AppOptions): Server {
     // Every part carries the task's title, which Paperclip would take for a duplicate of the first one.
     const part = await pc.createIssue({
       title: parent.title,
-      description: displayText(instructions),
+      description: text,
       status: "todo",
       priority: parent.priority,
       parentId: parent.id,
@@ -214,6 +216,30 @@ export function createApp(opts: AppOptions): Server {
     if ((part as Issue & { deduplicated?: boolean }).deduplicated) throw new HttpError(409, `Paperclip returned ${part.identifier} instead of a new task`);
     store.markSeen(part.id, new Date(Date.now() + 5_000).toISOString());
     log.info({ issue: parent.identifier, part: part.identifier, agent: agent.name }, "agent joined");
+    return part;
+  }
+
+  /** The user's task a chat belongs to: the task itself, or the task an agent's part is part of (D-45). */
+  async function userTaskOf(issue: Issue, ctx: Awaited<ReturnType<typeof context>>): Promise<Issue | undefined> {
+    if (issue.assigneeUserId === ctx.me && !issue.assigneeAgentId) return issue;
+    if (!issue.parentId) return undefined;
+    const parent = await pc.issue(issue.parentId);
+    return parent.assigneeUserId === ctx.me ? parent : undefined;
+  }
+
+  /**
+   * A message of the user's for one agent on their task (D-54), from a mention or passed on by another
+   * agent: it goes to that agent's part as the user's own comment, with where it came from. Its latest part
+   * takes it (reopened when it was done, so the work and the session carry on); otherwise it joins the task.
+   */
+  async function deliver(ctx: Awaited<ReturnType<typeof context>>, task: Issue, agent: Assignee, text: string, from: DeliveredFrom) {
+    const body = deliveredText(displayText(text), from);
+    const parts = (await pc.children(task.id)).filter((k) => k.assigneeAgentId === agent.key && k.status !== "cancelled");
+    const part = parts.find((k) => k.status !== "done") ?? parts.sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")))[0];
+    if (!part) return addToCrew(ctx, task, agent, body, {}, fromMarker(from));
+    if (part.status === "done") await pc.updateIssue(part.id, { status: "todo" });
+    await pc.addComment(part.id, `${body}\n\n${fromMarker(from)}`);
+    log.info({ issue: task.identifier, part: part.identifier, agent: agent.name, from: from.identifier }, "message delivered");
     return part;
   }
 
@@ -336,6 +362,31 @@ export function createApp(opts: AppOptions): Server {
         if (!store.setRunState(m[1]!, m[2]!, state)) throw new HttpError(404, "no such run");
         log.info({ definition: m[1], occurrence: m[2], state }, "recurring run updated");
         return { ok: true };
+      },
+    },
+    {
+      // An agent passes one of the user's messages on to another agent on the same task (D-54). Only the
+      // user's own comment travels, word for word: the agent picks which one and for whom, never the words.
+      method: "POST",
+      path: /^\/internal\/issues\/([^/]+)\/pass$/,
+      handle: async (m, body) => {
+        const { comment, to, by } = parse(PassSchema, body);
+        const { ctx, issue } = await ownIssue(decodeURIComponent(m[1]!));
+        const task = await userTaskOf(issue, ctx);
+        if (!task) throw new HttpError(400, "only on the user's tasks and their agents' parts");
+        const c = (await pc.comments(issue.id)).find((x) => x.id === comment && !x.deletedAt);
+        if (!c || c.authorType !== "user" || c.authorUserId !== ctx.me || c.body.includes(RUNNER_MARKER)) throw new HttpError(400, "pass on a comment the user wrote on this task");
+        const agent = ctx.assignees.find((a) => a.kind !== "me" && (a.persona?.name.toLowerCase() === to.toLowerCase() || a.key === to));
+        if (!agent) throw new HttpError(400, `no agent is called ${to}: ${ctx.assignees.flatMap((a) => (a.persona ? [a.persona.name] : [])).join(", ")}`);
+        if (agent.key === issue.assigneeAgentId) throw new HttpError(400, `this is ${agent.persona?.name ?? agent.name}'s own chat`);
+        const key = `passed:${c.id}:${agent.key}`;
+        if (store.meta(key)) return { passed: false, reason: `already passed on to ${agent.persona?.name ?? agent.name}` };
+        // A message already delivered here keeps pointing at the chat it was written in.
+        const origin = deliveredFrom(c.body) ?? { identifier: issue.identifier, commentId: c.id };
+        const sender = ctx.assignees.find((a) => a.kind !== "me" && a.persona?.name.toLowerCase() === by?.toLowerCase())?.persona?.name;
+        const part = await deliver(ctx, task, agent, displayText(c.body).replace(/\n\n_(Written in|Passed on by) [^\n]*_$/, ""), { ...origin, note: `Passed on by ${sender ?? "an agent"} from ${issue.identifier}.` });
+        store.setMeta(key, new Date().toISOString());
+        return { passed: true, to: agent.persona?.name ?? agent.name, part: part.identifier };
       },
     },
     {
@@ -482,13 +533,25 @@ export function createApp(opts: AppOptions): Server {
       method: "POST",
       path: /^\/api\/issues\/([^/]+)\/comments$/,
       handle: async (m, body) => {
-        const { issue, assigned } = await ownIssue(decodeURIComponent(m[1]!));
+        const { ctx, issue, assigned } = await ownIssue(decodeURIComponent(m[1]!));
         if (!assigned) throw new HttpError(403, "this task isn't yours or an assistant's");
         const { body: text } = parse(z.object({ body: z.string().trim().min(1).max(30_000) }).strict(), body);
+        // @-mentions (D-54): the agents named, other than the one this chat is with, get the message on their part.
+        const task = await userTaskOf(issue, ctx);
+        const own = issue.id === task?.id ? ctx.assignees.find((a) => a.kind === "assistant")?.key : issue.assigneeAgentId;
+        const named = task ? mentionedAgents(text, ctx.assignees) : [];
+        const others = named.filter((a) => a.key !== own);
         // Hidden markers are machine-only: the runner ignores comments that carry its marker.
-        await pc.addComment(issue.id, displayText(text));
-        log.info({ issue: issue.identifier }, "comment added");
-        return issueView(issue.id);
+        let posted;
+        if (!others.length || named.length > others.length) posted = await pc.addComment(issue.id, displayText(text));
+        // On the user's own task the message stays in the team chat; the Assistant leaves it to the others.
+        else if (issue.id === task!.id) posted = await pc.addComment(issue.id, `${displayText(text)}\n\n${FOR_OTHERS}`);
+        log.info({ issue: issue.identifier, mentions: named.map((a) => a.name) }, "comment added");
+        const where = issue.id === task?.id ? "the team chat" : `${ctx.assignees.find((a) => a.key === issue.assigneeAgentId)?.persona?.name ?? "another agent"}'s chat`;
+        const parts = [];
+        for (const a of others) parts.push(await deliver(ctx, task!, a, text, { identifier: issue.identifier, commentId: posted?.id, note: `Written in ${where} on ${issue.identifier}.` }));
+        // A message that left this chat for another agent's: the board opens that one.
+        return { ...(await issueView(issue.id)), ...(!posted && parts[0] ? { movedTo: parts[0].identifier } : {}) };
       },
     },
     {

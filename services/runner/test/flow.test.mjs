@@ -22,11 +22,13 @@ const git = (cwd, ...args) => execFileSync("git", args, { cwd, env: { ...process
 let gitEnv = {};
 
 /** A Paperclip with one parent task (the user's) and one part of it for Ada (D-45). */
-function fakePaperclip({ parent, part, engineers, parentComments = [] }) {
-  const issues = new Map([parent, part].map((i) => [i.id, i]));
-  const comments = new Map([[parent.id, parentComments], [part.id, []]]);
+function fakePaperclip({ parent, part, engineers, parentComments = [], others = [] }) {
+  const issues = new Map([parent, part, ...others.map((o) => o.issue)].map((i) => [i.id, i]));
+  const comments = new Map([[parent.id, parentComments], [part.id, []], ...others.map((o) => [o.issue.id, o.comments])]);
   const patches = [];
   const activity = [];
+  const passed = [];
+  const attached = [];
   const unknown = [];
   let n = 0;
   const addComment = (issueId, body) => comments.get(issueId).push({ id: `comment-${++n}`, authorType: "user", authorUserId: USER, body, createdAt: new Date(Date.now() + n).toISOString() });
@@ -55,6 +57,12 @@ function fakePaperclip({ parent, part, engineers, parentComments = [] }) {
       return send(list);
     }
     if (req.method === "GET" && path === "/api/cli-auth/me") return send({ userId: USER });
+    const upload = new RegExp(`^/api/companies/${COMPANY}/issues/([^/]+)/attachments$`).exec(path);
+    if (req.method === "POST" && upload) {
+      const name = /filename="([^"]+)"/.exec(body)?.[1];
+      attached.push({ issue: upload[1], name });
+      return send({ id: `file-${attached.length}`, originalFilename: name }, 201);
+    }
     if (issue && find(decodeURIComponent(issue))) {
       const i = find(decodeURIComponent(issue));
       if (req.method === "GET" && path.endsWith("/comments")) return send(comments.get(i.id));
@@ -73,15 +81,19 @@ function fakePaperclip({ parent, part, engineers, parentComments = [] }) {
       }
       if (req.method === "GET") return send(i);
     }
-    // The board's internal API: the runner's activity for the Crew view.
+    // The board's internal API: the runner's activity for the Crew view, and messages passed on (D-54).
     if (path.startsWith("/internal/")) {
       if (path.endsWith("/runner/activity")) activity.push(JSON.parse(body));
+      if (path.endsWith("/pass")) {
+        passed.push({ path, ...JSON.parse(body) });
+        return send({ passed: true, to: "Alfred", part: "PEN-3" });
+      }
       return send({});
     }
     unknown.push(`${req.method} ${path}`);
     send({ error: "not found" }, 404);
   });
-  return { server, comments, patches, activity, unknown, addComment };
+  return { server, comments, patches, activity, passed, attached, unknown, addComment };
 }
 
 describe("talking to an Engineer, end to end", () => {
@@ -185,7 +197,13 @@ recurring:
     // PEN-3155: Alfred's report is a comment on the user's task, and the user asks Ada to take it over.
     const alfred = { id: "assistant", name: "Assistant", status: "idle", adapterType: "codex_local", adapterConfig: {}, metadata: { setupKey: "pennyworth:assistant", persona: { name: "Alfred" } } };
     const parentComments = [{ id: "alfred-report", authorType: "agent", authorAgentId: "assistant", body: "## Telos usage — preliminary\n\nTelos is still read by the infra alerts.", createdAt: new Date(Date.now() - 60_000).toISOString() }];
-    paperclip = fakePaperclip({ parent, part, engineers: [...engineers, alfred], parentComments });
+    // Alfred's part of the same task (D-54): his chat, where the user may write to Ada from.
+    const alfredPart = { id: "alfred-part", identifier: "PEN-3", title: "Drop Telos support", status: "todo", parentId: "parent", assigneeAgentId: "assistant", assigneeUserId: null, labels: [], description: "Draft the changelog entry" };
+    const alfredChat = [
+      { id: "alfred-1", authorType: "user", authorUserId: USER, body: "Draft the changelog entry", createdAt: new Date(Date.now() - 50_000).toISOString() },
+      { id: "alfred-2", authorType: "agent", authorAgentId: "assistant", body: "Draft: Telos support is removed from the app and the alerts.", createdAt: new Date(Date.now() - 40_000).toISOString() },
+    ];
+    paperclip = fakePaperclip({ parent, part, engineers: [...engineers, alfred], parentComments, others: [{ issue: alfredPart, comments: alfredChat }] });
     await new Promise((r) => paperclip.server.listen(0, "127.0.0.1", r));
     const url = `http://127.0.0.1:${paperclip.server.address().port}`;
 
@@ -199,7 +217,7 @@ recurring:
         PENNYWORTH_SECRETS_DIR: secrets,
         PENNYWORTH_ENV_FILE: join(dir, "none.env"),
         PAPERCLIP_URL: url,
-        BOARD_INTERNAL_URL: `${url}/internal`,
+        BOARD_INTERNAL_URL: url,
         FAKE_LOG: join(dir, "fake.log"),
         FAKE_STEP: join(dir, "claude-step"),
       },
@@ -396,6 +414,35 @@ recurring:
     assert.match(byWords.out, /PEN-1 · todo · with Taylan/);
     assert.equal(nobody.code, 1);
     assert.match(nobody.out, /No agent is called Nobody: Ada, Grace, Alfred/);
+  });
+
+  it("answers --help itself, shares what it made on the task, and passes a message on to Alfred (D-54)", async () => {
+    step("report\npennyworth primer --help\npennyworth pass Alfred");
+    const done = await turn("Alfred should publish this once it's written up.");
+    const [help, pass] = toolRuns().slice(-2);
+    assert.equal(help.code, 0);
+    assert.match(help.out, /^usage: pennyworth status/);
+    assert.ok(!output.includes('"action":"primer"'), "asking for help isn't a publish request");
+    assert.equal(pass.code, 0, pass.out);
+    assert.match(pass.out, /Passed on to Alfred \(PEN-3\)/);
+    const asked = paperclip.comments.get("part").findLast((c) => c.body === "Alfred should publish this once it's written up.");
+    assert.deepEqual(paperclip.passed.at(-1), { path: "/internal/issues/PEN-2/pass", comment: asked.id, to: "Alfred", by: "Ada" });
+    assert.deepEqual(paperclip.attached.map((a) => a.name), ["Wallet copy, mapped to the app.md", "move-page.png"]);
+    assert.ok(paperclip.attached.every((a) => a.issue === "part"));
+    assert.match(done.comment, /_Attached to the task: `Wallet copy, mapped to the app.md`, `move-page.png`\._/);
+    // Unchanged next time: not attached again, and never copied back in as the user's files.
+    step("report");
+    await turn("Anything else?");
+    assert.equal(paperclip.attached.length, 2);
+    assert.doesNotMatch(claudeRuns().at(-1).prompt, /## Files from Taylan/);
+  });
+
+  it("reads Alfred's chat when the user wrote to Ada from there (D-54)", async () => {
+    step("none");
+    await turn("@Ada put this into the release notes too\n\n_Written in Alfred's chat on PEN-3._\n\n<!-- pennyworth-from:PEN-3 -->");
+    const { prompt } = claudeRuns().at(-1);
+    assert.match(prompt, /## Alfred's chat, where Taylan wrote to you from[\s\S]*<<<SOURCE_CHAT\n[\s\S]*Draft: Telos support is removed from the app and the alerts\.[\s\S]*SOURCE_CHAT>>>/);
+    assert.match(prompt, /@Ada put this into the release notes too/);
   });
 
   it("says nothing to a comment that needs no answer", async () => {

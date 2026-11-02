@@ -3,6 +3,14 @@
 
 export const RUNNER_MARKER = "<!-- pennyworth-runner -->";
 
+/** The board's marks (D-54): a message on the user's task for other agents only, and where a delivered one came from. */
+export const FOR_OTHERS = "<!-- pennyworth-for-others -->";
+
+/** The chat a message delivered from another one came from (D-54): the task's identifier. */
+export function deliveredFrom(body) {
+  return /<!-- pennyworth-from:([A-Z][A-Z0-9]*-\d+)(?::[0-9a-f-]{36})? -->/.exec(String(body ?? ""))?.[1];
+}
+
 // Publishing to GitHub is the one irreversible action, so it takes the exact word. Everything
 // else in a comment, including stop/status/reset/cleanup, is read by the intake (intake.mjs).
 const COMMANDS = new Map([

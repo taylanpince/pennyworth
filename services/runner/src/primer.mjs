@@ -30,6 +30,19 @@ export function documentRef(text) {
   return { url, documentId };
 }
 
+/** A Primer document the user linked (D-54): its link and ID, or undefined for anything else. */
+export function primerLink(text) {
+  let url;
+  try {
+    url = new URL(String(text).trim());
+  } catch {
+    return undefined;
+  }
+  const id = /^\/d\/([A-Za-z0-9-]{8,64})\/?$/.exec(url.pathname)?.[1];
+  if (url.protocol !== "https:" || !id) return undefined;
+  return { url: `${url.origin}/d/${id}`, documentId: id };
+}
+
 /** One tool call on primer-mcp (stateless streamable HTTP). Resolves with the result's text; rejects on errors. */
 export async function primerCall({ url, token, fetchImpl = fetch }, name, args) {
   let id = 0;

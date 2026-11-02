@@ -138,3 +138,41 @@ export function handOverText(instructions: string, from: string): string {
 
 /** States that wait on the user: the board's "Needs you". */
 export const NEEDS_USER: ReadonlySet<CrewState> = new Set(["needs", "failed", "proposed"]);
+
+/**
+ * The crew members a message @-mentions by name ("@Ada", "@alfred"), in the order written (D-54). Only
+ * agents with a persona can be mentioned; an address or a handle that only starts with a name doesn't count.
+ */
+export function mentionedAgents(text: string, assignees: Assignee[]): Assignee[] {
+  const out: Assignee[] = [];
+  for (const m of displayTextOf(text).matchAll(/(^|[^\w@.])@([A-Za-z][\w-]*)/g)) {
+    const name = m[2]!.toLowerCase();
+    const a = assignees.find((x) => x.kind !== "me" && x.persona?.name.toLowerCase() === name);
+    if (a && !out.includes(a)) out.push(a);
+  }
+  return out;
+}
+
+const displayTextOf = (s: string) => s.replace(/<!--[\s\S]*?-->/g, "").replace(/```[\s\S]*?```|`[^`\n]*`/g, " ");
+
+/** Marks a message on the user's task that names only other agents: the Assistant leaves it to them (D-54). */
+export const FOR_OTHERS = "<!-- pennyworth-for-others -->";
+
+/** Where a message delivered to an agent's part came from (D-54): the chat, the original comment, and a line saying so. */
+export interface DeliveredFrom {
+  identifier: string;
+  commentId?: string;
+  note: string;
+}
+
+/** A delivered message: the user's own words and a visible line saying where they came from. */
+export const deliveredText = (text: string, from: DeliveredFrom) => `${text.trim()}\n\n_${from.note}_`;
+
+/** The marker after it, for the runner and the Assistant to find that chat's conversation. */
+export const fromMarker = (from: DeliveredFrom) => `<!-- pennyworth-from:${from.identifier}${from.commentId ? `:${from.commentId}` : ""} -->`;
+
+/** The chat a delivered message came from: its task identifier and the original comment, when known. */
+export function deliveredFrom(body: string): { identifier: string; commentId?: string } | undefined {
+  const m = /<!-- pennyworth-from:([A-Z][A-Z0-9]*-\d+)(?::([0-9a-f-]{36}))? -->/.exec(body);
+  return m ? { identifier: m[1]!, ...(m[2] ? { commentId: m[2] } : {}) } : undefined;
+}

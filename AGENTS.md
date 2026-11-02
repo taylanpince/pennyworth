@@ -1,13 +1,14 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-51) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-54) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
 ```text
 host (NixOS, user taylan)
 ├── pennyworth-runner (systemd --user, node, runs AS THE USER)   services/runner/
-│     polls Paperclip: engineer tasks → Codex/Claude Code/OpenRouter jobs in per-task workspaces under ~/pennyworth/tasks (D-41),
+│     polls Paperclip: engineer tasks → Codex/Claude Code/OpenRouter jobs in per-task workspaces under ~/pennyworth/tasks (D-41);
+│                      what a job makes for others (Primer document, .pennyworth/out/) is attached to its task (D-54),
 │                      Claude Code and Codex jobs read Grafana and Google Cloud (D-48), Slack and Glean (D-51), read-only,
 │                      or a merge queue for the PRs a task lists, in code (D-46)
 │                      review-request tasks → closed once gh shows the PR reviewed/merged (D-21)
@@ -32,10 +33,11 @@ host (NixOS, user taylan)
     ├── github-mcp           GitHub issues/PRs with the user's gh token: read; when asked, in GITHUB_COMMENT_ORGS: comment, open issues (on a project board),
     │                        close/label/assign issues, review PRs, re-run failed CI (D-39, D-42, D-46)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
+                             @-mentions in its chats go to that agent's part of the task (D-54);
                              files attached as context go to Paperclip's attachments, PDFs with a text version (D-43);
                              :3121 on the LAN (pennyworth.local, paired devices from the home subnet only, D-23)
                              :3122 internal API (bearer token): scheduled moves and recurring tasks for the bridge and the runner (D-25),
-                             and the runner's job activity for the Crew view (D-34, D-45)
+                             and the runner's job activity for the Crew view (D-34, D-45); agents passing the user's comments on (D-54)
 services/paperclip-tasks-mcp  stdio MCP bridge (mounted into paperclip) for task updates by agents
 ```
 
@@ -49,7 +51,7 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`. The on
 | Slack Scout | Slack items for the user |
 | Telegram Scout | Telegram mentions, replies and DMs for the user, from the candidates telegram-mcp picks |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
-| Assistant (**Alfred**) | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, notes, reference docs, cached web, files attached to tasks), publishing to Primer, Slack drafts, and GitHub comments, issues, reviews and CI re-runs when asked, acting on the user's replies (including scheduling a task or making it recurring, and learning how the user writes when asked, D-47), and running recurring tasks |
+| Assistant (**Alfred**) | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, notes, reference docs, cached web, files attached to tasks), publishing to Primer, Slack drafts, and GitHub comments, issues, reviews and CI re-runs when asked, acting on the user's replies (including scheduling a task or making it recurring, and learning how the user writes when asked, D-47), passing the user's requests on to the agent they're for (D-54), and running recurring tasks |
 | Engineer · Codex (**Grace**) / · Claude (**Ada**) / · OpenRouter (**Linus**) | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20). Grace and Ada also read Grafana and Google Cloud (D-48) |
 
 ## Everyday commands
@@ -184,9 +186,10 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **Tasks from before D-41** (one worktree of the cache, `tasks.branch`/`pr_url`) move into a workspace on their next run or command (`moveIntoWorkspace`): branch, PR and uncommitted changes come along, the session restarts.
 - **Sessions are engine-specific.** A Codex thread ID can't be resumed by opencode (`ses_…` IDs) or Claude Code; switching engines starts fresh with the task's earlier requests as context.
 - **Claude Code must not inherit the user's Claude setup.** By default `claude -p` loads every MCP server, plugin, hook and claude.ai connector (Slack send, Calendar writes, GitHub MCP pushes…). The runner uses its own `CLAUDE_CONFIG_DIR`, a `setup-token` OAuth token, `--setting-sources ""`, `--strict-mcp-config` with no servers, `ENABLE_CLAUDEAI_MCP_SERVERS=false` and a `--tools` allowlist. Don't point it at `~/.claude`: writable hooks or settings there would run unsandboxed in the user's own sessions.
-- **Primer is the one MCP server every engine gets (D-40),** read-only through primer-mcp's loopback `/mcp/read`. Primer links redirect to Okta for WebFetch, so without it a job can't read a linked spec. The bearer token goes in as `PRIMER_MCP_TOKEN` in the environment, never on the command line. When the user asks for a Primer report, the agent asks with `pennyworth primer`, writes `.pennyworth/primer.md`, and the *runner* publishes it after the run (D-44, D-50); never give a job the publishing endpoint.
+- **Primer is the one MCP server every engine gets (D-40),** read-only through primer-mcp's loopback `/mcp/read`. Primer links redirect to Okta for WebFetch, so without it a job can't read a linked spec. The bearer token goes in as `PRIMER_MCP_TOKEN` in the environment, never on the command line. When the user asks for a Primer report, the agent asks with `pennyworth primer` (or `pennyworth primer <link>` for a new version of a document the user names, D-54), writes `.pennyworth/primer.md`, and the *runner* publishes it after the run (D-44, D-50); never give a job the publishing endpoint.
 - **Jobs hold read tokens only (D-51).** Every MCP server a job reaches serves `/mcp/read` with a token of its own (`*_mcp_read_token`): `/mcp`, with drafts or publishing, refuses it, and the main token doesn't open `/mcp/read`. Until 2026-10-28 jobs got Primer's main token, which also opened its publishing tools. A new server for jobs needs the same split, a loopback port, `privateReads` in `engines.mjs` (or every engine, like Primer, only if its content may go to OpenRouter's providers), and a `read_split` line in `verify-security.sh`.
 - **Slack and Glean go to Claude Code and Codex only (D-51)**, like Grafana: the user's own Slack (DMs included) and the company's search. The prompt points the agent at the Slack message a task came from (`slackSources`: channel and timestamp from its permalink), because a task's summary of a message is never the whole context (PEN-2799). Glean being connected also settles the organization instruction Claude Code gets through the user's account, which otherwise makes the agent reply that Glean isn't connected.
+- **Agents pass work on, and @-mentions (D-54).** The board delivers a mention, or a comment an agent passes on (`task_pass_on`, `pennyworth pass`), to the agent's part as the user's own comment with `<!-- pennyworth-from:PEN-N -->`; the runner adds that chat's conversation, and skips `<!-- pennyworth-for-others -->` comments when dispatching replies to Alfred. Passing on carries only a comment the user wrote, checked in code: never let an agent supply the words. Attachments an Engineer's run made (`shared:<task>` in the runner's state) aren't the user's files; keep them out of `syncFiles`.
 - **Agents read each other's conversations (D-52).** A part's prompt carries the parent's whole conversation (`crewContext`), and Claude Code and Codex jobs read any task with `pennyworth task PEN-N` / `pennyworth tasks` (not OpenRouter: tasks hold Slack and mail). The user names other agents' work ("Alfred's report") and expects it found; it's context, and only the user's comments on the job's own task are instructions.
 - **Grafana and Google Cloud go to Claude Code and Codex only (D-48),** never OpenRouter (`observes`). Grafana is grafana-mcp's loopback `/mcp` (`GRAFANA_MCP_TOKEN` in the environment, like Primer). Google Cloud is a one-hour access token in the job's own gcloud config (`services/runner/src/gcp.mjs`); the sign-in itself (`scripts/gcloud-auth.sh`) never reaches a job.
   - **The sign-in is plain `gcloud auth application-default login` (D-53).** Asking gcloud's client for extra scopes (the per-API read-only ones) got it blocked by Google's app policy ("This app is blocked", 2026-10-30), and the user doesn't want anything that looks unusual to security. So the token has the user's own access, and reads-only is the prompt's rule plus the user's IAM roles. Don't bring back custom scopes or another OAuth client.

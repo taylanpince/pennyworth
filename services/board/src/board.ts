@@ -310,5 +310,7 @@ export const AddAgentSchema = z
 
 /** Give a stuck agent's part of a task to another agent (D-45). */
 export const HandOverSchema = z.object({ from: z.string().min(1).max(64), to: z.string().min(1).max(64) }).strict();
+/** An agent passing one of the user's comments on to another agent (D-54): which comment, to whom, and who passes it. */
+export const PassSchema = z.object({ comment: id, to: z.string().min(1).max(64), by: z.string().max(64).optional() }).strict();
 
 export class BadRequest extends Error {}

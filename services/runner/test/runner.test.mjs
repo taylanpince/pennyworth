@@ -921,6 +921,27 @@ describe("files on a task (D-43)", () => {
     assert.deepEqual(await syncFiles({ attachments: async () => { throw new Error("down"); } }, { id: "x" }, ws), []);
   });
 
+  it("shares what the Engineer made: its Primer document and .pennyworth/out, again only when changed (D-54)", async () => {
+    const { outputs, shareOutputs } = await import("../src/files.mjs");
+    const ws = mkdtempSync(join(tmpdir(), "pw-out-"));
+    mkdirSync(join(ws, ".pennyworth", "out", "nested"), { recursive: true });
+    writeFileSync(join(ws, ".pennyworth", "primer.md"), "# Copy map\n");
+    writeFileSync(join(ws, ".pennyworth", "out", "shot.png"), "png");
+    writeFileSync(join(ws, ".pennyworth", "out", ".hidden"), "x");
+    const files = outputs(ws, { title: "Copy map", path: join(ws, ".pennyworth", "primer.md") });
+    assert.deepEqual(files.map((f) => [f.name, f.type]), [["Copy map.md", "text/markdown"], ["shot.png", "image/png"]]);
+    const calls = [];
+    const pc = { addAttachment: async (_i, name) => (calls.push(["add", name]), { id: `id-${calls.length}` }), deleteAttachment: async (id) => calls.push(["delete", id]) };
+    const first = await shareOutputs(pc, { id: "part" }, files);
+    assert.deepEqual(first.attached, ["Copy map.md", "shot.png"]);
+    assert.deepEqual((await shareOutputs(pc, { id: "part" }, files, first.shared)).attached, []);
+    writeFileSync(join(ws, ".pennyworth", "out", "shot.png"), "png2");
+    const again = await shareOutputs(pc, { id: "part" }, outputs(ws), first.shared);
+    assert.deepEqual(again.attached, ["shot.png"]);
+    assert.deepEqual(calls.slice(2), [["add", "shot.png"], ["delete", "id-2"]], "the new version first, then the old one goes");
+    assert.deepEqual(await syncFiles({ attachments: async () => [at("id-1", "Copy map.md", "1")] }, { id: "part" }, ws, () => {}, new Set(["id-1"])), [], "never copied back as the user's");
+  });
+
   it("lists the files in the prompt, only when there are some", () => {
     const base = { user: "Taylan", task: { identifier: "PEN-18", title: "t", description: "" }, workspace: "/w", repos: [{ slug: "0xPolygon/example-api", path: "/w/example-api", base: "main", writable: true }], mode: "investigate", shells: ["llm"], instructions: "Why does this fail? Log attached." };
     assert.doesNotMatch(firstPrompt(base), /Files from/);
@@ -984,6 +1005,22 @@ describe("publishing a task's document to Primer (D-44)", async () => {
     assert.equal(second.outcome, "updated");
     assert.deepEqual(calls[1], { name: "primer_add_version", arguments: { documentId: "01a1-doc", content: "# Report\n\nv2", format: "markdown" } });
     assert.equal(calls.length, 2);
+  });
+
+  it("reads a Primer document link the user gives, and nothing else (D-54)", async () => {
+    const { primerLink } = await import("../src/primer.mjs");
+    assert.deepEqual(primerLink("https://primer.polygon.tools/d/01a18df6-3960-7660-a346-483bf50104f7"), { url: "https://primer.polygon.tools/d/01a18df6-3960-7660-a346-483bf50104f7", documentId: "01a18df6-3960-7660-a346-483bf50104f7" });
+    assert.deepEqual(primerLink("https://primer.example/d/01a1-doc-xyz/?v=2#c"), { url: "https://primer.example/d/01a1-doc-xyz", documentId: "01a1-doc-xyz" });
+    for (const bad of ["--help", "http://primer.example/d/01a1-doc-xyz", "https://primer.example/x/01a1-doc", "https://primer.example/d/short", "PEN-12"]) assert.equal(primerLink(bad), undefined, bad);
+  });
+
+  it("adds versions to a document the user linked from the first publish", async () => {
+    const dir = workspace();
+    const { calls, endpoint } = fake();
+    writeFileSync(join(dir, PRIMER_FILE), "# Report\n\nfor Tolga");
+    const res = await publishDocument({ endpoint, workspace: dir, record: { documentId: "alfreds-doc", url: "https://primer.example/d/alfreds-doc", linked: true } });
+    assert.equal(res.outcome, "updated");
+    assert.deepEqual(calls, [{ name: "primer_add_version", arguments: { documentId: "alfreds-doc", content: "# Report\n\nfor Tolga", format: "markdown" } }]);
   });
 
   it("fails on a tool error without recording anything", async () => {

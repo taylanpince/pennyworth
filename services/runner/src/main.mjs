@@ -7,18 +7,18 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { RUNNER_MARKER, isAgentSubtask, isUserPart, ownRequest, findRepos, mentionedRepos, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveShells, stripHidden } from "./commands.mjs";
+import { FOR_OTHERS, RUNNER_MARKER, deliveredFrom, isAgentSubtask, isUserPart, ownRequest, findRepos, mentionedRepos, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { observes, runAgent } from "./engines.mjs";
 import { gcpSession } from "./gcp.mjs";
-import { syncFiles } from "./files.mjs";
+import { outputs, shareOutputs, syncFiles } from "./files.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureGuardHooks, git, remoteIsEmpty } from "./git.mjs";
 import { codexModels, readApproval, resolveModelAlias, resolveOpenRouterModel, withParent } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
 import { branchGuidance, checkBranchName, chooseBranchName, exampleBranches } from "./branch.mjs";
 import { cleanMessages, leakIn, leaksInternal, stripAttribution, writePrDescription } from "./describe.mjs";
 import { branchesFooter, slackSources, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, subtaskSummary, runOutcome, stripCommitLine } from "./prompt.mjs";
-import { PRIMER_FILE, publishDocument } from "./primer.mjs";
+import { PRIMER_FILE, primerLink, publishDocument, readDocument } from "./primer.mjs";
 import { startRepoHelper } from "./repohelper.mjs";
 import { baseRef, branchChanges, carryOver, dirtyCheckouts, ensureRepo, findBranches, keepBranches, messagesSince, moveOffDefault, readManifest, signUnsigned, workspacePath, workspaceRepos } from "./workspace.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
@@ -486,6 +486,9 @@ async function dispatchReplies() {
   for (const issue of await pc.myOpenIssues()) {
     if ((issue.labels ?? []).some((l) => exclude.has(l.name))) continue;
     let fresh = (await pc.comments(issue.id)).filter((c) => Paperclip.isUserInstruction(c) && c.createdAt >= since && !state.handled(c.id));
+    // A message that @-mentions only other agents went to them (D-54): the Assistant leaves it.
+    for (const c of fresh.filter((c) => String(c.body).includes(FOR_OTHERS))) state.markHandled(c.id, issue.id);
+    fresh = fresh.filter((c) => !String(c.body).includes(FOR_OTHERS));
     if (!fresh.length) continue;
     // An exact "pr" on a parent opens the PRs of all its finished Engineer sub-tasks (D-24), right away.
     if (await handleParentPr(issue, fresh)) fresh = fresh.filter((c) => !state.handled(c.id));
@@ -690,11 +693,39 @@ async function agentEngine(ctx, args) {
   return `This request starts again on ${engineLabel(ctx.engine)} when your run ends, with the whole conversation. End your turn now without doing the work, saying in one line that you're handing over.`;
 }
 
-/** `pennyworth primer`: publish the task's document on Primer after this run and later ones (D-44). */
-async function agentPrimer(ctx) {
-  await allowWrite(ctx, "primer", [`the document the agent writes to ${PRIMER_FILE} in the workspace`]);
-  if (!primerRecord(ctx.issue.id)) savePrimer(ctx.issue.id, {});
-  return `When your run ends, the runner publishes ${PRIMER_FILE} on Primer, and republishes it after every later run that changes it. Write the whole document there.`;
+/**
+ * `pennyworth primer [<link>]`: publish the task's document on Primer after this run and later ones
+ * (D-44): a new document, or new versions of the one the user linked, such as another agent's (D-54).
+ */
+async function agentPrimer(ctx, args) {
+  const link = String(args.link ?? "").trim();
+  const target = link ? primerLink(link) : undefined;
+  if (link && !target) throw new UserError("That isn't a link to a Primer document (…/d/<id>). Use the link the document has in Primer.");
+  await allowWrite(ctx, "primer", [target ? `a new version of the existing Primer document ${target.url} (its earlier versions stay in its history), made from the document the agent writes to ${PRIMER_FILE}` : `the document the agent writes to ${PRIMER_FILE} in the workspace`]);
+  const record = primerRecord(ctx.issue.id);
+  if (target && record?.documentId !== target.documentId) savePrimer(ctx.issue.id, { documentId: target.documentId, url: target.url, linked: true });
+  else if (!record) savePrimer(ctx.issue.id, {});
+  return target
+    ? `When your run ends, the runner adds ${PRIMER_FILE} as a new version of ${target.url}, and again after every later run that changes it. Write the whole document there.`
+    : `When your run ends, the runner publishes ${PRIMER_FILE} on Primer, and republishes it after every later run that changes it. Write the whole document there.`;
+}
+
+/**
+ * `pennyworth pass <name>`: the user's latest message on this task goes to another agent on it (D-54),
+ * word for word, through the board, which checks it's the user's own. For what this agent can't do.
+ */
+async function agentPass(ctx, args) {
+  const to = String(args.to ?? "").trim();
+  if (!to) throw new UserError("Name the agent: `pennyworth pass <name>`.");
+  if (!boardApi) throw new UserError("Passing a message on needs the board, which isn't set up here. Say who could do it instead.");
+  const asked = (await pc.comments(ctx.issue.id)).filter((c) => Paperclip.isUserInstruction(c) && !parseCommand(c.body)).at(-1);
+  if (!asked) throw new UserError(`There's no message from ${cfg.selfName} on this task to pass on.`);
+  const res = await boardApi.post(`/internal/issues/${encodeURIComponent(ctx.issue.identifier)}/pass`, { comment: asked.id, to, ...(ctx.who ? { by: ctx.who } : {}) }).catch((err) => {
+    throw new UserError(`Not passed on: ${String(err.message ?? err).replace(/^board POST \S+ → \d+: /, "").replace(/^\{"error":"(.*)"\}$/, "$1").slice(0, 300)}`);
+  });
+  log("message passed on", { issue: ctx.issue.identifier, to: res.to, part: res.part, passed: res.passed });
+  if (!res.passed) return `Not passed on again: ${res.reason}.`;
+  return `Passed on to ${res.to} (${res.part}), with ${cfg.selfName}'s words and this conversation for context. Say so in one line in your reply; don't do their part yourself.`;
 }
 
 /** `pennyworth reset`: the next turn starts a fresh session (the conversation and the workspace stay). */
@@ -731,18 +762,22 @@ async function crewParent(full) {
 /**
  * An Engineer's part of the user's task (D-45): the task itself with everything said on it, and the
  * latest report of every other crew member on it (an agent's comment, or the runner's report on an
- * Engineer's part). Their whole conversations are a `pennyworth task` away.
+ * Engineer's part). A crew member whose chat the user wrote to this one from (an @-mention, or a message
+ * passed on, D-54) comes with that whole conversation. The rest are a `pennyworth task` away.
  */
 async function crewContext(full) {
   const parent = await crewParent(full);
   if (!parent) return undefined;
-  const [agents, kids] = await Promise.all([pc.agents(), pc.children(parent.id, ALL_STATUSES)]);
+  const [agents, kids, own] = await Promise.all([pc.agents(), pc.children(parent.id, ALL_STATUSES), pc.comments(full.id)]);
+  const from = new Set([full.description, ...own.filter((c) => Paperclip.isUserInstruction(c)).map((c) => c.body)].map(deliveredFrom).filter(Boolean));
   const others = [];
   for (const k of kids) {
     const persona = agents.find((a) => a.id === k.assigneeAgentId)?.metadata?.persona;
     if (k.id === full.id || typeof persona?.name !== "string") continue;
-    const report = (await pc.comments(k.id)).reverse().find((c) => !Paperclip.isUserInstruction(c));
-    if (report) others.push({ name: persona.name, identifier: k.identifier, report: stripHidden(report.body).trim().slice(0, 4000) });
+    const comments = await pc.comments(k.id);
+    const report = [...comments].reverse().find((c) => !Paperclip.isUserInstruction(c));
+    if (from.has(k.identifier)) others.push({ name: persona.name, identifier: k.identifier, conversation: transcript(threadEntries(comments, { user: cfg.selfName, agents, replyBy: persona.name }), { budget: 20_000 }) });
+    else if (report) others.push({ name: persona.name, identifier: k.identifier, report: stripHidden(report.body).trim().slice(0, 4000) });
   }
   return {
     parent: { identifier: parent.identifier, title: parent.title, description: stripHidden(parent.description ?? "").trim(), conversation: transcript(await taskConversation(parent, agents), { budget: 30_000 }) },
@@ -870,7 +905,7 @@ async function startJob({ issue, instructions }) {
     log("job started", { issue: issue.identifier, repos: repos.map((r) => r.slug), engine: engine.kind, resumed });
 
     const branches = state.branches(issue.id);
-    const files = await syncFiles(pc, full, workspace, log);
+    const files = await syncFiles(pc, full, workspace, log, new Set(Object.values(sharedOutputs(issue.id)).map((f) => f.id)));
     const primer = primerRecord(issue.id);
     // The task this is part of and what the others on it found (D-45): on the first run, then again when it changed.
     const crewCtx = await crewContext(full).catch((err) => (log("crew context unavailable", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 200) }), undefined));
@@ -899,7 +934,7 @@ async function startJob({ issue, instructions }) {
       ? followUpPrompt({ user: cfg.selfName, instructions, workspace, repos, branches, files, primer, crew, observe, thread, stand })
       : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, shells: runShells, instructions, files, primer, persona, crew, observe, thread, stand, team: crewNames(engineers) });
     const tipsBefore = await branchTips(workspace);
-    tools = { issue, workspace, words, instructions, kind: engine.kind, signal: controller.signal };
+    tools = { issue, workspace, words, instructions, kind: engine.kind, who: persona?.name, signal: controller.signal };
     const helper = repoHelper.register(tools);
     let result;
     try {
@@ -928,6 +963,7 @@ async function startJob({ issue, instructions }) {
     const rows = await branchRows(issue, workspace);
     const stillDirty = (await dirtyCheckouts(after)).length > 0;
     const primerNote = outcome.finished ? await publishToPrimer(issue, full, workspace) : "";
+    const sharedNote = outcome.finished ? await shareWork(issue, full, workspace) : "";
     const footer = [
       committedNow || tidy.notes.length ? branchesFooter(rows, { multiRepo: new Set(rows.map((r) => r.repo)).size > 1 }) : "",
       ...tidy.notes.map((n) => `_${n}_`),
@@ -935,7 +971,7 @@ async function startJob({ issue, instructions }) {
     ].filter(Boolean);
     if (outcome.finished) {
       // The agent's reply, in its own words. None: a comment that needed no answer ("thanks").
-      const reply = [outcome.silent ? "" : stripCommitLine(result.lastMessage), primerNote, ...(footer.length ? ["---", ...footer] : [])].filter(Boolean).join("\n\n");
+      const reply = [outcome.silent ? "" : stripCommitLine(result.lastMessage), primerNote, sharedNote, ...(footer.length ? ["---", ...footer] : [])].filter(Boolean).join("\n\n");
       await pc.setStatus(issue.id, "in_review", reply.trim() ? `${REPLY_MARKER}${reply}` : undefined);
     } else {
       // Failures also go to review (Paperclip refuses "blocked" without a blocker); the runner says what failed.
@@ -984,6 +1020,21 @@ async function afterTurn(issue, tools) {
 }
 
 // ------------------------------------------------------------------ Primer (D-44)
+
+const sharedOutputs = (issueId) => (state.get(`shared:${issueId}`) ? JSON.parse(state.get(`shared:${issueId}`)) : {});
+
+/**
+ * After a finished run: attach what the Engineer made for others (its Primer document, `.pennyworth/out/`)
+ * to its task, so the user, the board and the other agents can read it (D-54). Resolves with a line for
+ * the reply ("" when nothing changed).
+ */
+async function shareWork(issue, full, workspace) {
+  const res = await shareOutputs(pc, issue, outputs(workspace, readDocument(workspace, full.title)), sharedOutputs(issue.id), log);
+  if (!res.attached.length) return "";
+  state.set(`shared:${issue.id}`, JSON.stringify(res.shared));
+  log("outputs attached", { issue: issue.identifier, files: res.attached.length });
+  return `_Attached to the task: ${res.attached.map((n) => `\`${n}\``).join(", ")}._`;
+}
 
 const primerRecord = (issueId) => (state.get(`primer:${issueId}`) ? JSON.parse(state.get(`primer:${issueId}`)) : undefined);
 const savePrimer = (issueId, record) => state.set(`primer:${issueId}`, JSON.stringify(record));
@@ -1404,6 +1455,7 @@ const repoHelper = startRepoHelper(async ({ issue, workspace }, raw) => {
   merge: agentMerge,
   engine: agentEngine,
   primer: agentPrimer,
+  pass: agentPass,
   reset: agentReset,
   cleanup: agentCleanup,
   task: agentTask,

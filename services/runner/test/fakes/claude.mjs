@@ -57,6 +57,11 @@ if (step === "commit") {
   // A PR description in the workspace, with Claude Code's own footer (and an internal name, for "describe-leak").
   mkdirSync(join(process.cwd(), ".pennyworth"), { recursive: true });
   writeFileSync(join(process.cwd(), ".pennyworth/pr-body.md"), `## Why\n\nTelos is gone.${step === "describe-leak" ? " Tracked in Paperclip." : ""}\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n`);
+} else if (step === "report") {
+  // A report for Primer and a screenshot for the others to read (D-54).
+  mkdirSync(join(process.cwd(), ".pennyworth/out"), { recursive: true });
+  writeFileSync(join(process.cwd(), ".pennyworth/primer.md"), "# Wallet copy, mapped to the app\n\nWhere each string goes.\n");
+  writeFileSync(join(process.cwd(), ".pennyworth/out/move-page.png"), Buffer.from("89504e470d0a1a0a", "hex"));
 } else if (step === "slow") {
   await new Promise((r) => setTimeout(r, 6000));
 }

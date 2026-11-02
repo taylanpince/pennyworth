@@ -325,6 +325,9 @@ kbd {
 .composer textarea { width: 100%; min-height: 56px; max-height: 40vh; resize: vertical; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); outline: none; }
 .composer textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .composer .row-end .muted { font-size: 12px; }
+.mention-offers { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.mention-offer { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface-2); font-size: 13px; cursor: pointer; }
+.mention-offer[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); }
 .attach-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .attach-chip { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; padding: 2px 2px 2px 9px; border-radius: 12px; background: var(--accent-soft); font-size: 12px; overflow-wrap: anywhere; }
 

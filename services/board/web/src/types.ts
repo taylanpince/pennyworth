@@ -193,6 +193,8 @@ export interface IssueView extends Omit<Card, "scheduled" | "recurring" | "worki
   parent: TaskRef | null;
   /** The agents on this task, with each one's latest word (D-45). */
   crew: (CrewMember & { said: { text: string; at: string } | null })[];
+  /** After a reply: the agent's part a message that @-mentioned them went to, instead of this chat (D-54). */
+  movedTo?: string;
 }
 
 /** A file on a task (D-43). */

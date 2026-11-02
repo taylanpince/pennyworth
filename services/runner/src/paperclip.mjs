@@ -109,6 +109,25 @@ export class Paperclip {
     return Buffer.from(await res.arrayBuffer());
   }
 
+  /** Attach a file to a task as the user (D-54: what an Engineer made, for the others to read). */
+  async addAttachment(issueId, name, type, data) {
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(data)], { type }), name);
+    const res = await fetch(new URL(`/api/companies/${this.company}/issues/${encodeURIComponent(issueId)}/attachments`, this.base), {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.key}`, accept: "application/json" },
+      body: form,
+      signal: AbortSignal.timeout(60_000),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`Paperclip POST attachment → ${res.status}: ${text.slice(0, 200)}`);
+    return JSON.parse(text);
+  }
+
+  deleteAttachment(id) {
+    return this.api("DELETE", `/api/attachments/${encodeURIComponent(id)}`);
+  }
+
   async comments(issueId) {
     const list = await this.api("GET", `/api/issues/${encodeURIComponent(issueId)}/comments?order=asc&limit=500`);
     return list.filter((c) => !c.deletedAt);

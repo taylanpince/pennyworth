@@ -133,6 +133,16 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
     history.replaceState(null, "", t === "overview" ? `#/t/${issue.identifier}` : `#/t/${issue.identifier}/${memberIssue(issue.crew.find((m) => m.agent === t)!)}`);
   };
   const who = (key: string) => board.assignees.find((a) => a.key === key);
+  // A message that @-mentioned another agent went to their chat (D-54): open it once the crew shows it.
+  const [moving, setMoving] = useState<string | null>(null);
+  useEffect(() => {
+    const m = moving && issue.crew.find((x) => x.issues.some((i) => i.identifier === moving));
+    if (m) setMoving(null), pick(m.agent);
+  }, [moving, issue.crew]);
+  const moved = (identifier: string) => {
+    setMoving(identifier);
+    void reload();
+  };
 
   return (
     <>
@@ -239,9 +249,9 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
             />
           )}
           {member ? (
-            <AgentPane key={member.agent} task={issue} member={member} focus={focus} board={board} reload={reload} onChanged={onChanged} toast={toast} />
+            <AgentPane key={member.agent} task={issue} member={member} focus={focus} board={board} reload={reload} onChanged={onChanged} toast={toast} moved={moved} />
           ) : (
-            <Overview issue={issue} board={board} editable={editable} update={update} reload={reload} toast={toast} pick={pick} onAdd={() => setAdding(true)} />
+            <Overview issue={issue} board={board} editable={editable} update={update} reload={reload} toast={toast} pick={pick} onAdd={() => setAdding(true)} moved={moved} />
           )}
         </div>
         {details && (
@@ -292,7 +302,7 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
 }
 
 /** The task itself: what it's about, its files, who's on it, and the team chat (the Assistant reads it). */
-function Overview({ issue, board, editable, update, reload, toast, pick, onAdd }: { issue: IssueView; board: Board; editable: boolean; update: (u: Update) => Promise<void>; reload: () => Promise<void>; toast: Props["toast"]; pick: (t: string) => void; onAdd: () => void }) {
+function Overview({ issue, board, editable, update, reload, toast, pick, onAdd, moved }: { issue: IssueView; board: Board; editable: boolean; update: (u: Update) => Promise<void>; reload: () => Promise<void>; toast: Props["toast"]; pick: (t: string) => void; onAdd: () => void; moved: (identifier: string) => void }) {
   const mine = issue.assignee === "me";
   const closed = issue.status === "done" || issue.status === "cancelled";
   const assistant = board.assignees.find((a) => a.kind === "assistant");
@@ -336,7 +346,7 @@ function Overview({ issue, board, editable, update, reload, toast, pick, onAdd }
         {(mine || !issue.crew.length) && <Thread issue={issue} board={board} prefix={board.prefix} title={mine && assistant ? "Team chat" : "Activity"} />}
       </div>
       {editable && (mine || !issue.crew.length) && (
-        <Composer issue={issue} reload={reload} toast={toast} to={mine && assistant ? { assignee: assistant, label: `${shortName(assistant)} reads this and brings in whoever's needed` } : undefined} />
+        <Composer issue={issue} reload={reload} toast={toast} to={mine && assistant ? { assignee: assistant, label: `${shortName(assistant)} reads this; @name brings in someone else` } : undefined} crew={mine ? board.assignees : []} moved={moved} />
       )}
     </>
   );
@@ -346,7 +356,7 @@ const STATE_PILLS: Record<CrewState, string> = { needs: "needs you", failed: "st
 const ENGINE_NAMES: Record<string, string> = { codex: "Codex", claude: "Claude Code", openrouter: "OpenRouter" };
 
 /** One agent's part of the task: who they are, where they stand, and a direct chat with them. */
-function AgentPane({ task, member, focus, board, reload, onChanged, toast }: { task: IssueView; member: Member; focus?: string; board: Board; reload: () => Promise<void>; onChanged: () => void; toast: Props["toast"] }) {
+function AgentPane({ task, member, focus, board, reload, onChanged, toast, moved }: { task: IssueView; member: Member; focus?: string; board: Board; reload: () => Promise<void>; onChanged: () => void; toast: Props["toast"]; moved: (identifier: string) => void }) {
   const agent = board.assignees.find((a) => a.key === member.agent);
   const name = shortName(agent);
   const [selected, setSelected] = useState(() => member.issues.find((i) => i.identifier === focus)?.identifier ?? memberIssue(member));
@@ -475,7 +485,7 @@ function AgentPane({ task, member, focus, board, reload, onChanged, toast }: { t
         {part && !self && <Files issue={part} />}
         {part ? <Thread issue={part} board={board} prefix={board.prefix} agent={agent} title="Chat" /> : <p className="muted">Loading…</p>}
       </div>
-      {part && part.editable && <Composer issue={part} reload={self ? reload : load} toast={toast} to={agent ? { assignee: agent, label: `Direct to ${name}` } : undefined} />}
+      {part && part.editable && <Composer issue={part} reload={self ? reload : load} toast={toast} to={agent ? { assignee: agent, label: `Direct to ${name}; @name brings in someone else` } : undefined} crew={task.assignee === "me" && !self ? board.assignees : []} moved={moved} />}
     </>
   );
 }
@@ -853,7 +863,7 @@ function Files({ issue }: { issue: IssueView }) {
 /** Paperclip's limit for one file. */
 const MAX_FILE = 10 * 1024 * 1024;
 
-function Composer({ issue, reload, toast, to }: { issue: IssueView; reload: () => Promise<void>; toast: Props["toast"]; to?: { assignee: Assignee; label: string } }) {
+function Composer({ issue, reload, toast, to, crew = [], moved }: { issue: IssueView; reload: () => Promise<void>; toast: Props["toast"]; to?: { assignee: Assignee; label: string }; crew?: Assignee[]; moved?: (identifier: string) => void }) {
   const key = `draft:${issue.id}`;
   const [text, setText] = useState(() => {
     try {
@@ -865,6 +875,19 @@ function Composer({ issue, reload, toast, to }: { issue: IssueView; reload: () =
   const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
+  // @-mentions (D-54): the agents with a name, offered while a word starting with @ is typed.
+  const [caret, setCaret] = useState(0);
+  const typed = crew.length ? /(?:^|\s)@([A-Za-z]*)$/.exec(text.slice(0, caret)) : null;
+  const offers = typed ? crew.filter((a) => a.kind !== "me" && a.persona && a.persona.name.toLowerCase().startsWith(typed[1]!.toLowerCase())) : [];
+  function mention(a: Assignee) {
+    const start = caret - typed![1]!.length;
+    const next = `${text.slice(0, start)}${a.persona!.name} ${text.slice(caret)}`;
+    setText(next);
+    const at = start + a.persona!.name.length + 1;
+    setCaret(at);
+    requestAnimationFrame(() => box.current?.setSelectionRange(at, at));
+  }
   useEffect(() => {
     try {
       if (text) localStorage.setItem(key, text);
@@ -889,8 +912,13 @@ function Composer({ issue, reload, toast, to }: { issue: IssueView; reload: () =
         setFiles((now) => now.filter((x) => x !== f));
       }
       if (text.trim()) {
-        await api.comment(issue.id, names.length ? `${text.trimEnd()}\n\nAttached: ${names.map((n) => `\`${n.replace(/`/g, "")}\``).join(", ")}` : text);
+        const view = await api.comment(issue.id, names.length ? `${text.trimEnd()}\n\nAttached: ${names.map((n) => `\`${n.replace(/`/g, "")}\``).join(", ")}` : text);
         setText("");
+        if (view.movedTo && moved) {
+          toast(`Sent to ${view.movedTo}`);
+          moved(view.movedTo);
+          return;
+        }
       } else toast(`Attached ${names.length === 1 ? names[0] : `${names.length} files`}`);
       await reload();
     } catch (e) {
@@ -910,17 +938,30 @@ function Composer({ issue, reload, toast, to }: { issue: IssueView; reload: () =
         add(e.dataTransfer.files);
       }}
     >
+      {offers.length > 0 && (
+        <div className="mention-offers" role="listbox" aria-label="Mention an agent">
+          {offers.map((a) => (
+            <button key={a.key} className="mention-offer" role="option" aria-selected={a === offers[0]} onMouseDown={(e) => (e.preventDefault(), mention(a))}>
+              <Avatar assignee={a} size={16} />
+              {a.persona!.name}
+            </button>
+          ))}
+        </div>
+      )}
       <textarea
+        ref={box}
         placeholder={`${to ? `Message ${shortName(to.assignee)}…` : "Reply…"} (⌘↵ to send; paste or drop files to attach)`}
         value={text}
         rows={2}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => (setText(e.target.value), setCaret(e.target.selectionStart))}
+        onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart)}
         onPaste={(e) => {
           if (!e.clipboardData.files.length) return;
           e.preventDefault();
           add(e.clipboardData.files);
         }}
         onKeyDown={(e) => {
+          if (offers.length && (e.key === "Tab" || (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey))) return e.preventDefault(), mention(offers[0]!);
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.preventDefault(), void send();
           if (e.key === "Escape") (e.target as HTMLTextAreaElement).blur();
         }}
