@@ -149,8 +149,9 @@ async function findByMarker(marker, statuses = OPEN_STATUSES) {
   const token = marker.split(":").pop();
   const q = new URLSearchParams({ q: token.slice(0, 200), status: statuses, limit: "50", excludeRoutineExecutions: "true" });
   const list = await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/issues?${q}`);
-  const needle = `<!-- source:${marker} -->`;
-  return list.find((i) => String(i.description ?? "").includes(needle));
+  // A task merged into another (the board's merge) left its source there as merged-source.
+  const needles = [`<!-- source:${marker} -->`, `<!-- merged-source:${marker} -->`];
+  return list.find((i) => needles.some((n) => String(i.description ?? "").includes(n)));
 }
 
 // Marker → idempotency key, mirroring ops-mcp, so re-runs never duplicate tasks.
@@ -415,8 +416,26 @@ const TOOLS = {
       return boardApi(`/internal/issues/${issueRef(issue)}/recurring`, body);
     },
   },
+  task_merge: {
+    description:
+      "Assistant only, when the user asks in their own comment (\"merge into PEN-12\", \"same as PEN-12\"): merge one of their tasks into another. The board appends its description to the other's word for word, copies its files, moves the user's sub-tasks, and cancels it. A task with an Engineer's work on it is refused with the reason: tell the user. Returns what was merged into what: say so in one line.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        issue: { type: "string", description: "the task to merge away, e.g. PEN-13 (your part of it stands for it)" },
+        into: { type: "string", description: "the task it joins, e.g. PEN-12" },
+      },
+      required: ["issue", "into"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    run: async ({ issue, into }) => {
+      await requireAssistant();
+      return boardApi(`/internal/issues/${issueRef(issue)}/merge`, { into: decodeURIComponent(issueRef(into)) });
+    },
+  },
   task_update: {
-    description: "Update a Paperclip task's title, description or priority (e.g. refresh today's brief). The source marker is preserved.",
+    description: "Update a Paperclip task's title, description or priority (e.g. refresh today's brief). The source markers are preserved.",
     inputSchema: {
       type: "object",
       properties: {
@@ -435,8 +454,8 @@ const TOOLS = {
       if (priority && PRIORITIES.includes(priority)) body.priority = priority;
       if (description !== undefined) {
         const current = await api("GET", `/api/issues/${issueRef(issue)}`);
-        const marker = /<!-- source:[^>]*-->/.exec(current.description ?? "")?.[0];
-        body.description = String(description).replace(/<!--|-->/g, "").slice(0, 60_000) + (marker ? `\n\n${marker}` : "");
+        const markers = String(current.description ?? "").match(/<!-- (?:merged-)?source:[^>]*-->/g) ?? [];
+        body.description = String(description).replace(/<!--|-->/g, "").slice(0, 60_000) + (markers.length ? `\n\n${markers.join("\n")}` : "");
       }
       if (!Object.keys(body).length) throw new Error("nothing to update");
       return brief(await api("PATCH", `/api/issues/${issueRef(issue)}`, body));

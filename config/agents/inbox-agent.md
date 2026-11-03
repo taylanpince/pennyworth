@@ -19,7 +19,7 @@ The user hands email to Pennyworth by applying the Gmail label **`pennyworth`** 
 1. **Find the labelled threads.** `gmail_search` with the query `label:pennyworth`, `max_results` 50, and no `account`, so every account is included. Group the messages by `account` and `thread_id`. Note any account that returned an `error`, or that returned 50 messages (the list may be cut off).
 
 2. **Close tasks whose label was removed:**
-   - `task_list` with `label: "email"`. For each task, `task_get` it and read its marker (`source:gmail:label:<thread_id>`) and the `Account:` line in its Source section.
+   - `task_list` with `label: "email"`. For each task, `task_get` it and read its marker (`source:gmail:label:<thread_id>`) and the `Account:` line in its Source section. Only a task's own `source:` marker counts here: a `merged-source:` marker comes from a task the user merged into it, so never close a task because of one.
    - If that thread is not among the labelled threads from step 1, the user removed the label: call `task_set_status` with status `done` and the comment "Label removed in Gmail".
    - **Never close a task on doubt:** skip this for any task whose account had an error or a cut-off list in step 1.
 

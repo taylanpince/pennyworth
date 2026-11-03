@@ -591,3 +591,15 @@ Pennyworth reads work email, Slack, calendars and documents. The user cleared ru
 - **What Primer does with HTML:** it serves the page in a sandboxed iframe (`allow-scripts`, no same origin), keeps inline `<script>`, strips `<iframe>` and refresh `<meta>`, blocks the clipboard API, and takes up to 10 MB. The prompt asks for one self-contained page within those limits, with data embedded as JSON for large tables.
 - **Unchanged:** the runner still publishes, never the job (D-44); the check on writes covers both files (`config/authorize-cases.yaml` has PEN-3327's request).
 - **Verified:** Ada's 660 KB report went up as version 2 of the audit document through this code; Primer stored it with the report's scripts and data intact.
+
+## D-56: Merging tasks is a board action
+
+- **Problem:** the user merges duplicate tasks often ("Merge into PEN-3007": 17 times between 7 October and 3 November, 5 of them on 3 November). Each one woke Alfred for 3–4 minutes to read both tasks, rewrite the target's description and cancel the duplicate: a fixed procedure done by an agent. Cancelling the duplicate also hid its source marker, so the scouts' `task_create` no longer found an open task for that Slack message or email, and a removed pin couldn't reach the task it had become part of.
+- **Decision:** a merge is code (`services/board/src/merge.ts`, `merge` in `app.ts`), reached by "Merge into" in the task's Details (a picker over the user's open cards, or a typed PEN number) and by Alfred's `task_merge` on the bridge when the user asks in a comment, so plain words keep working.
+- **What a merge does:**
+  - Appends `## Merged from PEN-X: <title>` and the duplicate's description to the target, word for word (the user chose verbatim over a model's rewrite).
+  - Copies its files and moves the user's own sub-tasks to the target.
+  - Cancels the duplicate, its crew's parts, and any scheduled move. The note "Merged into PEN-Y." carries the runner's marker, so it never reaches Alfred.
+  - An agent's part stands for the task it belongs to, on either side.
+- **Merged sources:** the duplicate's `source:` markers go on the target as `merged-source:`. The bridge's `findByMarker` matches both forms, so the same item never gets a new task, and `task_update` and the board's `keepMarkers` keep both forms. The scouts close a task only by its own `source:` marker, never because of a merged one, because removing the pin of a merged-in message shouldn't close the task it joined.
+- **Refused:** merging a task with an Engineer part that isn't cancelled (its workspace, branches and PRs don't move: merge the other way, or dismiss the Engineer first), a recurring task, a closed task on either side, and tasks that aren't the user's.

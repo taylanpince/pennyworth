@@ -10,6 +10,7 @@ import { AddAgentSchema, BadRequest, CreateSchema, HandOverSchema, PassSchema, R
 import { FOR_OTHERS, crewOf, deliveredFrom, deliveredText, foldedChildren, fromMarker, handOverText, mentionedAgents, partsToClose, summaryOf, type DeliveredFrom } from "./crew.js";
 import { inNetworks } from "./config.js";
 import { INLINE_TYPES, MAX_UPLOAD_BODY, UploadSchema, decode, fileType, fileViews, isPdf, pdfText, safeName } from "./files.js";
+import { MergeSchema, mergedDescription } from "./merge.js";
 import { McpAuthFailed, type GleanAuth, type GrafanaAuth } from "./mcpauth.js";
 import { GoogleAuthFailed, loopbackPort, type GoogleAuth } from "./google.js";
 import { Paperclip, PaperclipError, type Issue } from "./paperclip.js";
@@ -327,6 +328,47 @@ export function createApp(opts: AppOptions): Server {
     res.end(data);
   }
 
+  /**
+   * Merge one of the user's tasks into another: its description goes into the other's word for word
+   * (`mergedDescription`), its files are copied and the user's sub-tasks move over, and it's cancelled
+   * with its crew. A task with an Engineer on it is refused: its workspace and branches don't move.
+   */
+  async function merge(ref: string, body: unknown) {
+    const { into } = parse(MergeSchema, body);
+    if (!REF.test(into)) throw new HttpError(400, "bad task reference");
+    const { ctx, issue } = await ownIssue(ref);
+    // An agent's part stands for the user's task it belongs to (D-45).
+    const [source, target] = await Promise.all([userTaskOf(issue, ctx), pc.issue(into).then((i) => userTaskOf(i, ctx))]);
+    if (!source || !target) throw new HttpError(403, "only your own tasks merge");
+    const closed = (i: Issue) => ["done", "cancelled"].includes(i.status);
+    if (source.id === target.id) throw new HttpError(400, "a task can't be merged into itself");
+    if (closed(source)) throw new HttpError(409, `${source.identifier} is already closed`);
+    if (closed(target)) throw new HttpError(409, `${target.identifier} is closed: reopen it first`);
+    if (target.parentId === source.id) throw new HttpError(400, `${target.identifier} is part of ${source.identifier}`);
+    if (store.recurring(source.id)) throw new HttpError(409, `${source.identifier} repeats: stop it first`);
+    const kids = await pc.children(source.id);
+    const kind = (i: Issue) => ctx.assignees.find((a) => a.kind !== "me" && a.key === i.assigneeAgentId)?.kind;
+    const engineers = kids.filter((k) => kind(k) === "engineer" && k.status !== "cancelled");
+    if (engineers.length) {
+      const names = engineers.map((k) => ctx.assignees.find((a) => a.key === k.assigneeAgentId)).map((a) => a?.persona?.name ?? a?.name ?? "an Engineer");
+      throw new HttpError(409, `${source.identifier} has ${[...new Set(names)].join(" and ")}'s work on it, which can't move: merge ${target.identifier} into it instead, or dismiss the Engineer first`);
+    }
+    // Lists truncate descriptions; these come from single reads, so they're whole.
+    const files = await pc.attachments(source.id).catch(() => []);
+    for (const f of files) await pc.addAttachment(target.id, f.originalFilename ?? "file", f.contentType, await pc.attachmentContent(f.id));
+    await pc.updateIssue(target.id, { description: mergedDescription(target, source) });
+    for (const k of kids) if (k.assigneeUserId === ctx.me && !k.assigneeAgentId) await pc.updateIssue(k.id, { parentId: target.id });
+    // The crew's parts close with the task, except one an agent is busy with (the board closes it later).
+    const busy = (await working(ctx)).map;
+    for (const k of kids) if (kind(k) && !closed(k) && !busy.has(k.identifier)) await pc.updateIssue(k.id, { status: "cancelled" });
+    store.unschedule(source.id);
+    // Cancelled first: a comment on a closed task wakes nobody, and the runner's marker keeps it from the Assistant.
+    await pc.updateIssue(source.id, { status: "cancelled" });
+    await pc.addComment(source.id, `Merged into ${target.identifier}.\n\n${RUNNER_MARKER}`);
+    log.info({ issue: source.identifier, into: target.identifier, files: files.length }, "task merged");
+    return { merged: source.identifier, into: target.identifier, files: files.length };
+  }
+
   async function schedule(ref: string, body: unknown) {
     const { issue, assigned } = await ownIssue(ref);
     if (!assigned) throw new HttpError(403, "this task isn't yours or an assistant's");
@@ -346,6 +388,7 @@ export function createApp(opts: AppOptions): Server {
   const internal: typeof routes = [
     { method: "POST", path: /^\/internal\/issues\/([^/]+)\/schedule$/, handle: async (m, body) => schedule(decodeURIComponent(m[1]!), body) },
     { method: "POST", path: /^\/internal\/issues\/([^/]+)\/recurring$/, handle: async (m, body) => recurringChange(decodeURIComponent(m[1]!), body) },
+    { method: "POST", path: /^\/internal\/issues\/([^/]+)\/merge$/, handle: async (m, body) => merge(decodeURIComponent(m[1]!), body) },
     {
       method: "POST",
       path: /^\/internal\/recurring\/claim$/,
@@ -605,6 +648,7 @@ export function createApp(opts: AppOptions): Server {
     },
     { method: "POST", path: /^\/api\/issues\/([^/]+)\/schedule$/, handle: async (m, body) => schedule(decodeURIComponent(m[1]!), body) },
     { method: "POST", path: /^\/api\/issues\/([^/]+)\/recurring$/, handle: async (m, body) => recurringChange(decodeURIComponent(m[1]!), body) },
+    { method: "POST", path: /^\/api\/issues\/([^/]+)\/merge$/, handle: async (m, body) => merge(decodeURIComponent(m[1]!), body) },
     {
       method: "PUT",
       path: /^\/api\/buckets\/([a-z]+)$/,

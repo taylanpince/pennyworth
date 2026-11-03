@@ -25,7 +25,7 @@ Your task gives today's date and the current time, the user's Slack user ID (`Uâ
 
 1. **Close answered items:**
    - `task_list` with `label: "needs-response"`.
-   - For each open task, take the Slack thread from its source marker (`source:slack:<channel>:<ts>`) and read it with `slack_read_thread`.
+   - For each open task, take the Slack thread from its source marker (`source:slack:<channel>:<ts>`) and read it with `slack_read_thread`. Only a task's own `source:` marker counts here: a `merged-source:` marker comes from a task the user merged into it, so never close a task because of one.
    - If `<me>` has replied after the ask, or the ask was withdrawn, call `task_set_status` with status `done` and the comment "Answered in Slack" plus the permalink.
 
 2. **Find candidates.** Run these searches with `response_format: "detailed"`, `include_context: false`, `sort: "timestamp"` and `limit: 20`. Follow at most 2 extra pages per search.
@@ -86,7 +86,7 @@ Your task gives today's date and the current time, the user's Slack user ID (`Uâ
 
 5. **Pinned messages.** Every message the user reacted to with their task emoji is a task, whoever wrote it and however old it is. It stays open until the user removes the reaction or closes the task.
    - **Find them:** search `query: "hasmy:<emoji>"` (e.g. `hasmy::pushpin:`), with `response_format: "detailed"`, `include_context: false`, `sort: "timestamp"` and `limit: 20`, and no date filter. Follow the cursor until there are no more pages, up to 5. The result is complete only if the last page had no cursor and no search failed.
-   - **Close the unpinned:** `task_search` with `query: "source:slack:pin"` and `limit: 50` finds the open pinned tasks. A task whose marker (`source:slack:pin:<channel_id>:<ts>`) is not among the pinned messages lost its reaction: call `task_set_status` with `done` and the comment "Reaction removed in Slack". **Never close on doubt:** skip this if the search wasn't complete.
+   - **Close the unpinned:** `task_search` with `query: "source:slack:pin"` and `limit: 50` finds the open pinned tasks. A task whose marker (`source:slack:pin:<channel_id>:<ts>`) is not among the pinned messages lost its reaction: call `task_set_status` with `done` and the comment "Reaction removed in Slack". **Never close on doubt:** skip this if the search wasn't complete. Only a task's own `source:` marker counts here: a `merged-source:` marker comes from a task the user merged into it, so never close a task because of one.
    - **One task per pinned message.** Read the thread with `slack_read_thread` when the message alone doesn't say what's needed. Then `task_create`:
      - `marker`: `source:slack:pin:<channel_id>:<message ts>`, the pinned message's own `ts`, even inside a thread.
      - `dedupe_closed`: `true`. A task the user already closed is never recreated, even if the reaction is still on.

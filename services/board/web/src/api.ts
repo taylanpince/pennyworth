@@ -65,6 +65,7 @@ export const api = {
   recurring: (ref: string, body: { action: "set"; cadence: Cadence; time: string; repos: string[] } | { action: "pause" | "resume" | "stop" | "run_now" }) =>
     call<{ recurring: RecurringView | null }>("POST", `/api/issues/${encodeURIComponent(ref)}/recurring`, body),
   addAgent: (ref: string, agent: string, instructions: string) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/agents`, { agent, instructions }),
+  merge: (ref: string, into: string) => call<{ merged: string; into: string; files: number }>("POST", `/api/issues/${encodeURIComponent(ref)}/merge`, { into }),
   handOver: (ref: string, from: string, to: string) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/handover`, { from, to }),
   models: (assignee: string) => call<Models>("GET", `/api/models/${assignee}`),
   telegramStart: (phone: string) => call<TelegramStep>("POST", "/api/telegram/start", { phone }),

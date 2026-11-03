@@ -285,6 +285,11 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
                   <Repeats issue={issue} board={board} done={() => (void reload(), onChanged())} toast={toast} />
                 </Prop>
               )}
+              {editable && !closed && mine && !issue.recurring && !issue.parent && (
+                <Prop name="Merge into">
+                  <MergeInto issue={issue} board={board} done={() => (onClose(), onChanged())} toast={toast} />
+                </Prop>
+              )}
               <Prop name="Created">
                 <span className="muted">{when(issue.createdAt)}</span>
               </Prop>
@@ -1064,6 +1069,42 @@ function BringBack({ issue, board, done, toast }: AutoProps) {
       </select>
       <button className="btn" disabled={busy || !date} onClick={() => void save({ date, bucket })}>
         Schedule
+      </button>
+    </span>
+  );
+}
+
+/** Merge this task into another of yours: its description joins that one word for word, and this one is cancelled. */
+function MergeInto({ issue, board, done, toast }: AutoProps) {
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+  const cards = Object.values(board.buckets)
+    .flat()
+    .filter((c) => c.id !== issue.id && c.assignee === "me");
+  const ref = /^\s*([A-Za-z][A-Za-z0-9]*-\d+)\b/.exec(query)?.[1]?.toUpperCase();
+  async function merge() {
+    if (!ref) return;
+    setBusy(true);
+    try {
+      const r = await api.merge(issue.id, ref);
+      toast(`${r.merged} merged into ${r.into}`);
+      done();
+    } catch (e) {
+      toast(`Couldn't merge: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <span className="auto-row">
+      <input list={`merge-${issue.id}`} placeholder={`${board.prefix || "PEN"}-12 or a title`} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void merge()} aria-label="Task to merge into" />
+      <datalist id={`merge-${issue.id}`}>
+        {cards.map((c) => (
+          <option key={c.id} value={`${c.identifier} ${c.title}`} />
+        ))}
+      </datalist>
+      <button className="btn" disabled={busy || !ref} onClick={() => void merge()}>
+        Merge
       </button>
     </span>
   );

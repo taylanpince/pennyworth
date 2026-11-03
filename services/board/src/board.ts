@@ -199,9 +199,9 @@ export function displayText(text: string | null | undefined): string {
   return String(text ?? "").replace(/<!--[\s\S]*?-->/g, "").trim();
 }
 
-/** Keep the source marker when the user edits a description: deduplication depends on it. */
+/** Keep the source markers (merged tasks' too) when the user edits a description: deduplication depends on them. */
 export function keepMarkers(original: string | null | undefined, edited: string): string {
-  const markers = String(original ?? "").match(/<!-- source:[^>]*-->/g) ?? [];
+  const markers = String(original ?? "").match(/<!-- (?:merged-)?source:[^>]*-->/g) ?? [];
   const text = displayText(edited);
   return markers.length ? `${text}\n\n${markers.join("\n")}` : text;
 }

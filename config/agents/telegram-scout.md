@@ -39,7 +39,7 @@ Each candidate comes with:
 ## Each run
 
 1. **Close answered items:**
-   - `task_search` with `query: "source:telegram"` and `limit: 50` finds the open Telegram tasks. Read each with `task_get` for its source marker and `Chat:` line. If there are none, skip to step 2.
+   - `task_search` with `query: "source:telegram"` and `limit: 50` finds the open Telegram tasks. Read each with `task_get` for its source marker and `Chat:` line. If there are none, skip to step 2. Only a task's own `source:` marker counts here: a `merged-source:` marker comes from a task the user merged into it, so never close a task because of one.
    - Call `telegram_followups` once with every such task. Pass each task's `chat_ref` and `message_id` from its source marker (`source:telegram:<chat_ref>:<message_id>`) and its `Chat:` line as `chat_title`.
    - For needs-response tasks: if `user_replied_directly` is true, or the user's messages after it clearly answer the ask, call `task_set_status` with status `done` and the comment "Answered in Telegram (<chat title>)". Do the same if `later_from_others` shows the ask was withdrawn or someone else handled it. Leave it open if the user only posted about something else.
    - For todo tasks (the user's own commitments): close them only if the user's later messages show it was done ("sent", "done", "shared above").
