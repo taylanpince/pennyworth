@@ -32,7 +32,7 @@ const google = cfg.google && new GoogleAuth(cfg.google.url, cfg.google.token, lo
 const telegram = cfg.telegram && new TelegramAuth(cfg.telegram.url, cfg.telegram.token, log);
 const glean = cfg.glean && new GleanAuth(cfg.glean.url, cfg.glean.token, log);
 const grafana = cfg.grafana && new GrafanaAuth(cfg.grafana.url, cfg.grafana.token, log);
-const common = { paperclip, store, log, staticDir: cfg.staticDir, timezone: cfg.timezone, workdays: cfg.workdays, lan: cfg.lan, activity: {}, google, telegram, glean, grafana };
+const common = { paperclip, store, log, staticDir: cfg.staticDir, timezone: cfg.timezone, workdays: cfg.workdays, slackTeams: cfg.slackTeams, lan: cfg.lan, activity: {}, google, telegram, glean, grafana };
 const server = createApp({ ...common, allowedHosts: cfg.allowedHosts, mode: "local" });
 server.listen(cfg.port, "0.0.0.0", () => log.info({ port: cfg.port, hosts: cfg.allowedHosts }, "board listening"));
 // Phones on the home network (D-23): a separate port, paired devices only.

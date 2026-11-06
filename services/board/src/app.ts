@@ -27,6 +27,8 @@ export interface AppOptions {
   timezone: string;
   /** The days Tomorrow rolls into Today (D-28); Monday to Friday when not given. */
   workdays?: Weekday[];
+  /** Slack host → workspace or organization ID, so the web app opens Slack links in the desktop app. */
+  slackTeams?: Record<string, string>;
   /**
    * "local": the loopback listener, trusted as the user. "lan": the home-network listener (D-23):
    * only clients from `lan.clients`, and the API only for paired devices (session cookie).
@@ -546,7 +548,7 @@ export function createApp(opts: AppOptions): Server {
         // When Tomorrow next rolls into Today: the next calendar day, except before days off.
         const today = localDate(opts.timezone);
         const rollsOn = nextWorkday(today, opts.workdays ?? WORKWEEK);
-        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, rollsOn, rollsTomorrow: rollsOn === addDays(today, 1), buckets: board.buckets, agentsActive: busy.active, google: google ?? null, telegram: telegram ?? null, glean: glean ?? null, grafana: grafana ?? null };
+        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, slackTeams: opts.slackTeams ?? {}, rollsOn, rollsTomorrow: rollsOn === addDays(today, 1), buckets: board.buckets, agentsActive: busy.active, google: google ?? null, telegram: telegram ?? null, glean: glean ?? null, grafana: grafana ?? null };
       },
     },
     { method: "GET", path: /^\/api\/issues\/([^/]+)$/, handle: async (m) => issueView(decodeURIComponent(m[1]!)) },

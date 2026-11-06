@@ -129,6 +129,8 @@ export interface Board {
   labels: Label[];
   prefix: string;
   timezone: string;
+  /** Slack host → the ID its slack:// links need. */
+  slackTeams: Record<string, string>;
   /** The next workday, when Tomorrow rolls into Today (D-28). */
   rollsOn: string;
   rollsTomorrow: boolean;

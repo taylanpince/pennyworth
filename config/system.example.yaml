@@ -4,6 +4,10 @@
 timezone: Europe/Madrid
 # The board rolls Tomorrow into Today only on these days (Friday's Tomorrow lands on Monday).
 workdays: [monday, tuesday, wednesday, thursday, friday]
+# The board opens Slack links in the Slack app (no browser tab). The ID per Slack host is the
+# team= in the app's own slack:// links: the organization's E… ID on Enterprise Grid, else T….
+slack:
+  teams: {}            # e.g. { acme.enterprise.slack.com: E0123456789 }
 
 # Your names/emails as they appear in calendar invites and transcripts. Used to
 # exclude you from attendee evidence and to decide which action items are yours.

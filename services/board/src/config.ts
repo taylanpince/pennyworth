@@ -8,6 +8,8 @@ const SystemSchema = z.object({
   /** The days Tomorrow rolls into Today (D-28). */
   workdays: z.array(z.enum(WEEKDAYS)).min(1).default(["monday", "tuesday", "wednesday", "thursday", "friday"]),
   paperclip: z.object({ company_id: z.string().uuid() }),
+  /** Slack hosts → the ID the desktop app opens them with, so the board's Slack links open the app. */
+  slack: z.object({ teams: z.record(z.string().regex(/^[a-z0-9.-]+\.slack\.com$/), z.string().regex(/^[TE][A-Z0-9]+$/)).default({}) }).default({ teams: {} }),
 });
 
 export interface Config {
@@ -16,6 +18,8 @@ export interface Config {
   boardKey: string;
   timezone: string;
   workdays: Weekday[];
+  /** Slack host → workspace or organization ID (E… on Enterprise Grid), for slack:// links. */
+  slackTeams: Record<string, string>;
   dbPath: string;
   port: number;
   /** Host headers the board answers to (DNS-rebinding guard), e.g. localhost:3120. */
@@ -52,6 +56,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     boardKey: readFileSync(env.BOARD_KEY_FILE ?? "/run/secrets/paperclip_board_key", "utf8").trim(),
     timezone: system.timezone,
     workdays: system.workdays,
+    slackTeams: system.slack.teams,
     dbPath: env.BOARD_DB ?? "/data/board/board.sqlite",
     port,
     allowedHosts: hosts,

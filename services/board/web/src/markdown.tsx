@@ -1,6 +1,13 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useEffect, useMemo, useRef } from "react";
+import { slackAppLink } from "./slack";
+
+let slackTeams: Record<string, string> = {};
+/** Slack host → ID, from the board: links to those hosts open the Slack app, without a tab. */
+export function setSlackTeams(teams: Record<string, string>) {
+  slackTeams = teams;
+}
 
 // Task text comes from Slack, email and meetings: untrusted. Render Markdown, then sanitise; no
 // images (tracking pixels), forms or styles. Links open in a new tab without a referrer.
@@ -8,6 +15,12 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   if (node.tagName === "A") {
     const href = node.getAttribute("href") ?? "";
     if (href.startsWith("#/")) return; // a task reference inside the board
+    const app = slackAppLink(href, slackTeams);
+    if (app) {
+      node.setAttribute("href", app);
+      node.setAttribute("title", href);
+      return;
+    }
     node.setAttribute("target", "_blank");
     node.setAttribute("rel", "noopener noreferrer");
   }

@@ -21,7 +21,7 @@ import { CrewView } from "./Agents";
 import { PairRequired, api, type Session } from "./api";
 import { CardView, GleanBanner, GoogleBanner, GrafanaBanner, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
 import { CrewPicker, Drawer } from "./Drawer";
-import { Markdown } from "./markdown";
+import { Markdown, setSlackTeams } from "./markdown";
 import { PairScreen, PhonePanel } from "./Pairing";
 import { BUCKETS, BUCKET_NAMES, type Board, type Bucket, type Card } from "./types";
 import { matches } from "./util";
@@ -156,6 +156,7 @@ export function App() {
     try {
       const b = await api.board();
       if (n !== seq.current) return;
+      setSlackTeams(b.slackTeams ?? {});
       setBoard(b);
       setError("");
       setNeedsPairing(false);
