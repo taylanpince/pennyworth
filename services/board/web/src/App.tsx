@@ -265,6 +265,21 @@ export function App() {
     }
   }
 
+  /** Merge a task into another of yours from the board (D-56): it's cancelled, so it leaves its column. */
+  async function mergeCard(card: Card, into: Card) {
+    const cur = itemsRef.current;
+    const b = bucketOf(card.id);
+    if (cur && b) hold(), setItems({ ...cur, [b]: cur[b].filter((c) => c.id !== card.id) });
+    try {
+      const r = await api.merge(card.id, into.identifier);
+      toast(`${r.merged} merged into ${r.into}`, { label: "Open", run: () => go(`#/t/${r.into}`) });
+      void refresh(true);
+    } catch (e) {
+      toast(`Couldn't merge: ${(e as Error).message}`);
+      void refresh(true);
+    }
+  }
+
   /** All of Today's carried-over tasks at once (D-28): keep them for today, or move them on. */
   async function carriedAction(action: "keep" | "tomorrow" | "later") {
     const cur = itemsRef.current;
@@ -430,6 +445,7 @@ export function App() {
       if (!p) return;
       const card = lists[p.b][p.i]!;
       if (k === "Enter" || k === "o") return go(`#/t/${card.identifier}`);
+      if (k === "m") return e.preventDefault(), document.querySelector<HTMLButtonElement>(`[data-card="${card.id}"] [aria-label="Merge into"]`)?.click();
       if (k === "e" || k === "x") {
         const next = lists[p.b][p.i + 1] ?? lists[p.b][p.i - 1];
         setSelected(next?.id ?? null);
@@ -464,6 +480,7 @@ export function App() {
   // Agents waiting on you (D-45): a question or result to read, a stuck run, or a proposal to approve.
   const waiting = [...BUCKETS.flatMap((b) => items[b]), ...board.recurring].flatMap((c) => (c.crew ?? []).filter((m) => m.state === "needs" || m.state === "failed" || m.state === "proposed").map((m) => `${c.identifier}/${memberIssue(m)}`));
   const counts = Object.fromEntries(BUCKETS.map((b) => [b, items[b].length])) as Record<Bucket, number>;
+  const mergeTargets = BUCKETS.flatMap((b) => items[b]).filter((c) => c.assignee === "me" && !c.recurring);
   const openCard = (c: Card) => {
     setSelected(c.id);
     go(`#/t/${c.identifier}`);
@@ -558,6 +575,8 @@ export function App() {
               onDone={markDone}
               onMove={(c, to) => void moveCard(c.id, to)}
               onSnooze={(c, date) => void snoozeCard(c.id, date)}
+              onMerge={(c, into) => void mergeCard(c, into)}
+              mergeTargets={mergeTargets}
               onAdd={(title) => addTask(title, b)}
               onCarried={b === "today" ? (action) => void carriedAction(action) : undefined}
               addRef={b === "triage" ? addRef : undefined}
@@ -678,13 +697,15 @@ interface ColumnProps {
   onDone: (c: Card) => void;
   onMove: (c: Card, b: Bucket) => void;
   onSnooze: (c: Card, date: string) => void;
+  onMerge: (c: Card, into: Card) => void;
+  mergeTargets: Card[];
   onAdd: (title: string) => Promise<void>;
   onCarried?: (action: "keep" | "tomorrow" | "later") => void;
   addRef?: React.RefObject<HTMLInputElement | null>;
   timezone: string;
 }
 
-function Column({ bucket, cards, total, board, selected, dragDisabled, onOpen, onDone, onMove, onSnooze, onAdd, onCarried, addRef, timezone }: ColumnProps) {
+function Column({ bucket, cards, total, board, selected, dragDisabled, onOpen, onDone, onMove, onSnooze, onMerge, mergeTargets, onAdd, onCarried, addRef, timezone }: ColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: bucket });
   const [adding, setAdding] = useState(bucket === "triage");
   const [title, setTitle] = useState("");
@@ -739,25 +760,40 @@ function Column({ bucket, cards, total, board, selected, dragDisabled, onOpen, o
       )}
       <div className="col-body" ref={setNodeRef}>
         {carried > 0 && (
-          <div className="carried-bar">
-            <span title="Left unfinished from earlier days: keep them for today, or move them on">
-              Carried over · <b>{carried}</b>
+          <div className="carried-bar" title="Left unfinished from earlier days: keep them for today, or move them on">
+            <span className="carried-text">
+              <b>{carried}</b> carried over
             </span>
-            <span className="spacer" />
-            <button className="btn" title="Keep them for today" onClick={() => onCarried!("keep")}>
-              Keep
-            </button>
-            <button className="btn" onClick={() => onCarried!("tomorrow")}>
-              → Tomorrow
-            </button>
-            <button className="btn" onClick={() => onCarried!("later")}>
-              → Later
-            </button>
+            <span className="carried-actions">
+              <button className="btn" title="Keep them for today" onClick={() => onCarried!("keep")}>
+                Keep
+              </button>
+              <button className="btn" title="Move them to Tomorrow" onClick={() => onCarried!("tomorrow")}>
+                → Tomorrow
+              </button>
+              <button className="btn" title="Move them to Later" onClick={() => onCarried!("later")}>
+                → Later
+              </button>
+            </span>
           </div>
         )}
         <SortableContext id={bucket} items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           {cards.map((c) => (
-            <SortableCard key={c.id} card={c} assignees={board.assignees} selected={c.id === selected} disabled={dragDisabled} onOpen={onOpen} onDone={onDone} onMove={onMove} onSnooze={onSnooze} timezone={timezone} current={bucket} />
+            <SortableCard
+              key={c.id}
+              card={c}
+              assignees={board.assignees}
+              selected={c.id === selected}
+              disabled={dragDisabled}
+              onOpen={onOpen}
+              onDone={onDone}
+              onMove={onMove}
+              onSnooze={onSnooze}
+              onMerge={onMerge}
+              targets={mergeTargets}
+              timezone={timezone}
+              current={bucket}
+            />
           ))}
         </SortableContext>
         {!cards.length && <p className="empty">{total ? "No matches." : bucket === "triage" ? "All sorted." : "Nothing here."}</p>}
@@ -773,6 +809,7 @@ function Help() {
     ["Enter", "Open task"],
     ["e", "Done"],
     ["1 – 5", "Move to Triage, Today, Tomorrow, Later, Backlog"],
+    ["m", "Merge into another task"],
     ["J / K  ⇧↓ ⇧↑", "Move down / up in the column"],
     ["c", "New task, for you or someone in the crew (lands in Triage)"],
     ["/", "Search"],

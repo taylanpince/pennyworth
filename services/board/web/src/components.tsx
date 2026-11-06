@@ -1,9 +1,10 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { api } from "./api";
 import { BUCKETS, BUCKET_NAMES, type Assignee, type Board, type Bucket, type Card, type CrewMember, type CrewState, type Working } from "./types";
-import { SOURCE_NAMES, STATUS_BADGE, addDays, agentShort, ago, elapsed, shortDate, shortName, snoozeOptions, todayIn } from "./util";
+import { SOURCE_NAMES, STATUS_BADGE, addDays, agentShort, ago, elapsed, matches, shortDate, shortName, snoozeOptions, todayIn } from "./util";
 
 /** A crew member's portrait (D-45), or a coloured letter for you and agents without one. */
 export function Avatar({ assignee, size }: { assignee: Assignee | undefined; size?: number }) {
@@ -112,11 +113,14 @@ interface CardProps {
   onMove?: (card: Card, bucket: Bucket) => void;
   /** Snooze into Backlog until a date; needs the board's timezone for the presets. */
   onSnooze?: (card: Card, date: string) => void;
+  /** Merge into another of your tasks, picked from `targets`. */
+  onMerge?: (card: Card, into: Card) => void;
+  targets?: Card[];
   timezone?: string;
   current?: Bucket;
 }
 
-export function CardView({ card, assignees, selected, overlay, closed, onOpen, onDone, onMove, onSnooze, timezone, current }: CardProps) {
+export function CardView({ card, assignees, selected, overlay, closed, onOpen, onDone, onMove, onSnooze, onMerge, targets, timezone, current }: CardProps) {
   const assignee = assignees.find((a) => a.key === card.assignee);
   const executor = card.executor && [card.executor.model, card.executor.effort].filter(Boolean).join(" · ");
   return (
@@ -127,43 +131,47 @@ export function CardView({ card, assignees, selected, overlay, closed, onOpen, o
     >
       <div className="card-title">{card.title}</div>
       {card.crew && <CrewRow card={card} crew={card.crew} assignees={assignees} />}
-      <div className="card-meta">
-        <span className="ident">{card.identifier}</span>
-        <Chips card={card.crew ? { ...card, working: undefined } : card} />
-        {card.scheduled && (
-          <span className="tag when" title={`Moves to the top of ${BUCKET_NAMES[card.scheduled.bucket]} on ${card.scheduled.date}`}>
-            ↑ {BUCKET_NAMES[card.scheduled.bucket]} {shortDate(card.scheduled.date)}
+      <div className="card-foot">
+        <div className="card-meta">
+          <span className="ident">{card.identifier}</span>
+          <Chips card={card.crew ? { ...card, working: undefined } : card} />
+          {card.scheduled && (
+            <span className="tag when" title={`Moves to the top of ${BUCKET_NAMES[card.scheduled.bucket]} on ${card.scheduled.date}`}>
+              ↑ {BUCKET_NAMES[card.scheduled.bucket]} {shortDate(card.scheduled.date)}
+            </span>
+          )}
+          {card.carried ? (
+            <span className="tag carried" title={`Left unfinished in Today for ${card.carried} workday${card.carried === 1 ? "" : "s"}`}>
+              Carried {card.carried}d
+            </span>
+          ) : null}
+          {card.recurring && (
+            <span className="tag when" title={card.recurring.summary}>
+              ↻ {card.recurring.paused ? "Paused" : card.recurring.nextRun ? `Next ${shortDate(card.recurring.nextRun)}` : card.recurring.summary}
+            </span>
+          )}
+          <span className="spacer" />
+          {executor && <span className="exec" title="Model override">{executor}</span>}
+          <span className="time" title={new Date(card.activityAt).toLocaleString()}>
+            {ago(card.activityAt)}
           </span>
+          {assignee?.kind !== "me" && !card.crew && <Avatar assignee={assignee} />}
+        </div>
+        {/* On a phone the actions sit at the end of the meta row; elsewhere they float over the card on hover. */}
+        {!overlay && !closed && (onDone || onMove) && (
+          <div className="card-actions" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+            {onSnooze && timezone && !card.recurring && <SnoozeMenu timezone={timezone} onPick={(d) => onSnooze(card, d)} />}
+            {onMove && <MoveMenu current={current} onPick={(b) => onMove(card, b)} />}
+            {onMerge && targets && card.assignee === "me" && !card.recurring && <MergeMenu card={card} targets={targets} onPick={(into) => onMerge(card, into)} />}
+            {onDone && (
+              <button className="icon-btn" title="Done (e)" aria-label="Mark done" onClick={() => onDone(card)}>
+                <CheckIcon />
+              </button>
+            )}
+          </div>
         )}
-        {card.carried ? (
-          <span className="tag carried" title={`Left unfinished in Today for ${card.carried} workday${card.carried === 1 ? "" : "s"}`}>
-            Carried {card.carried}d
-          </span>
-        ) : null}
-        {card.recurring && (
-          <span className="tag when" title={card.recurring.summary}>
-            ↻ {card.recurring.paused ? "Paused" : card.recurring.nextRun ? `Next ${shortDate(card.recurring.nextRun)}` : card.recurring.summary}
-          </span>
-        )}
-        <span className="spacer" />
-        {executor && <span className="exec" title="Model override">{executor}</span>}
-        <span className="time" title={new Date(card.activityAt).toLocaleString()}>
-          {ago(card.activityAt)}
-        </span>
-        {assignee?.kind !== "me" && !card.crew && <Avatar assignee={assignee} />}
       </div>
       {card.unread && <span className="dot" title="New activity" />}
-      {!overlay && !closed && (onDone || onMove) && (
-        <div className="card-actions" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
-          {onSnooze && timezone && !card.recurring && <SnoozeMenu timezone={timezone} onPick={(d) => onSnooze(card, d)} />}
-          {onMove && <MoveMenu current={current} onPick={(b) => onMove(card, b)} />}
-          {onDone && (
-            <button className="icon-btn" title="Done (e)" aria-label="Mark done" onClick={() => onDone(card)}>
-              <CheckIcon />
-            </button>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -184,22 +192,71 @@ export function SortableCard(props: CardProps & { disabled?: boolean }) {
   );
 }
 
+/**
+ * A menu opened from a button. It's drawn on the page itself, over everything (the drawer too), below
+ * the button or above it when there's no room, and always inside the window: drawn inside a card, the
+ * column's scroll box used to cut it off. Clicks inside still reach the button's own handlers (a portal
+ * keeps React's event tree), so a card doesn't open when you pick something.
+ */
+function Popover({ anchor, onClose, className, children }: { anchor: HTMLElement | null; onClose: () => void; className?: string; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || !anchor) return;
+    const place = () => {
+      const a = anchor.getBoundingClientRect();
+      if (!a.width && !a.height) return; // the button is hidden for a moment: stay put
+      const { width, height } = el.getBoundingClientRect();
+      const m = 8;
+      const left = Math.max(m, Math.min(a.right - width, innerWidth - width - m));
+      const below = a.bottom + 4;
+      const above = a.top - 4 - height;
+      const top = below + height <= innerHeight - m ? below : above >= m ? above : Math.max(m, innerHeight - height - m);
+      setPos((p) => (p && p.left === left && p.top === top ? p : { left, top }));
+    };
+    place();
+    const sizes = new ResizeObserver(place);
+    sizes.observe(el);
+    addEventListener("resize", place);
+    addEventListener("scroll", place, true);
+    return () => {
+      sizes.disconnect();
+      removeEventListener("resize", place);
+      removeEventListener("scroll", place, true);
+    };
+  }, [anchor]);
+  useEffect(() => {
+    const outside = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && !anchor?.contains(e.target as Node) && close.current();
+    // Escape closes the menu only, not the task behind it.
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && (e.stopPropagation(), close.current());
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", esc, true);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", esc, true);
+    };
+  }, [anchor]);
+  return createPortal(
+    <div ref={ref} className={`menu popover${className ? ` ${className}` : ""}`} role="menu" style={pos ? { left: pos.left, top: pos.top } : { left: 0, top: 0, visibility: "hidden" }}>
+      {children}
+    </div>,
+    document.body,
+  );
+}
+
 export function MoveMenu({ current, onPick, label }: { current?: Bucket; onPick: (b: Bucket) => void; label?: ReactNode }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    document.addEventListener("pointerdown", close);
-    return () => document.removeEventListener("pointerdown", close);
-  }, [open]);
+  const ref = useRef<HTMLButtonElement>(null);
   return (
-    <div className="menu-wrap" ref={ref}>
-      <button className={label ? "btn" : "icon-btn"} title="Move to…" aria-label="Move to" onClick={() => setOpen(!open)}>
+    <div className={`menu-wrap${open ? " open" : ""}`}>
+      <button ref={ref} className={label ? "btn" : "icon-btn"} title="Move to…" aria-label="Move to" onClick={() => setOpen(!open)}>
         {label ?? <MoveIcon />}
       </button>
       {open && (
-        <div className="menu" role="menu">
+        <Popover anchor={ref.current} onClose={() => setOpen(false)}>
           {BUCKETS.map((b, i) => (
             <button
               key={b}
@@ -214,7 +271,7 @@ export function MoveMenu({ current, onPick, label }: { current?: Bucket; onPick:
               <kbd>{i + 1}</kbd>
             </button>
           ))}
-        </div>
+        </Popover>
       )}
     </div>
   );
@@ -225,21 +282,16 @@ export function SnoozeMenu({ timezone, onPick, label }: { timezone: string; onPi
   const [open, setOpen] = useState(false);
   const [picking, setPicking] = useState(false);
   const [date, setDate] = useState("");
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    document.addEventListener("pointerdown", close);
-    return () => document.removeEventListener("pointerdown", close);
-  }, [open]);
+  const ref = useRef<HTMLButtonElement>(null);
   const today = todayIn(timezone);
   const pick = (d: string) => {
     setOpen(false);
     onPick(d);
   };
   return (
-    <div className="menu-wrap" ref={ref}>
+    <div className={`menu-wrap${open ? " open" : ""}`}>
       <button
+        ref={ref}
         className={label ? "btn" : "icon-btn"}
         title="Snooze: back on top of Today on…"
         aria-label="Snooze"
@@ -248,7 +300,7 @@ export function SnoozeMenu({ timezone, onPick, label }: { timezone: string; onPi
         {label ?? <ClockIcon />}
       </button>
       {open && (
-        <div className="menu" role="menu">
+        <Popover anchor={ref.current} onClose={() => setOpen(false)}>
           <div className="menu-head">Back on top of Today</div>
           {snoozeOptions(today).map((o) => (
             <button key={o.label} role="menuitem" onClick={() => pick(o.date)}>
@@ -268,7 +320,77 @@ export function SnoozeMenu({ timezone, onPick, label }: { timezone: string; onPi
               <span>Pick a date…</span>
             </button>
           )}
-        </div>
+        </Popover>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Merge this task into another of yours, without opening it: type to find the other task, pick it,
+ * then confirm (merging cancels this one). The board does the merge in code (D-56).
+ */
+export function MergeMenu({ card, targets, onPick, label }: { card: Pick<Card, "id" | "identifier">; targets: Card[]; onPick: (into: Card) => void; label?: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [chosen, setChosen] = useState<Card | null>(null);
+  const [hi, setHi] = useState(0);
+  const ref = useRef<HTMLButtonElement>(null);
+  const found = open ? targets.filter((c) => c.id !== card.id && matches(c, query)).slice(0, 8) : [];
+  const toggle = () => (setOpen(!open), setQuery(""), setChosen(null), setHi(0));
+  const merge = (into: Card) => {
+    setOpen(false);
+    onPick(into);
+  };
+  return (
+    <div className={`menu-wrap${open ? " open" : ""}`}>
+      <button ref={ref} className={label ? "btn" : "icon-btn"} title="Merge into another task (m)" aria-label="Merge into" onClick={toggle}>
+        {label ?? <MergeIcon />}
+      </button>
+      {open && (
+        <Popover anchor={ref.current} onClose={() => setOpen(false)} className="merge-menu">
+          {chosen ? (
+            <div className="merge-confirm">
+              <p>
+                Merge <b>{card.identifier}</b> into <b>{chosen.identifier}</b>?
+              </p>
+              <p className="muted small">Its description and files join {chosen.identifier}, and {card.identifier} is cancelled.</p>
+              <div className="row-end">
+                <button className="btn" onClick={() => setChosen(null)}>
+                  Back
+                </button>
+                <button className="btn primary" autoFocus onClick={() => merge(chosen)}>
+                  Merge
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="menu-head">Merge {card.identifier} into…</div>
+              <input
+                className="menu-search"
+                autoFocus
+                placeholder="Search your tasks"
+                value={query}
+                onChange={(e) => (setQuery(e.target.value), setHi(0))}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowDown" || e.key === "ArrowUp") e.preventDefault(), setHi((h) => Math.max(0, Math.min(found.length - 1, h + (e.key === "ArrowDown" ? 1 : -1))));
+                  if (e.key === "Enter" && found[hi]) e.preventDefault(), setChosen(found[hi]!);
+                }}
+                aria-label="Task to merge into"
+              />
+              <div className="merge-list">
+                {found.map((c, i) => (
+                  <button key={c.id} role="menuitem" className={i === hi ? "hi" : ""} onMouseEnter={() => setHi(i)} onClick={() => setChosen(c)}>
+                    <span className="merge-title">{c.title}</span>
+                    <span className="ident">{c.identifier}</span>
+                  </button>
+                ))}
+                {!found.length && <p className="menu-head">No other tasks of yours match.</p>}
+              </div>
+            </>
+          )}
+        </Popover>
       )}
     </div>
   );
@@ -290,6 +412,11 @@ export const ClockIcon = () => (
   <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
     <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.5" />
     <path d="M8 5v3.2l2.2 1.4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+export const MergeIcon = () => (
+  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+    <path d="M4 2.5v2c0 2.5 4 3.2 4 6v3M12 2.5v2c0 2.5-4 3.2-4 6M5.8 11.4L8 13.6l2.2-2.2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
 export const CloseIcon = () => (

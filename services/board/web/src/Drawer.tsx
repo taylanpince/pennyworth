@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { Avatar, Chips, CloseIcon, CrewAvatar, MoveMenu, SnoozeMenu, memberIssue } from "./components";
+import { Avatar, Chips, CloseIcon, CrewAvatar, MergeMenu, MoveMenu, SnoozeMenu, memberIssue } from "./components";
 import { Markdown } from "./markdown";
 import { BUCKETS, BUCKET_NAMES, WEEKDAYS, type Assignee, type Board, type Bucket, type Cadence, type CommentView, type CrewState, type IssueView, type Label, type Models, type Update, type Weekday } from "./types";
 import { PRIORITIES, PRIORITY_NAMES, ago, elapsed, runTime, shortName, todayIn, when } from "./util";
@@ -172,6 +172,19 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
             }}
           />
         )}
+        {editable && !closed && mine && !issue.recurring && !issue.parent && (
+          <MergeMenu
+            card={issue}
+            label="Merge"
+            targets={BUCKETS.flatMap((b) => board.buckets[b]).filter((c) => c.assignee === "me" && !c.recurring)}
+            onPick={(into) =>
+              void api.merge(issue.id, into.identifier).then(
+                (r) => (toast(`${r.merged} merged into ${r.into}`, { label: "Open", run: () => (location.hash = `#/t/${r.into}`) }), onClose(), onChanged()),
+                (e) => toast(`Couldn't merge: ${(e as Error).message}`),
+              )
+            }
+          />
+        )}
         <button className={`btn${details ? " on" : ""}`} onClick={() => setDetails(!details)} title="Priority, labels, schedule, repeat">
           Details
         </button>
@@ -262,43 +275,36 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
                 <CloseIcon />
               </button>
             </div>
-            <section className="props">
-              <Prop name="Priority">
-                <select disabled={!editable || busy} value={issue.priority} onChange={(e) => void update({ priority: e.target.value as Update["priority"] })}>
-                  {PRIORITIES.map((p) => (
-                    <option key={p} value={p}>
-                      {PRIORITY_NAMES[p]}
-                    </option>
-                  ))}
-                </select>
-              </Prop>
-              <Prop name="Labels">
-                <Labels all={board.labels} selected={issue.labelIds} disabled={!editable || busy} save={(labelIds) => update({ labelIds })} />
-              </Prop>
-              {editable && !closed && !issue.recurring && !issue.parent && (
-                <Prop name="Bring back">
-                  <BringBack issue={issue} board={board} done={() => (void reload(), onChanged())} toast={toast} />
-                </Prop>
-              )}
-              {editable && !closed && (issue.recurring || mine) && (
-                <Prop name="Repeats">
-                  <Repeats issue={issue} board={board} done={() => (void reload(), onChanged())} toast={toast} />
-                </Prop>
-              )}
-              {editable && !closed && mine && !issue.recurring && !issue.parent && (
-                <Prop name="Merge into">
-                  <MergeInto issue={issue} board={board} done={() => (onClose(), onChanged())} toast={toast} />
-                </Prop>
-              )}
-              <Prop name="Created">
-                <span className="muted">{when(issue.createdAt)}</span>
-              </Prop>
-            </section>
-            {editable && !closed && (
-              <button className="btn details-cancel" disabled={busy} onClick={() => void setStatus("cancelled")}>
-                Cancel task
-              </button>
+            <DetailSection title="Priority">
+              <div className="seg seg-fill" role="radiogroup" aria-label="Priority">
+                {PRIORITIES.map((p) => (
+                  <button key={p} role="radio" aria-checked={issue.priority === p} className={`prio-${p}${issue.priority === p ? " on" : ""}`} disabled={!editable || busy} onClick={() => issue.priority !== p && void update({ priority: p })}>
+                    {PRIORITY_NAMES[p]}
+                  </button>
+                ))}
+              </div>
+            </DetailSection>
+            <DetailSection title="Labels">
+              <Labels all={board.labels} selected={issue.labelIds} disabled={!editable || busy} save={(labelIds) => update({ labelIds })} />
+            </DetailSection>
+            {editable && !closed && !issue.recurring && !issue.parent && (
+              <DetailSection title="Bring back" hint="Moves it to the top of a column on a date.">
+                <BringBack issue={issue} board={board} done={() => (void reload(), onChanged())} toast={toast} />
+              </DetailSection>
             )}
+            {editable && !closed && (issue.recurring || mine) && (
+              <DetailSection title="Repeats" hint={issue.recurring ? undefined : "Runs its description on a schedule; each run lands on top of Today."}>
+                <Repeats issue={issue} board={board} done={() => (void reload(), onChanged())} toast={toast} />
+              </DetailSection>
+            )}
+            <footer className="details-foot">
+              <span className="muted small">Created {when(issue.createdAt)}</span>
+              {editable && !closed && (
+                <button className="btn danger" disabled={busy} onClick={() => void setStatus("cancelled")}>
+                  Cancel task
+                </button>
+              )}
+            </footer>
           </aside>
         )}
       </div>
@@ -679,12 +685,14 @@ function assigneeNote(a: Assignee | undefined): string | undefined {
   return undefined;
 }
 
-function Prop({ name, children }: { name: string; children: React.ReactNode }) {
+/** One setting in the Details panel, under its own heading. */
+function DetailSection({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
-    <>
-      <div className="prop-name">{name}</div>
-      <div className="prop-value">{children}</div>
-    </>
+    <section className="detail-section">
+      <h4>{title}</h4>
+      {hint && <p className="detail-hint">{hint}</p>}
+      {children}
+    </section>
   );
 }
 
@@ -1048,65 +1056,31 @@ function BringBack({ issue, board, done, toast }: AutoProps) {
   }
   if (issue.scheduled)
     return (
-      <span className="auto-row">
+      <div className="detail-state">
         <span>
-          Top of {BUCKET_NAMES[issue.scheduled.bucket]} on {longDate(issue.scheduled.date)}
+          Top of {BUCKET_NAMES[issue.scheduled.bucket]} on <b>{longDate(issue.scheduled.date)}</b>
         </span>
         <button className="btn" disabled={busy} onClick={() => void save({ clear: true })}>
           Clear
         </button>
-      </span>
+      </div>
     );
   return (
-    <span className="auto-row">
+    <div className="auto-block">
       <input type="date" min={today} value={date} onChange={(e) => setDate(e.target.value)} aria-label="Date" />
-      <select value={bucket} onChange={(e) => setBucket(e.target.value as Bucket)} aria-label="Column">
-        {BUCKETS.filter((b) => b !== "triage").map((b) => (
-          <option key={b} value={b}>
-            {BUCKET_NAMES[b]}
-          </option>
-        ))}
-      </select>
-      <button className="btn" disabled={busy || !date} onClick={() => void save({ date, bucket })}>
-        Schedule
-      </button>
-    </span>
-  );
-}
-
-/** Merge this task into another of yours: its description joins that one word for word, and this one is cancelled. */
-function MergeInto({ issue, board, done, toast }: AutoProps) {
-  const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState(false);
-  const cards = Object.values(board.buckets)
-    .flat()
-    .filter((c) => c.id !== issue.id && c.assignee === "me");
-  const ref = /^\s*([A-Za-z][A-Za-z0-9]*-\d+)\b/.exec(query)?.[1]?.toUpperCase();
-  async function merge() {
-    if (!ref) return;
-    setBusy(true);
-    try {
-      const r = await api.merge(issue.id, ref);
-      toast(`${r.merged} merged into ${r.into}`);
-      done();
-    } catch (e) {
-      toast(`Couldn't merge: ${(e as Error).message}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <span className="auto-row">
-      <input list={`merge-${issue.id}`} placeholder={`${board.prefix || "PEN"}-12 or a title`} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void merge()} aria-label="Task to merge into" />
-      <datalist id={`merge-${issue.id}`}>
-        {cards.map((c) => (
-          <option key={c.id} value={`${c.identifier} ${c.title}`} />
-        ))}
-      </datalist>
-      <button className="btn" disabled={busy || !ref} onClick={() => void merge()}>
-        Merge
-      </button>
-    </span>
+      <div className="auto-row">
+        <select value={bucket} onChange={(e) => setBucket(e.target.value as Bucket)} aria-label="Column">
+          {BUCKETS.filter((b) => b !== "triage").map((b) => (
+            <option key={b} value={b}>
+              {BUCKET_NAMES[b]}
+            </option>
+          ))}
+        </select>
+        <button className="btn" disabled={busy || !date} onClick={() => void save({ date, bucket })}>
+          Schedule
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1159,13 +1133,15 @@ function Repeats({ issue, board, done, toast }: AutoProps) {
   if (r && !editing)
     return (
       <div className="auto-block">
-        <div>
-          {r.summary}
-          {r.paused && <span className="muted"> · paused</span>}
-          {r.runNowPending && <span className="muted"> · run starting</span>}
+        <div className="detail-state stacked">
+          <div>
+            <b>{r.summary}</b>
+            {r.paused && <span className="muted"> · paused</span>}
+            {r.runNowPending && <span className="muted"> · run starting</span>}
+          </div>
+          {!r.paused && r.upcoming.length > 0 && <div className="muted small">Next: {r.upcoming.map((t) => runTime(t, board.timezone)).join(" · ")}</div>}
+          {r.repos.length > 0 && <div className="muted small">GitHub: {r.repos.join(", ")}</div>}
         </div>
-        {!r.paused && r.upcoming.length > 0 && <div className="muted small">Next: {r.upcoming.map((t) => runTime(t, board.timezone)).join(" · ")}</div>}
-        {r.repos.length > 0 && <div className="muted small">GitHub: {r.repos.join(", ")}</div>}
         <div className="auto-row">
           <button className="btn" disabled={busy} onClick={() => setEditing(true)}>
             Edit
@@ -1231,7 +1207,6 @@ function Repeats({ issue, board, done, toast }: AutoProps) {
         <input type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-label="Time" />
       </div>
       <input placeholder="GitHub repos (owner/name, comma-separated)" value={repos} onChange={(e) => setRepos(e.target.value)} aria-label="GitHub repositories" />
-      <div className="muted small">Each run follows this task's description and lands on top of Today as a new task.</div>
       <div className="auto-row">
         <button className="btn primary" disabled={busy || !time} onClick={() => void save()}>
           Save
