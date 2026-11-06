@@ -170,7 +170,8 @@ export function createApp(opts: AppOptions): Server {
     // A parent closed before the recent window isn't loaded: fetch it.
     const missing = [...new Set(open.filter((i) => i.parentId && crew(i) && !known.has(i.parentId)).map((i) => i.parentId!))];
     for (const p of await Promise.all(missing.map((id) => pc.issue(id).catch(() => null)))) if (p) known.set(p.id, p);
-    const leftover = partsToClose(open, known, ctx.assignees);
+    const ownCommentAt = async (part: Issue) => (await pc.comments(part.id)).filter((c) => commentView(c, ctx.me, []).author.kind === "me").at(-1)?.createdAt;
+    const leftover = await partsToClose(open, known, ctx.assignees, ownCommentAt);
     if (!leftover.length) return open;
     const busy = (await working(ctx)).map;
     const gone = new Set<string>();

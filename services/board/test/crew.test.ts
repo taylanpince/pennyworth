@@ -50,26 +50,36 @@ describe("folding sub-tasks into their card (D-45)", () => {
 
 describe("parts of a task closed elsewhere (D-45)", () => {
   const closed = (o: Partial<Issue>) => issue({ assigneeUserId: ME, status: "done", completedAt: "2026-10-28T17:15:50Z", ...o });
+  const owned = (at: Record<string, string> = {}) => async (part: Issue) => at[part.id];
 
-  it("close with the task when they went quiet before it closed", () => {
+  it("close with the task when they went quiet before it closed", async () => {
     const parent = closed({});
     const part = issue({ parentId: parent.id, assigneeAgentId: "a-alfred", lastActivityAt: "2026-10-28T16:51:10Z" });
     const dropped = closed({ status: "cancelled", completedAt: null, cancelledAt: "2026-10-28T18:00:00Z" });
     const other = issue({ parentId: dropped.id, assigneeAgentId: "a-grace", lastActivityAt: "2026-10-28T17:00:00Z" });
-    const res = partsToClose([part, other], new Map([parent, dropped].map((p) => [p.id, p])), list);
+    const res = await partsToClose([part, other], new Map([parent, dropped].map((p) => [p.id, p])), list, owned());
     expect(res.map((r) => [r.part.id, r.status])).toEqual([[part.id, "done"], [other.id, "cancelled"]]);
   });
 
-  it("stay open when the task is open, the user took the part up again, or it's the user's own", () => {
+  it("close when only the agent spoke after the task closed (a run that finished after the PR merged)", async () => {
+    const parent = closed({});
+    const part = issue({ parentId: parent.id, assigneeAgentId: "a-ada", status: "in_review", lastActivityAt: "2026-10-28T17:17:07Z" });
+    const res = await partsToClose([part], new Map([[parent.id, parent]]), list, owned({ [part.id]: "2026-10-28T17:00:00Z" }));
+    expect(res.map((r) => [r.part.id, r.status])).toEqual([[part.id, "done"]]);
+    expect(await partsToClose([part], new Map([[parent.id, parent]]), list, owned())).toHaveLength(1);
+  });
+
+  it("stay open when the task is open, the user took the part up again, or it's the user's own", async () => {
     const open = issue({ assigneeUserId: ME });
     const parent = closed({});
+    const takenUp = issue({ parentId: parent.id, assigneeAgentId: "a-alfred", lastActivityAt: "2026-10-28T18:00:00Z" });
     const parts = [
       issue({ parentId: open.id, assigneeAgentId: "a-alfred" }),
-      issue({ parentId: parent.id, assigneeAgentId: "a-alfred", lastActivityAt: "2026-10-28T18:00:00Z" }),
+      takenUp,
       issue({ parentId: parent.id, assigneeUserId: ME, lastActivityAt: "2026-10-28T16:00:00Z" }),
       issue({ parentId: "i-unknown", assigneeAgentId: "a-alfred" }),
     ];
-    expect(partsToClose(parts, new Map([open, parent].map((p) => [p.id, p])), list)).toEqual([]);
+    expect(await partsToClose(parts, new Map([open, parent].map((p) => [p.id, p])), list, owned({ [takenUp.id]: "2026-10-28T17:59:00Z" }))).toEqual([]);
   });
 });
 
