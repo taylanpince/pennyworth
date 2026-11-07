@@ -57,10 +57,19 @@ export interface CrewMember {
   since?: string | null;
 }
 
+export interface PlanItem {
+  text: string;
+  state: "todo" | "doing" | "done";
+}
+
 export interface Working {
   agent: string;
   since: string | null;
   queued: boolean;
+  /** What the agent last said while working, and its own task list (runner jobs). */
+  said?: string;
+  saidAt?: string;
+  plan?: PlanItem[];
 }
 
 export interface TaskRef {
@@ -78,6 +87,8 @@ export interface Session {
   doing?: string;
   tool?: string;
   said?: string;
+  saidAt?: string;
+  plan?: PlanItem[];
   quiet?: boolean;
   run: TaskRef | null;
   tasks: TaskRef[];

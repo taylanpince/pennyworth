@@ -70,6 +70,17 @@ describe("agentsView", () => {
     expect(map.get("PEN-900")?.queued).toBe(false);
     expect(map.has("PEN-871")).toBe(false);
   });
+
+  it("carries a runner job's latest words and task list to its task", async () => {
+    const plan = [{ text: "Pull guard logs", state: "done" as const }, { text: "Compare with last week", state: "doing" as const }];
+    const busy = { ...runner, running: [{ ...runner.running[0]!, said: "Guard volume is flat; checking the hourly window.", saidAt: ago(2), plan }] };
+    const { at: _at, ...sent } = busy;
+    expect(RunnerReportSchema.safeParse(sent).success).toBe(true);
+    const view = await agentsView({ live: [], past: [], runner: busy, agents, resolve, now: NOW });
+    expect(view.sessions[0]).toMatchObject({ said: "Guard volume is flat; checking the hourly window.", plan });
+    expect(workingOn(view.sessions).get("PEN-900")).toEqual({ agent: "Engineer · Codex (gpt-5.5)", since: ago(10), queued: false, said: "Guard volume is flat; checking the hourly window.", saidAt: ago(2), plan });
+    expect(RunnerReportSchema.safeParse({ ...sent, running: [{ ...busy.running[0]!, plan: [{ text: "x", state: "blocked" }] }] }).success).toBe(false);
+  });
 });
 
 describe("who is behind a session (D-45)", () => {

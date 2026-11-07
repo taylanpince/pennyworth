@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { PairRequired, api } from "./api";
-import { Avatar } from "./components";
+import { Avatar, Plan } from "./components";
 import type { Agents, Assignee, Finished, Session, TaskRef } from "./types";
 import { ago, elapsed } from "./util";
 
@@ -148,6 +148,7 @@ function CrewTile({ member, sessions, finished, now }: { member: Assignee; sessi
           </div>
           {s.quiet && <div className="session-doing warn">No output for a while.</div>}
           {s.said && <div className="session-said">{s.said}</div>}
+          {s.plan && <Plan items={s.plan} />}
         </div>
       ))}
       {!on.length && <p className="empty">Free</p>}

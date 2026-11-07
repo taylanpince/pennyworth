@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { progressTracker } from "./progress.mjs";
 
 const expand = (p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
 
@@ -34,7 +35,8 @@ function codexSandbox(cfg, worktree, stateRoots, argv) {
 // Claude Code's built-in tools for coding jobs. Everything else (scheduling, remote triggers,
 // notifications, messaging, workflows) is left out; MCP servers, plugins and claude.ai connectors
 // are off entirely.
-const CLAUDE_TOOLS = "Bash,Read,Edit,Write,NotebookEdit,Task,TaskStop,WebFetch,WebSearch";
+// TaskCreate/TaskUpdate/TaskList: the agent's own task list, which the board shows while it works.
+const CLAUDE_TOOLS = "Bash,Read,Edit,Write,NotebookEdit,Task,TaskStop,TaskCreate,TaskUpdate,TaskList,WebFetch,WebSearch";
 
 /**
  * Primer, read-only, for every engine (D-40): primer-mcp's /mcp/read on loopback. The bearer token
@@ -188,10 +190,11 @@ const userMessage = (text) => `${JSON.stringify({ type: "user", message: { role:
  * Run the agent; resolves with { code, sessionId, lastMessage, timedOut, cancelled }. For an engine with
  * streamed input (Claude Code), `channel.send(text)` gives the running session another message from the
  * user (docs/design/conversational-engineers.md, stage 4) and returns false once the run is over.
+ * `onProgress({ said, saidAt, plan })` gets the agent's latest words and task list as they change.
  * The agent's environment: no SSH agent (fetch only via the runner), read-only gh first on PATH,
  * and a git ssh wrapper that refuses pushes.
  */
-export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, logPath, signal, env: jobEnv = {}, gcp, channel }) {
+export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, logPath, signal, env: jobEnv = {}, gcp, channel, onProgress }) {
   const lastMessageFile = `${logPath}.last.md`;
   const { argv, env, promptAsArg, streamInput } = buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp });
   const full = inDevshells(cfg.devshells.flake, shells, promptAsArg ? [...argv, prompt] : argv);
@@ -236,9 +239,11 @@ export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, log
       if (!child.stdin.writableEnded) child.stdin.end();
     };
     let buffer = "";
+    const progress = progressTracker();
     const onLine = (line) => {
       try {
         const e = JSON.parse(line);
+        if (progress.take(e)) onProgress?.(progress.current());
         if (e.type === "thread.started" && e.thread_id) found = e.thread_id; // codex
         if (e.sessionID && !found) found = e.sessionID; // opencode
         if (e.type === "text" && e.part?.text) finalText = e.part.text; // opencode: keep last text part

@@ -105,7 +105,7 @@ function reportActivity() {
     .filter(([issueId, q]) => q?.state === "running" && !running.has(issueId))
     .map(([issueId, q]) => ({ issueId, identifier: q.identifier, startedAt: q.startedAt, engine: q.engine, mode: "merging PRs", repo: [...new Set(q.prs.map((p) => p.repo))].join(", ").slice(0, 200) }));
   const body = {
-    running: [...[...running.entries()].map(([issueId, r]) => ({ issueId, identifier: r.identifier, startedAt: r.startedAt, ...(r.info ?? {}) })), ...merging].slice(0, 50),
+    running: [...[...running.entries()].map(([issueId, r]) => ({ issueId, identifier: r.identifier, startedAt: r.startedAt, ...(r.info ?? {}), ...(r.progress ?? {}) })), ...merging].slice(0, 50),
     queued: queue.filter((j) => !running.has(j.issue.id)).map((j) => ({ issueId: j.issue.id, identifier: j.issue.identifier })),
     recent: state.recentJobs(15).map((j) => ({ issueId: j.issue_id, identifier: j.identifier, engine: j.engine ?? undefined, status: j.status, startedAt: j.started_at, finishedAt: j.finished_at })),
     latest: state.latestJobs(200).map((j) => ({ identifier: j.identifier, status: j.status })),
@@ -118,6 +118,15 @@ function reportActivity() {
       activityError = msg;
     },
   );
+}
+
+let progressReport;
+/** A running agent's words or task list changed: report it, at most every 5 seconds. */
+function reportProgress() {
+  progressReport ??= setTimeout(() => {
+    progressReport = undefined;
+    reportActivity();
+  }, 5_000);
 }
 
 /**
@@ -938,7 +947,7 @@ async function startJob({ issue, instructions }) {
     const helper = repoHelper.register(tools);
     let result;
     try {
-      result = await runAgent({ cfg, engine, shells: runShells, worktree: workspace, prompt, sessionId: resumed ? state.task(issue.id).session_id : undefined, logPath, signal: controller.signal, env: helper.env, gcp, channel });
+      result = await runAgent({ cfg, engine, shells: runShells, worktree: workspace, prompt, sessionId: resumed ? state.task(issue.id).session_id : undefined, logPath, signal: controller.signal, env: helper.env, gcp, channel, onProgress: (p) => (Object.assign(running.get(issue.id) ?? {}, { progress: p }), reportProgress()) });
     } finally {
       helper.done();
     }

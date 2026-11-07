@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { Avatar, Chips, CloseIcon, CrewAvatar, MergeMenu, MoveMenu, SnoozeMenu, memberIssue } from "./components";
+import { Avatar, Chips, CloseIcon, CrewAvatar, MergeMenu, MoveMenu, Plan, SnoozeMenu, memberIssue } from "./components";
 import { Markdown } from "./markdown";
 import { BUCKETS, BUCKET_NAMES, WEEKDAYS, type Assignee, type Board, type Bucket, type Cadence, type CommentView, type CrewState, type IssueView, type Label, type Models, type Update, type Weekday } from "./types";
 import { PRIORITIES, PRIORITY_NAMES, ago, elapsed, runTime, shortName, todayIn, when } from "./util";
@@ -484,6 +484,17 @@ function AgentPane({ task, member, focus, board, reload, onChanged, toast, moved
         {part?.working && (
           <div className={`working-line${part.working.queued ? " queued" : ""}`}>
             {part.working.queued ? `Queued: ${name} starts when a slot frees up.` : `${name} is working on this${part.working.since ? ` · ${elapsed(part.working.since)}` : ""}.`}
+          </div>
+        )}
+        {part?.working && !part.working.queued && (part.working.said || part.working.plan) && (
+          <div className="progress">
+            {part.working.said && (
+              <p className="progress-said">
+                {part.working.said}
+                {part.working.saidAt && <span className="muted small"> · {ago(part.working.saidAt)}</span>}
+              </p>
+            )}
+            {part.working.plan && <Plan items={part.working.plan} />}
           </div>
         )}
         {part && agent?.kind === "engineer" && <ModelLine part={part} agent={agent} toast={toast} reload={self ? reload : load} />}

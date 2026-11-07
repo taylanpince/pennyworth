@@ -6,6 +6,9 @@ import type { Agent, Issue, LiveRun, PastRun } from "./paperclip.js";
 const UUID = /^[0-9a-f-]{36}$/;
 const IDENT = /^[A-Z][A-Z0-9]{1,9}-\d{1,7}$/;
 
+const PlanItemSchema = z.object({ text: z.string().max(200), state: z.enum(["todo", "doing", "done"]) }).strict();
+export type PlanItem = z.infer<typeof PlanItemSchema>;
+
 const RunnerJobSchema = z
   .object({
     issueId: z.string().regex(UUID),
@@ -16,6 +19,10 @@ const RunnerJobSchema = z
     status: z.string().max(40).optional(),
     startedAt: z.string().max(40),
     finishedAt: z.string().max(40).nullable().optional(),
+    /** While it works: the agent's latest words and its own task list. */
+    said: z.string().max(600).optional(),
+    saidAt: z.string().max(40).optional(),
+    plan: z.array(PlanItemSchema).max(20).optional(),
   })
   .strict();
 
@@ -52,8 +59,11 @@ export interface Session {
   /** Paperclip's status line for the run ("Receiving agent output"), or the runner's mode and repo. */
   doing?: string;
   tool?: string;
-  /** The agent's latest message, when Paperclip has one. */
+  /** The agent's latest message, when Paperclip (or the runner) has one. */
   said?: string;
+  saidAt?: string;
+  /** A runner job's own task list (Claude Code's tasks, Codex's plan). */
+  plan?: PlanItem[];
   /** No output for a long while (Paperclip's silence warning). */
   quiet?: boolean;
   /** The task the run belongs to: the user's task, or a routine's run task ("Process task replies"). */
@@ -131,7 +141,7 @@ export async function agentsView(input: {
   const fresh = runner && now - Date.parse(runner.at) < RUNNER_STALE_MS ? runner : undefined;
   const ref = (j: { identifier: string }) => ({ run: { identifier: j.identifier }, tasks: [{ identifier: j.identifier }] });
   for (const j of fresh?.running ?? []) {
-    sessions.push({ id: `runner:${j.issueId}`, source: "runner", agent: engineerName(j), agentId: engineerOf(j.engine, input.agents), state: "working", startedAt: j.startedAt, doing: jobDoing(j), ...ref(j) });
+    sessions.push({ id: `runner:${j.issueId}`, source: "runner", agent: engineerName(j), agentId: engineerOf(j.engine, input.agents), state: "working", startedAt: j.startedAt, doing: jobDoing(j), said: j.said, saidAt: j.saidAt, plan: j.plan, ...ref(j) });
   }
   for (const j of fresh?.queued ?? []) {
     const agentId = (await input.resolve(j.issueId)).assigneeAgentId ?? null;
@@ -152,13 +162,22 @@ export async function agentsView(input: {
   return { sessions, finished: finished.slice(0, 25), runner: { reportedAt: runner?.at ?? null, stale: !fresh } };
 }
 
-/** Which of the user's tasks have an agent working on them, by identifier. */
-export function workingOn(sessions: Session[]): Map<string, { agent: string; since: string | null; queued: boolean }> {
-  const out = new Map<string, { agent: string; since: string | null; queued: boolean }>();
+export interface Working {
+  agent: string;
+  since: string | null;
+  queued: boolean;
+  said?: string;
+  saidAt?: string;
+  plan?: PlanItem[];
+}
+
+/** Which of the user's tasks have an agent working on them, by identifier, with what it says it's on. */
+export function workingOn(sessions: Session[]): Map<string, Working> {
+  const out = new Map<string, Working>();
   for (const s of sessions) {
     for (const t of s.tasks) {
       const prev = out.get(t.identifier);
-      if (!prev || (prev.queued && s.state === "working")) out.set(t.identifier, { agent: s.agent, since: s.startedAt, queued: s.state === "queued" });
+      if (!prev || (prev.queued && s.state === "working")) out.set(t.identifier, { agent: s.agent, since: s.startedAt, queued: s.state === "queued", ...(s.said ? { said: s.said, saidAt: s.saidAt } : {}), ...(s.plan?.length ? { plan: s.plan } : {}) });
     }
   }
   return out;

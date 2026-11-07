@@ -613,6 +613,19 @@ kbd {
 .working-line::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--working); animation: pulse 1.4s ease-in-out infinite; }
 .working-line.queued { color: var(--muted); }
 .working-line.queued::before { background: transparent; border: 1.5px solid var(--faint); animation: none; }
+.progress { margin: -4px 0 14px; padding: 8px 12px; border-left: 2px solid var(--working); background: var(--surface-2); border-radius: 0 var(--radius) var(--radius) 0; font-size: 13px; }
+.progress-said { margin: 0; white-space: pre-line; }
+.progress-said + .plan { margin-top: 8px; }
+.plan { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
+.plan li { display: flex; gap: 7px; align-items: baseline; min-width: 0; }
+.plan li::before { flex: none; width: 1em; text-align: center; }
+.plan-done { color: var(--faint); text-decoration: line-through; }
+.plan-done::before { content: "✓"; }
+.plan-doing { color: var(--text); font-weight: 600; }
+.plan-doing::before { content: "▸"; color: var(--working); }
+.plan-todo { color: var(--muted); }
+.plan-todo::before { content: "○"; }
+.crew-job .plan { margin-top: 6px; }
 .model-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
 .model-line .props { flex-basis: 100%; margin: 4px 0 0; }
 .instructions { margin-bottom: 16px; border-left: 3px solid var(--border-strong); padding-left: 12px; }

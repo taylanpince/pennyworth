@@ -3,7 +3,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { api } from "./api";
-import { BUCKETS, BUCKET_NAMES, type Assignee, type Board, type Bucket, type Card, type CrewMember, type CrewState, type Working } from "./types";
+import { BUCKETS, BUCKET_NAMES, type Assignee, type Board, type Bucket, type Card, type CrewMember, type CrewState, type PlanItem, type Working } from "./types";
 import { SOURCE_NAMES, STATUS_BADGE, addDays, agentShort, ago, elapsed, matches, shortDate, shortName, snoozeOptions, todayIn } from "./util";
 
 /** A crew member's portrait (D-45), or a coloured letter for you and agents without one. */
@@ -70,6 +70,20 @@ function CrewRow({ card, crew, assignees }: { card: Card; crew: CrewMember[]; as
       </span>
       {line && <span className={`crew-line tone-${line.tone}`}>{line.text}</span>}
     </div>
+  );
+}
+
+/** A running agent's own task list: done, the one it's on, and what's next. */
+export function Plan({ items }: { items: PlanItem[] }) {
+  const done = items.filter((i) => i.state === "done").length;
+  return (
+    <ol className="plan" aria-label={`Task list, ${done} of ${items.length} done`}>
+      {items.map((i, n) => (
+        <li key={n} className={`plan-${i.state}`}>
+          {i.text}
+        </li>
+      ))}
+    </ol>
   );
 }
 

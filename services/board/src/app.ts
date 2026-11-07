@@ -258,10 +258,13 @@ export function createApp(opts: AppOptions): Server {
       issue.assigneeUserId === ctx.me ? pc.children(issue.id).catch(() => []) : Promise.resolve([] as Issue[]),
     ]);
     const crew = crewOf(issue, kids, { assignees: ctx.assignees, seen: (id) => store.seenAt(id), working: busy.map, jobs: latestJobs(shared.runner) });
-    // Each crew member's latest word, when there's one issue to read it from (a fan-out shows its count instead).
+    // Each crew member's latest word, when there's one issue to read it from (a fan-out shows its count instead):
+    // what it says while working, else its last comment.
     const said = Object.fromEntries(
       await Promise.all(
         crew.map(async (m) => {
+          const live = m.issues.length === 1 ? busy.map.get(m.issues[0]!.identifier) : undefined;
+          if (live?.said && !live.queued) return [m.agent, { text: live.said, at: live.saidAt ?? new Date().toISOString() }];
           const c = m.issues.length === 1 ? await pc.latestComment(m.issues[0]!.id).catch(() => undefined) : undefined;
           const view = c && commentView(c, ctx.me, ctx.agents);
           return [m.agent, view && view.author.kind !== "me" ? { text: summaryOf(c.body), at: c.createdAt } : null];
