@@ -397,7 +397,8 @@ function AgentPane({ task, member, focus, board, reload, onChanged, toast, moved
       clearInterval(t);
     };
   }, [load, self]);
-  const scroll = useFollow(part?.comments ?? []);
+  // The working line and what the agent says sit under the chat: keep them in view as they change.
+  const scroll = useFollow(part?.comments ?? [], true, part?.working ? JSON.stringify([part.working.queued, part.working.said, part.working.plan]) : "");
   const sub = member.issues.find((i) => i.identifier === selected);
   const state = sub?.state ?? member.state;
   const fan = member.issues.length > 1;
@@ -481,22 +482,6 @@ function AgentPane({ task, member, focus, board, reload, onChanged, toast, moved
             )}
           </div>
         )}
-        {part?.working && (
-          <div className={`working-line${part.working.queued ? " queued" : ""}`}>
-            {part.working.queued ? `Queued: ${name} starts when a slot frees up.` : `${name} is working on this${part.working.since ? ` · ${elapsed(part.working.since)}` : ""}.`}
-          </div>
-        )}
-        {part?.working && !part.working.queued && (part.working.said || part.working.plan) && (
-          <div className="progress">
-            {part.working.said && (
-              <p className="progress-said">
-                {part.working.said}
-                {part.working.saidAt && <span className="muted small"> · {ago(part.working.saidAt)}</span>}
-              </p>
-            )}
-            {part.working.plan && <Plan items={part.working.plan} />}
-          </div>
-        )}
         {part && agent?.kind === "engineer" && <ModelLine part={part} agent={agent} toast={toast} reload={self ? reload : load} />}
         {part && !self && part.description && (
           <details className="instructions" open={!part.comments.length}>
@@ -506,6 +491,24 @@ function AgentPane({ task, member, focus, board, reload, onChanged, toast, moved
         )}
         {part && !self && <Files issue={part} />}
         {part ? <Thread issue={part} board={board} prefix={board.prefix} agent={agent} title="Chat" /> : <p className="muted">Loading…</p>}
+        {part?.working && (
+          <div className="working-tail">
+            <div className={`working-line${part.working.queued ? " queued" : ""}`}>
+              {part.working.queued ? `Queued: ${name} starts when a slot frees up.` : `${name} is working on this${part.working.since ? ` · ${elapsed(part.working.since)}` : ""}.`}
+            </div>
+            {!part.working.queued && (part.working.said || part.working.plan) && (
+              <div className="progress">
+                {part.working.said && (
+                  <p className="progress-said">
+                    {part.working.said}
+                    {part.working.saidAt && <span className="muted small"> · {ago(part.working.saidAt)}</span>}
+                  </p>
+                )}
+                {part.working.plan && <Plan items={part.working.plan} />}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       {part && part.editable && <Composer issue={part} reload={self ? reload : load} toast={toast} to={agent ? { assignee: agent, label: `Direct to ${name}; @name brings in someone else` } : undefined} crew={task.assignee === "me" && !self ? board.assignees : []} moved={moved} />}
     </>
@@ -606,7 +609,7 @@ export function CrewPicker({ crew, present, pick, setPick, me }: { crew: Assigne
 }
 
 /** Open on the latest comment, and follow new ones while the reader is at the end (or just replied). */
-function useFollow(comments: CommentView[], openAtEnd = true) {
+function useFollow(comments: CommentView[], openAtEnd = true, tail = "") {
   const ref = useRef<HTMLDivElement>(null);
   const atEnd = useRef(openAtEnd);
   const seen = useRef<string | undefined>(undefined);
@@ -621,6 +624,11 @@ function useFollow(comments: CommentView[], openAtEnd = true) {
     const top = last.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
     el.scrollTop = last.offsetHeight > el.clientHeight - 24 ? top - 12 : el.scrollHeight;
   }, [latest]);
+  // Something under the last comment changed (a running agent's progress): stay at the end if you were there.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && tail && atEnd.current) el.scrollTop = el.scrollHeight;
+  }, [tail]);
   return { ref, onScroll: (e: React.UIEvent<HTMLDivElement>) => (atEnd.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 80) };
 }
 
