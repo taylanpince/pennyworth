@@ -1,7 +1,7 @@
 import pino from "pino";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
-import { GleanAuth, GrafanaAuth } from "./mcpauth.js";
+import { ClickHouseAuth, GleanAuth, GrafanaAuth } from "./mcpauth.js";
 import { GoogleAuth } from "./google.js";
 import { Paperclip } from "./paperclip.js";
 import { TelegramAuth } from "./telegram.js";
@@ -32,7 +32,8 @@ const google = cfg.google && new GoogleAuth(cfg.google.url, cfg.google.token, lo
 const telegram = cfg.telegram && new TelegramAuth(cfg.telegram.url, cfg.telegram.token, log);
 const glean = cfg.glean && new GleanAuth(cfg.glean.url, cfg.glean.token, log);
 const grafana = cfg.grafana && new GrafanaAuth(cfg.grafana.url, cfg.grafana.token, log);
-const common = { paperclip, store, log, staticDir: cfg.staticDir, timezone: cfg.timezone, workdays: cfg.workdays, slackTeams: cfg.slackTeams, lan: cfg.lan, activity: {}, google, telegram, glean, grafana };
+const clickhouse = cfg.clickhouse && new ClickHouseAuth(cfg.clickhouse.url, cfg.clickhouse.token, log);
+const common = { paperclip, store, log, staticDir: cfg.staticDir, timezone: cfg.timezone, workdays: cfg.workdays, slackTeams: cfg.slackTeams, lan: cfg.lan, activity: {}, google, telegram, glean, grafana, clickhouse };
 const server = createApp({ ...common, allowedHosts: cfg.allowedHosts, mode: "local" });
 server.listen(cfg.port, "0.0.0.0", () => log.info({ port: cfg.port, hosts: cfg.allowedHosts }, "board listening"));
 // Phones on the home network (D-23): a separate port, paired devices only.

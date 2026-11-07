@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-56) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-57) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -9,7 +9,7 @@ host (NixOS, user taylan)
 ├── pennyworth-runner (systemd --user, node, runs AS THE USER)   services/runner/
 │     polls Paperclip: engineer tasks → Codex/Claude Code/OpenRouter jobs in per-task workspaces under ~/pennyworth/tasks (D-41);
 │                      what a job makes for others (Primer document, .pennyworth/out/) is attached to its task (D-54),
-│                      Claude Code and Codex jobs read Grafana and Google Cloud (D-48), Slack and Glean (D-51), read-only,
+│                      Claude Code and Codex jobs read Grafana and Google Cloud (D-48), Slack and Glean (D-51), ClickHouse (D-57), read-only,
 │                      or a merge queue for the PRs a task lists, in code (D-46)
 │                      review-request tasks → closed once gh shows the PR reviewed/merged (D-21)
 │                      user replies on own tasks → "Process task replies" routine (Assistant)
@@ -30,6 +30,8 @@ host (NixOS, user taylan)
     │                        127.0.0.1:3126/mcp/read, with its own token, for Engineer jobs (D-51)
     ├── grafana-mcp          proxy to Grafana's hosted MCP (GRAFANA_URL): read/query scopes only, for Engineer jobs on 127.0.0.1:3124;
     │                        board sign-in (D-48)
+    ├── clickhouse-mcp       proxy to ClickHouse Cloud's hosted MCP: service/schema reads and checked SELECTs only, for Engineer jobs
+    │                        on 127.0.0.1:3127; board sign-in (D-57)
     ├── github-mcp           GitHub issues/PRs with the user's gh token: read; when asked, in GITHUB_COMMENT_ORGS: comment, open issues (on a project board),
     │                        close/label/assign issues, review PRs, re-run failed CI (D-39, D-42, D-46)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
@@ -52,7 +54,7 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`. The on
 | Telegram Scout | Telegram mentions, replies and DMs for the user, from the candidates telegram-mcp picks |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
 | Assistant (**Alfred**) | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, notes, reference docs, cached web, files attached to tasks), publishing to Primer, Slack drafts, and GitHub comments, issues, reviews and CI re-runs when asked, acting on the user's replies (including scheduling a task or making it recurring, and learning how the user writes when asked, D-47), passing the user's requests on to the agent they're for (D-54), and running recurring tasks |
-| Engineer · Codex (**Grace**) / · Claude (**Ada**) / · OpenRouter (**Linus**) | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20). Grace and Ada also read Grafana and Google Cloud (D-48) |
+| Engineer · Codex (**Grace**) / · Claude (**Ada**) / · OpenRouter (**Linus**) | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20). Grace and Ada also read Grafana and Google Cloud (D-48), and query ClickHouse (D-57) |
 
 ## Everyday commands
 
@@ -66,6 +68,7 @@ npm test --prefix services/primer-mcp
 npm test --prefix services/glean-mcp
 npm test --prefix services/github-mcp
 npm test --prefix services/grafana-mcp
+npm test --prefix services/clickhouse-mcp
 npm test --prefix services/runner                  # node --test; test/flow.test.mjs runs the real runner against a fake Paperclip and fake engines
 npm test --prefix services/board                   # vitest (server); npm run typecheck --prefix services/board covers the web app
 npm run eval:intake --prefix services/runner       # the D-24 go-ahead on sub-tasks, real comments, 3 runs each
@@ -74,7 +77,7 @@ npm run eval:busy --prefix services/runner         # comments that arrive during
 npx tsc --noEmit -p services/<svc>/tsconfig.json   # typecheck TS services
 
 # deploy
-docker compose up -d --build <ops-mcp|google-workspace-mcp|slack-mcp|telegram-mcp|primer-mcp|glean-mcp|github-mcp|grafana-mcp|board>   # after code changes
+docker compose up -d --build <ops-mcp|google-workspace-mcp|slack-mcp|telegram-mcp|primer-mcp|glean-mcp|github-mcp|grafana-mcp|clickhouse-mcp|board>   # after code changes
 docker compose up -d paperclip                     # after compose env/entrypoint changes
 node scripts/paperclip-setup.mjs                   # after config/paperclip.yaml or config/agents/*.md changes (idempotent)
 systemctl --user restart pennyworth-runner         # after services/runner changes
@@ -93,7 +96,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
   docker compose exec -T paperclip node /tmp/mcp-call.mjs http://ops-mcp:8080/mcp <tool> '<json>' "$(cat ~/.config/pennyworth/ops_mcp_token)"
   ```
 
-  Use `--list` in place of the tool name to list tools. The tokens for the other servers are `google_mcp_token`, `slack_mcp_token`, `telegram_mcp_token` (`http://telegram-mcp:8083/mcp`), `primer_mcp_token` (`http://primer-mcp:8084/mcp`), `glean_mcp_token` (`http://glean-mcp:8085/mcp`), `github_mcp_token` (`http://github-mcp:8086/mcp`) and `grafana_mcp_token` (`http://grafana-mcp:8087/mcp`).
+  Use `--list` in place of the tool name to list tools. The tokens for the other servers are `google_mcp_token`, `slack_mcp_token`, `telegram_mcp_token` (`http://telegram-mcp:8083/mcp`), `primer_mcp_token` (`http://primer-mcp:8084/mcp`), `glean_mcp_token` (`http://glean-mcp:8085/mcp`), `github_mcp_token` (`http://github-mcp:8086/mcp`), `grafana_mcp_token` (`http://grafana-mcp:8087/mcp`) and `clickhouse_mcp_token` (`http://clickhouse-mcp:8088/mcp`).
 - **Paperclip API as the user:** `Authorization: Bearer $(cat ~/.config/pennyworth/paperclip_board_key)`. The company ID is in `config/system.yaml`.
 - **Agent run logs:** `data/paperclip/instances/default/data/run-logs/<company>/<agent>/<run>.ndjson`. The `chunk` fields contain Codex JSON events.
 - **Runner:** `journalctl --user -u pennyworth-runner`, plus job logs in `~/.local/state/pennyworth-runner/logs/`.
@@ -227,6 +230,12 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **One server for every stack:** `mcp.grafana.com` serves any Grafana Cloud stack, picked by the `X-Grafana-URL` header. Its OAuth server is per stack: the 401's `WWW-Authenticate: resource_metadata` points at `/.well-known/oauth-protected-resource/mcp/gurl/<base64 of the stack URL>`, whose authorization endpoint already carries `?grafana_url=…` (append parameters, never replace the query). Dynamic registration takes loopback callbacks; client IDs are stateless JWTs.
 - **Scopes are the boundary:** `grafana:read grafana:query`, never `grafana:write`. Grafana doesn't offer `offline_access`; if a sign-in comes without a refresh token, the board asks to Reconnect when it expires.
 - **Tool names come from the hosted server and change:** grafana-mcp logs the upstream list next to the exposed one on connect. A new read tool needs adding to `READ_TOOLS` by hand; never expose gcx, handlers, investigations or SQL datasources.
+
+### ClickHouse
+
+- **The token is the user's own access, and it can write (D-57).** ClickHouse Cloud's OAuth has one scope for its MCP server (`mcp:access`); nothing narrows it to reads. The hosted `run_select_query` refuses non-SELECTs on ClickHouse's side, and `checkQuery` in `services/clickhouse-mcp/src/policy.ts` refuses on ours before anything leaves. Never expose another query tool, never forward a query around `checkCall`, and don't loosen `EXTERNAL`: a SELECT through `url()`, `s3()` or `remote()` is a read that sends data out. A new table function that reaches outside the database goes on that list.
+- **Sign-in:** dynamic registration accepts `http://127.0.0.1:3120/clickhouse/callback`; `offline_access` isn't listed, but the token endpoint issues refresh tokens anyway. Don't ask for `clickstack:access`.
+- **Queries outlast Codex's 60-second MCP tool timeout:** the proxy caps them at 120 seconds and the runner gives Codex `tool_timeout_sec=180` for this server (`toolTimeout` in `PRIVATE_READS`).
 
 ### GitHub (Assistant)
 

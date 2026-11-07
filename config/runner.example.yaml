@@ -41,6 +41,10 @@ primer:
 # one-hour token with the user's access and the prompt's read-only rule, never the sign-in itself (D-53).
 grafana:
   url: http://127.0.0.1:3124/mcp
+# ClickHouse Cloud, SELECT queries only, for Claude Code and Codex jobs only (D-57); never OpenRouter.
+# clickhouse-mcp on loopback (token: $PENNYWORTH_SECRETS_DIR/clickhouse_mcp_token).
+clickhouse:
+  url: http://127.0.0.1:3127/mcp
 gcp:
   credentials: ~/.config/pennyworth/gcloud/application_default_credentials.json
   # Projects jobs are told to start with; the first is gcloud's default.

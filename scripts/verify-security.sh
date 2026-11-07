@@ -98,6 +98,15 @@ for c in $containers; do
       [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
         && pass "grafana-mcp: only its own token directory mounted" || fail "grafana-mcp has unexpected mounts: $mounts"
       ;;
+    *clickhouse-mcp*)
+      # Loopback only, for the runner's Engineer jobs (D-57); bearer token required.
+      [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = '{"8088/tcp":[{"HostIp":"127.0.0.1","HostPort":"3127"}]}' ] \
+        && pass "clickhouse-mcp: published on 127.0.0.1:3127 only" || fail "clickhouse-mcp ports are not loopback 3127 only"
+      [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3127/mcp)" = "401" ] \
+        && pass "clickhouse-mcp: loopback endpoint requires the token" || fail "clickhouse-mcp: loopback endpoint answers without the token"
+      [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
+        && pass "clickhouse-mcp: only its own token directory mounted" || fail "clickhouse-mcp has unexpected mounts: $mounts"
+      ;;
     *github-mcp*)
       [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "github-mcp: no published ports" || fail "github-mcp publishes ports"
       ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -q . \
@@ -173,6 +182,14 @@ grafana_scopes="$(sed -n 's/^export const SCOPES = \[\(.*\)\];/\1/p' services/gr
 grafana_tools="$(sed -n '/^export const READ_TOOLS = \[/,/^\];/p' services/grafana-mcp/src/policy.ts | grep -oE '^  "[a-z0-9_]+"' | tr -d '" ')"
 bad_grafana="$(echo "$grafana_tools" | grep -Ev '^(query|list|get|search|analyze|diff|check|run_panel_query$|alerting_(rules|silences)_read$)' ; echo "$grafana_tools" | grep -E 'creat|add_|update|delete|remove|manage|exec|write|edit|patch|send|post|resolve|investigation|assistant|handler|gcx|sql' || true)"
 [ -n "$grafana_tools" ] && [ -z "$bad_grafana" ] && pass "grafana-mcp exposes only read/query tools (services/grafana-mcp/src/policy.ts)" || fail "grafana-mcp: unexpected tools allowed: $bad_grafana"
+# ClickHouse (D-57): the token carries the user's own access, so the tool list and the query check are the boundary.
+ch_tools="$(sed -n 's/^export const READ_TOOLS = \[\(.*\)\];/\1/p' services/clickhouse-mcp/src/policy.ts | tr -d '" ' | tr ',' '\n')"
+bad_ch="$(echo "$ch_tools" | grep -Ev '^(get_organizations|get_services_list|get_service_details|list_databases|list_tables|run_select_query)$' || true)"
+[ -n "$ch_tools" ] && [ -z "$bad_ch" ] && pass "clickhouse-mcp exposes only service, schema and SELECT tools (services/clickhouse-mcp/src/policy.ts)" || fail "clickhouse-mcp: unexpected tools allowed: $bad_ch"
+[ "$(sed -n 's/^export const SCOPES = \[\(.*\)\];/\1/p' services/clickhouse-mcp/src/policy.ts | tr -d '" ')" = "mcp:access" ] \
+  && grep -q 'args = checkCall(name' services/clickhouse-mcp/src/main.ts \
+  && grep -qE 'const EXTERNAL = .*url.*s3.*remote.*file.*executable' services/clickhouse-mcp/src/policy.ts \
+  && pass "clickhouse-mcp asks for mcp:access only and checks every query (one read statement, no external table functions, no SETTINGS)" || fail "clickhouse-mcp: scopes or query check changed"
 # Engineer jobs' Google Cloud (D-53): the user's own access, read-only by the prompt's rule; jobs get a
 # one-hour access token only, never the sign-in's refresh token.
 grep -q '\*\*Read only:\*\* describe, list, get, read and get-iam-policy commands' services/runner/src/prompt.mjs \

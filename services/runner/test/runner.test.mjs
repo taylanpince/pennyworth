@@ -141,6 +141,26 @@ describe("engines, modes and shells", () => {
     assert.doesNotMatch(or.env.OPENCODE_CONFIG_CONTENT, /slack|glean/);
   });
 
+  // D-57: ClickHouse, read-only, for Claude Code and Codex only; queries outlast Codex's default tool timeout.
+  it("gives Claude Code and Codex ClickHouse with a longer tool timeout, never OpenRouter", () => {
+    const dir = mkdtempSync(join(tmpdir(), "reads-"));
+    for (const f of ["claude", "or", "clickhouse"]) writeFileSync(join(dir, f), `${f}-token\n`);
+    const c = { ...cfg, claudeTokenFile: join(dir, "claude"), claudeConfigDir: join(dir, "home"), openrouterKeyFile: join(dir, "or"), primerTokenFile: join(dir, "missing"), clickhouseMcpUrl: "http://127.0.0.1:3127/mcp", clickhouseTokenFile: join(dir, "clickhouse"), sandbox: { extra_writable_roots: [] } };
+    const claude = buildCommand({ cfg: c, engine: { kind: "claude" }, worktree: "/w" });
+    const servers = JSON.parse(claude.argv[claude.argv.indexOf("--mcp-config") + 1]).mcpServers;
+    assert.deepEqual(servers, { clickhouse: { type: "http", url: "http://127.0.0.1:3127/mcp", headers: { Authorization: "Bearer ${CLICKHOUSE_MCP_TOKEN}" } } });
+    assert.equal(claude.env.CLICKHOUSE_MCP_TOKEN, "clickhouse-token");
+    assert.ok(!claude.argv.join(" ").includes("clickhouse-token"), "tokens only in the environment");
+    const codex = buildCommand({ cfg: c, engine: { kind: "codex" }, worktree: "/w", lastMessageFile: "/x" }).argv;
+    assert.ok(codex.includes('mcp_servers.clickhouse.url="http://127.0.0.1:3127/mcp"'));
+    assert.ok(codex.includes("mcp_servers.clickhouse.tool_timeout_sec=180"));
+    const or = buildCommand({ cfg: c, engine: { kind: "openrouter", model: "z-ai/glm" }, worktree: "/w" });
+    assert.equal(or.env.CLICKHOUSE_MCP_TOKEN, undefined);
+    assert.doesNotMatch(or.env.OPENCODE_CONFIG_CONTENT, /clickhouse|3127/);
+    assert.match(observeSection("Taylan", { clickhouse: true }), /\*\*ClickHouse\*\*.*LIMIT/);
+    assert.doesNotMatch(observeSection("Taylan", { clickhouse: false, grafana: true }), /ClickHouse/);
+  });
+
 
   it("puts the engine shell outermost, detects languages and adds pulumi for gcloud", () => {
     assert.deepEqual(resolveShells({}, ["go"], "check the gcloud logs for errors", cfg), ["llm", "go", "pulumi"]);

@@ -58,6 +58,9 @@ export function loadConfig() {
     slackTokenFile: join(secrets, "slack_mcp_read_token"),
     gleanMcpUrl: env.GLEAN_RUNNER_URL ?? cfg.glean?.url ?? "http://127.0.0.1:3126/mcp/read",
     gleanTokenFile: join(secrets, "glean_mcp_read_token"),
+    // ClickHouse reads for Claude Code and Codex jobs (D-57): clickhouse-mcp's loopback port.
+    clickhouseMcpUrl: env.CLICKHOUSE_RUNNER_URL ?? cfg.clickhouse?.url ?? "http://127.0.0.1:3127/mcp",
+    clickhouseTokenFile: join(secrets, "clickhouse_mcp_token"),
     gcp: {
       credentialsFile: gcpCredentials,
       projects: (cfg.gcp?.projects ?? []).filter(Boolean),

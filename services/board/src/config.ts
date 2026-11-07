@@ -44,6 +44,8 @@ export interface Config {
   glean?: { url: string; token: string };
   /** grafana-mcp's sign-in endpoints: off unless the token file exists. */
   grafana?: { url: string; token: string };
+  /** clickhouse-mcp's sign-in endpoints (D-57): off unless the token file exists. */
+  clickhouse?: { url: string; token: string };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -68,6 +70,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     telegram: telegramConfig(env),
     glean: gleanConfig(env),
     grafana: grafanaConfig(env),
+    clickhouse: clickhouseConfig(env),
   };
 }
 
@@ -93,6 +96,12 @@ function grafanaConfig(env: NodeJS.ProcessEnv): Config["grafana"] {
   const file = env.GRAFANA_AUTH_TOKEN_FILE ?? "/run/secrets/grafana_auth_token";
   if (!existsSync(file)) return undefined;
   return { url: (env.GRAFANA_SERVICE_URL ?? "http://grafana-mcp:8087").replace(/\/+$/, ""), token: readFileSync(file, "utf8").trim() };
+}
+
+function clickhouseConfig(env: NodeJS.ProcessEnv): Config["clickhouse"] {
+  const file = env.CLICKHOUSE_AUTH_TOKEN_FILE ?? "/run/secrets/clickhouse_auth_token";
+  if (!existsSync(file)) return undefined;
+  return { url: (env.CLICKHOUSE_SERVICE_URL ?? "http://clickhouse-mcp:8088").replace(/\/+$/, ""), token: readFileSync(file, "utf8").trim() };
 }
 
 function internalConfig(env: NodeJS.ProcessEnv): Config["internal"] {

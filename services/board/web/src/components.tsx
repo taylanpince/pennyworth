@@ -630,3 +630,35 @@ export function TelegramBanner({ telegram, canSignIn }: { telegram: Board["teleg
     </div>
   );
 }
+
+/**
+ * ClickHouse sign-in (D-57): a banner when Pennyworth isn't signed in to ClickHouse Cloud yet, or it
+ * stopped accepting the sign-in, with Connect / Reconnect on the laptop (it returns to its loopback address).
+ */
+export function ClickHouseBanner({ clickhouse, canConnect }: { clickhouse: Board["clickhouse"]; canConnect: boolean }) {
+  if (!clickhouse?.configured || (clickhouse.state !== "missing" && clickhouse.state !== "expired")) return null;
+  const since = new Date(clickhouse.since);
+  return (
+    <div className="alert" role="alert">
+      <div className="alert-row">
+        <span>
+          {clickhouse.state === "missing" ? (
+            <>ClickHouse isn't connected yet. The Engineers can't query it until it is.</>
+          ) : (
+            <>
+              ClickHouse sign-in stopped working on {since.toLocaleDateString(undefined, { weekday: "long" })} at{" "}
+              {since.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}. The Engineers can't query it.
+            </>
+          )}
+        </span>
+        {canConnect ? (
+          <a className="btn" href="/clickhouse/connect">
+            {clickhouse.state === "missing" ? "Connect" : "Reconnect"}
+          </a>
+        ) : (
+          <span className="alert-hint">Connect from the board on your computer.</span>
+        )}
+      </div>
+    </div>
+  );
+}

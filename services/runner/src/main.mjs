@@ -922,12 +922,13 @@ async function startJob({ issue, instructions }) {
     const crewHash = crewCtx ? createHash("sha256").update(JSON.stringify(crewCtx)).digest("hex") : "";
     const crew = crewCtx && (!resumed || state.get(crewKey) !== crewHash) ? crewCtx : undefined;
     if (crewHash) state.set(crewKey, crewHash);
-    // Private reads for Claude Code and Codex (D-48, D-51), and the Slack messages the task came from.
+    // Private reads for Claude Code and Codex (D-48, D-51, D-57), and the Slack messages the task came from.
     const observe = observes(engine.kind)
       ? {
           grafana: existsSync(cfg.grafanaTokenFile),
           slack: existsSync(cfg.slackTokenFile),
           glean: existsSync(cfg.gleanTokenFile),
+          clickhouse: existsSync(cfg.clickhouseTokenFile),
           sources: slackSources(`${full.description ?? ""}\n${parent?.description ?? ""}\n${instructions}`),
           gcp: { state: gcp.state, detail: gcp.detail, projects: cfg.gcp.projects },
         }

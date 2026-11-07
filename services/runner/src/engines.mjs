@@ -55,8 +55,8 @@ function primer(cfg) {
 export const observes = (kind) => kind === "claude" || kind === "codex";
 
 /**
- * The private reads for Claude Code and Codex (observes): Grafana (D-48), and Slack and Glean (D-51),
- * the user's own messages and the company's documents. Each is an MCP server on loopback that serves
+ * The private reads for Claude Code and Codex (observes): Grafana (D-48), Slack and Glean (D-51),
+ * the user's own messages and the company's documents, and ClickHouse (D-57), production data. Each is an MCP server on loopback that serves
  * reads only, with a token the job gets through the environment, never on the command line. Skipped
  * until set up. OpenRouter never gets them: its prompts go to third-party model providers.
  */
@@ -64,12 +64,15 @@ const PRIVATE_READS = [
   { name: "grafana", url: "grafanaMcpUrl", tokenFile: "grafanaTokenFile", env: "GRAFANA_MCP_TOKEN" },
   { name: "slack", url: "slackMcpUrl", tokenFile: "slackTokenFile", env: "SLACK_MCP_TOKEN" },
   { name: "glean", url: "gleanMcpUrl", tokenFile: "gleanTokenFile", env: "GLEAN_MCP_TOKEN" },
+  // Queries run up to two minutes (clickhouse-mcp caps them), past Codex's 60-second tool timeout.
+  { name: "clickhouse", url: "clickhouseMcpUrl", tokenFile: "clickhouseTokenFile", env: "CLICKHOUSE_MCP_TOKEN", toolTimeout: 180 },
 ];
 export function privateReads(cfg) {
   return PRIVATE_READS.filter((s) => cfg[s.url] && cfg[s.tokenFile] && existsSync(cfg[s.tokenFile])).map((s) => ({
     name: s.name,
     url: cfg[s.url],
     env: s.env,
+    ...(s.toolTimeout ? { toolTimeout: s.toolTimeout } : {}),
     token: readFileSync(cfg[s.tokenFile], "utf8").trim(),
   }));
 }
@@ -114,6 +117,7 @@ function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp 
         "-c", `mcp_servers.${r.name}.bearer_token_env_var="${r.env}"`,
         "-c", `mcp_servers.${r.name}.default_tools_approval_mode="approve"`,
       );
+      if (r.toolTimeout) args.push("-c", `mcp_servers.${r.name}.tool_timeout_sec=${r.toolTimeout}`);
     }
     if (engine.model) args.push("-m", engine.model);
     if (engine.effort) args.push("-c", `model_reasoning_effort="${engine.effort}"`);
@@ -151,7 +155,7 @@ function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp 
     mkdirSync(cfg.claudeConfigDir, { recursive: true, mode: 0o700 });
     // Headless, no prompts (the codex sandbox is the write boundary), and nothing from your own
     // Claude setup: a runner-owned config dir, no settings files (yours or the repo's: no hooks),
-    // no MCP servers but the read-only endpoints (Primer; Grafana, Slack, Glean), and no claude.ai connectors.
+    // no MCP servers but the read-only endpoints (Primer; Grafana, Slack, Glean, ClickHouse), and no claude.ai connectors.
     const mcpServers = {
       ...(p ? { primer: { type: "http", url: p.url, headers: { Authorization: "Bearer ${PRIMER_MCP_TOKEN}" } } } : {}),
       ...Object.fromEntries(reads.map((r) => [r.name, { type: "http", url: r.url, headers: { Authorization: `Bearer \${${r.env}}` } }])),

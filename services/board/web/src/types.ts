@@ -155,12 +155,14 @@ export interface Board {
   glean: SignInStatus | null;
   /** Grafana sign-in, for the Engineers; null when the board can't ask. */
   grafana: SignInStatus | null;
+  /** ClickHouse sign-in, for the Engineers (D-57); null when the board can't ask. */
+  clickhouse: SignInStatus | null;
 }
 
-/** A sign-in through an MCP proxy (Glean, Grafana). */
+/** A sign-in through an MCP proxy (Glean, Grafana, ClickHouse). */
 export interface SignInStatus {
   state: "missing" | "ok" | "expired" | "unknown";
-  /** Whether the service is set up (GLEAN_MCP_URL, GRAFANA_URL): without it there's no banner. */
+  /** Whether the service is set up (GLEAN_MCP_URL, GRAFANA_URL, CLICKHOUSE_MCP_URL): without it there's no banner. */
   configured: boolean;
   since: string;
   detail?: string;

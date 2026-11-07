@@ -108,6 +108,18 @@ else
   printf '  skip  grafana (GRAFANA_URL not set)\n'
 fi
 
+# ClickHouse for the runner's Engineer jobs (D-57), on loopback; listing tools signs in without running a query.
+ch_health="$(curl -s -m 10 http://127.0.0.1:3127/healthz 2>/dev/null)"
+if echo "$ch_health" | grep -q '"ok":true'; then
+  chtoken="$(cat "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/clickhouse_mcp_token" 2>/dev/null)"
+  check "clickhouse (read tools)" sh -c "curl -fsS -m 30 -X POST http://127.0.0.1:3127/mcp -H 'Authorization: Bearer $chtoken' -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}' | grep -q run_select_query"
+elif [ -n "${CLICKHOUSE_MCP_URL:-}" ]; then
+  # Set up but not signed in, or ClickHouse stopped accepting the sign-in.
+  check "clickhouse sign-in" sh -c "echo '$(echo "$ch_health" | cut -c1-140)' | grep -o '\"detail\":\"[^\"]*' | cut -d'\"' -f4 | grep . || echo 'clickhouse-mcp unreachable'; exit 1"
+else
+  printf '  skip  clickhouse (CLICKHOUSE_MCP_URL not set)\n'
+fi
+
 gh_health="$(dc exec -T paperclip node -e "fetch('http://github-mcp:8086/healthz').then(r=>r.text()).then(console.log).catch(e=>{console.log(e.message);process.exit(1)})" 2>/dev/null)"
 if echo "$gh_health" | grep -q '"ok":true'; then
   ghtoken="$(cat "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/github_mcp_token" 2>/dev/null)"
