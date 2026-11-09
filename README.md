@@ -112,7 +112,7 @@ Then drop a transcript into your transcripts folder, or have a Meet call that pr
 | Start / stop | `docker compose up -d` / `docker compose down` (no agent keeps running on the host) |
 | Health | `scripts/healthcheck.sh` |
 | Security checks | `scripts/verify-security.sh` (containers, ports, egress, and a secret scan of the repo) |
-| Backup / restore | `scripts/backup.sh` / `scripts/restore.sh <archive>` (restore refuses while running) |
+| Backup / restore | Hourly encrypted snapshots off the machine (see [Backups](#backups)); `scripts/backup.sh` for a local archive; `scripts/restore.sh --snapshot [ID]` or `<archive>` (refuses while running) |
 | Re-apply Paperclip config | `node scripts/paperclip-setup.mjs` |
 | Run the meeting scan now | `scripts/trigger-meeting-scan.sh` |
 | Todo list in the terminal | `scripts/todo.mjs` (see [Todo list](#todo-list)) |
@@ -349,6 +349,27 @@ If Workspace policy blocks consent, nothing else breaks: matching reports "calen
 | `data/` | Paperclip DB and workspaces, ops-mcp and board SQLite | no |
 
 `transcripts.ignore_before` in `config/system.yaml` stops existing transcripts from being backfilled. Remove it, or set an earlier date, to backfill.
+
+## Backups
+
+Every hour `pennyworth-backup.timer` takes an encrypted [restic](https://restic.net) snapshot of Pennyworth's state into an S3-compatible bucket: Paperclip's database (its newest hourly dump) and instance files, the board, ops-mcp and runner databases, and your configuration. Secrets, the vault, task workspaces and clones aren't in it ([D-58](docs/DECISIONS.md)). The board shows a banner when no snapshot has worked for 26 hours.
+
+Setting it up once:
+
+1. Make a private bucket (Backblaze B2 or Cloudflare R2) and an access key that reaches only that bucket.
+2. Put the repository and key in `~/.config/pennyworth/backup/restic.env` (0600):
+
+   ```sh
+   RESTIC_REPOSITORY=s3:https://<s3 endpoint>/<bucket>/pennyworth
+   AWS_ACCESS_KEY_ID=…
+   AWS_SECRET_ACCESS_KEY=…
+   ```
+
+3. Make an encryption password, `head -c 32 /dev/urandom | base64 > ~/.config/pennyworth/backup/password` (0600), and **save it and `restic.env` in your password manager**: they aren't in the backup, and without the password no snapshot can be read.
+4. `scripts/backup.sh --init`, then `scripts/backup.sh --offsite` for the first snapshot, and `scripts/backup.sh --verify` to restore it into a scratch directory and a throwaway Postgres.
+5. Enable the timer with Home Manager (`systemd.user.services.pennyworth-backup` and its timer in your Home Manager config).
+
+To recover: `docker compose down`, `systemctl --user stop pennyworth-runner`, then `scripts/restore.sh --snapshot` (latest, or an ID from `restic snapshots`) and the steps it prints. On a new machine, put `backup/restic.env` and `backup/password` back from your password manager first; everything else in the secrets directory comes back by signing in again.
 
 ## Security model
 

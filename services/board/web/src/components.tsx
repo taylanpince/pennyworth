@@ -632,6 +632,46 @@ export function TelegramBanner({ telegram, canSignIn }: { telegram: Board["teleg
 }
 
 /**
+ * Off-machine backups (D-58): a banner when they aren't set up, or none has worked for a day, so
+ * tasks that live only on this laptop never go unnoticed. Fixing it happens in a terminal.
+ */
+export function BackupBanner({ backup }: { backup: Board["backup"] }) {
+  if (!backup?.stale) return null;
+  const last = backup.lastSuccess ? new Date(backup.lastSuccess) : null;
+  return (
+    <div className="alert" role="alert">
+      <div className="alert-row">
+        <span>
+          {backup.state === "never" || backup.state === "missing" || !last ? (
+            <>Tasks aren't backed up off this computer yet.</>
+          ) : (
+            <>
+              The last off-machine backup was on {last.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}
+              {backup.error ? `: ${backup.error}` : "."}
+            </>
+          )}
+        </span>
+        <span className="alert-hint">
+          {backup.state === "never" ? (
+            <>
+              Install the backup timer, then run <code>scripts/backup.sh --offsite</code>.
+            </>
+          ) : backup.state === "missing" ? (
+            <>
+              Set up <code>backup/restic.env</code> in the secrets directory, then run <code>scripts/backup.sh --init</code>.
+            </>
+          ) : (
+            <>
+              See <code>journalctl --user -u pennyworth-backup</code>.
+            </>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
  * ClickHouse sign-in (D-57): a banner when Pennyworth isn't signed in to ClickHouse Cloud yet, or it
  * stopped accepting the sign-in, with Connect / Reconnect on the laptop (it returns to its loopback address).
  */

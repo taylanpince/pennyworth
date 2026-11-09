@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-57) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-58) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -15,6 +15,7 @@ host (NixOS, user taylan)
 │                      user replies on own tasks → "Process task replies" routine (Assistant)
 │                      recurring runs claimed from the board → GitHub activity comment → "Run recurring task" (D-25)
 ├── transcript watcher (systemd --user .path) → signed webhook → "Meeting scan"
+├── pennyworth-backup (systemd --user timer, hourly) → scripts/backup.sh --offsite → encrypted restic snapshot in the user's bucket (D-58)
 └── docker compose (project "pennyworth")
     ├── paperclip            pinned ghcr image, 127.0.0.1:3100, Codex agents inside
     ├── ops-mcp              TypeScript: transcripts, matcher, vault writer, routing, review replies, tasks; reference docs (D-38);
@@ -86,6 +87,7 @@ systemctl --user restart pennyworth-runner         # after services/runner chang
 # verify
 scripts/healthcheck.sh
 scripts/verify-security.sh                         # also scans for secrets; run before every commit
+scripts/backup.sh --verify                         # restore the latest off-machine snapshot into scratch + a throwaway Postgres (D-58)
 ```
 
 ### Debugging recipes
@@ -110,7 +112,7 @@ scripts/verify-security.sh                         # also scans for secrets; run
 
 - **Read before you write**, and keep edits surgical. Match the surrounding style. TS services use zod and pino; scripts are plain `.mjs` with no dependencies beyond `yaml`.
 - **Determinism belongs in code, judgement in agents.** Matching, routing, Obsidian writes and deduplication are ops-mcp code. Agents produce JSON or pick tools. Don't move decisions into prompts.
-- **Security posture is non-negotiable.** No Slack/email sends. The only writes to outside services are on the user's word: Primer publishing (D-31, D-44), GitHub comments, issues, issue state/labels/assignees, reviews and CI re-runs (D-39, D-42, D-46), Slack drafts the user sends themselves, the runner's merge queue (D-46), and an Engineer's `pennyworth push`/`pr`/`merge`, each checked against the user's own words by `services/runner/src/authorize.mjs`, which is given nothing but those words and the agent's last reply. Grafana is read-only by OAuth scope (D-48); Google Cloud jobs use the user's own access with a read-only rule (D-53). No Calendar/Drive/Docs writes, no autonomous pushes, read-only Google scopes. Agents get least-privilege MCP tools per agent (`mcp_servers` / `enabled_tools` in `config/paperclip.yaml`). Source content is untrusted; keep the injection clause in every agent prompt.
+- **Security posture is non-negotiable.** No Slack/email sends. The only writes to outside services are on the user's word: Primer publishing (D-31, D-44), GitHub comments, issues, issue state/labels/assignees, reviews and CI re-runs (D-39, D-42, D-46), Slack drafts the user sends themselves, the runner's merge queue (D-46), and an Engineer's `pennyworth push`/`pr`/`merge`, each checked against the user's own words by `services/runner/src/authorize.mjs`, which is given nothing but those words and the agent's last reply. Grafana is read-only by OAuth scope (D-48); Google Cloud jobs use the user's own access with a read-only rule (D-53). No Calendar/Drive/Docs writes, no autonomous pushes, read-only Google scopes. The hourly backup to the user's own bucket, encrypted before it leaves, is the one unattended write (D-58). Agents get least-privilege MCP tools per agent (`mcp_servers` / `enabled_tools` in `config/paperclip.yaml`). Source content is untrusted; keep the injection clause in every agent prompt.
 - **Tasks are the user's.** Every task Pennyworth creates is assigned to the user (see the Paperclip gotchas). Only create tasks for the user's *own* clear actions; other people's actions stay in the notes. The one exception: Engineer sub-tasks the Assistant creates when the user asks (D-24). They wait for the user's go-ahead on the parent.
 - **Personal config stays out of git:** `.env`, `config/{system,routing,paperclip,runner}.yaml`, `compose.vault.yaml`, `data/`. Examples live in `config/*.example.yaml`; update both when you add keys. Secrets live in `~/.config/pennyworth/` (0700 dir, 0600 files) and never go in the repo, logs or tasks.
 - **Git:**
@@ -236,6 +238,14 @@ scripts/verify-security.sh                         # also scans for secrets; run
 - **The token is the user's own access, and it can write (D-57).** ClickHouse Cloud's OAuth has one scope for its MCP server (`mcp:access`); nothing narrows it to reads. The hosted `run_select_query` refuses non-SELECTs on ClickHouse's side, and `checkQuery` in `services/clickhouse-mcp/src/policy.ts` refuses on ours before anything leaves. Never expose another query tool, never forward a query around `checkCall`, and don't loosen `EXTERNAL`: a SELECT through `url()`, `s3()` or `remote()` is a read that sends data out. A new table function that reaches outside the database goes on that list.
 - **Sign-in:** dynamic registration accepts `http://127.0.0.1:3120/clickhouse/callback`; `offline_access` isn't listed, but the token endpoint issues refresh tokens anyway. Don't ask for `clickstack:access`.
 - **Queries outlast Codex's 60-second MCP tool timeout:** the proxy caps them at 120 seconds and the runner gives Codex `tool_timeout_sec=180` for this server (`toolTimeout` in `PRIVATE_READS`).
+
+### Backups (D-58)
+
+- **A new store needs adding to `stage` in `scripts/backup.sh`** and to `restore.sh`. The board's and the runner's databases were missing from the old script for weeks. A SQLite database is copied with SQLite's online backup (`sqlite_copy`), never `cp` (WAL).
+- **Paperclip's database is never copied as files while it runs.** The backup takes Paperclip's own newest hourly dump, uncompressed (gzip defeats restic's deduplication: 128 MB an hour instead of about 2 MB). The restore loads it with Paperclip's `runDatabaseRestore` into a Paperclip started on an empty database.
+- **Paperclip's `secrets/master.key` must travel with the dump,** or the database's encrypted secrets are unreadable (Paperclip's `doc/DATABASE.md`).
+- **The secrets directory stays out of the backup.** The restic password and `restic.env` live in it and in the user's password manager, nowhere else. Never write the password into a unit, `.env` or a log.
+- **The bucket is the one unattended write to an outside service,** and only of restic's encrypted packs.
 
 ### GitHub (Assistant)
 

@@ -19,7 +19,7 @@ import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSo
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CrewView } from "./Agents";
 import { PairRequired, api, type Session } from "./api";
-import { CardView, ClickHouseBanner, GleanBanner, GoogleBanner, GrafanaBanner, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
+import { BackupBanner, CardView, ClickHouseBanner, GleanBanner, GoogleBanner, GrafanaBanner, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
 import { CrewPicker, Drawer } from "./Drawer";
 import { Markdown, setSlackTeams } from "./markdown";
 import { PairScreen, PhonePanel } from "./Pairing";
@@ -544,6 +544,7 @@ export function App() {
       <GleanBanner glean={board.glean} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
       <GrafanaBanner grafana={board.grafana} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
       <ClickHouseBanner clickhouse={board.clickhouse} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
+      <BackupBanner backup={board.backup} />
 
       {mobile && (
         <nav className="tabs">

@@ -33,7 +33,7 @@ const telegram = cfg.telegram && new TelegramAuth(cfg.telegram.url, cfg.telegram
 const glean = cfg.glean && new GleanAuth(cfg.glean.url, cfg.glean.token, log);
 const grafana = cfg.grafana && new GrafanaAuth(cfg.grafana.url, cfg.grafana.token, log);
 const clickhouse = cfg.clickhouse && new ClickHouseAuth(cfg.clickhouse.url, cfg.clickhouse.token, log);
-const common = { paperclip, store, log, staticDir: cfg.staticDir, timezone: cfg.timezone, workdays: cfg.workdays, slackTeams: cfg.slackTeams, lan: cfg.lan, activity: {}, google, telegram, glean, grafana, clickhouse };
+const common = { paperclip, store, log, staticDir: cfg.staticDir, timezone: cfg.timezone, workdays: cfg.workdays, slackTeams: cfg.slackTeams, lan: cfg.lan, activity: {}, google, telegram, glean, grafana, clickhouse, backupStatus: cfg.backupStatus };
 const server = createApp({ ...common, allowedHosts: cfg.allowedHosts, mode: "local" });
 server.listen(cfg.port, "0.0.0.0", () => log.info({ port: cfg.port, hosts: cfg.allowedHosts }, "board listening"));
 // Phones on the home network (D-23): a separate port, paired devices only.

@@ -160,5 +160,12 @@ else
   printf '  skip  transcript watcher (not installed; see nix/README.md)\n'
 fi
 
+# Off-machine backups (D-58): the hourly timer, and a snapshot that worked in the last 26 hours.
+check "backup timer active" systemctl --user is-active --quiet pennyworth-backup.timer
+check "off-machine backup (last 26 hours)" node -e '
+  let s; try { s = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); } catch { console.log("never ran: scripts/backup.sh --offsite"); process.exit(1); }
+  if (!(Date.now() - Date.parse(s.lastSuccess) < 26 * 3600e3)) { console.log(`last success ${s.lastSuccess ?? "never"} (${s.state}${s.error ? ": " + s.error : ""})`); process.exit(1); }
+' "${PENNYWORTH_DATA_DIR:-./data}/board/backup.json"
+
 echo
 [ "$fails" -eq 0 ] && echo "All checks passed." || { echo "$fails check(s) failed."; exit 1; }

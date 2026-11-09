@@ -16,6 +16,7 @@ import { GoogleAuthFailed, loopbackPort, type GoogleAuth } from "./google.js";
 import { Paperclip, PaperclipError, type Issue } from "./paperclip.js";
 import { TelegramAuthFailed, type TelegramAuth } from "./telegram.js";
 import { addDays, nextWorkday, type Weekday } from "./recurrence.js";
+import { readBackup } from "./backup.js";
 import { BUCKETS, isBucket, localDate, type Store } from "./store.js";
 
 export interface AppOptions {
@@ -49,6 +50,8 @@ export interface AppOptions {
   grafana?: GrafanaAuth;
   /** ClickHouse sign-in state and sign-in (D-57); no banner and no sign-in without it. */
   clickhouse?: ClickHouseAuth;
+  /** The off-machine backup's status file (D-58); no banner without it. */
+  backupStatus?: string;
 }
 
 const SESSION_COOKIE = "pw_session";
@@ -554,7 +557,7 @@ export function createApp(opts: AppOptions): Server {
         // When Tomorrow next rolls into Today: the next calendar day, except before days off.
         const today = localDate(opts.timezone);
         const rollsOn = nextWorkday(today, opts.workdays ?? WORKWEEK);
-        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, slackTeams: opts.slackTeams ?? {}, rollsOn, rollsTomorrow: rollsOn === addDays(today, 1), buckets: board.buckets, agentsActive: busy.active, google: google ?? null, telegram: telegram ?? null, glean: glean ?? null, grafana: grafana ?? null, clickhouse: clickhouse ?? null };
+        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, slackTeams: opts.slackTeams ?? {}, rollsOn, rollsTomorrow: rollsOn === addDays(today, 1), buckets: board.buckets, agentsActive: busy.active, google: google ?? null, telegram: telegram ?? null, glean: glean ?? null, grafana: grafana ?? null, clickhouse: clickhouse ?? null, backup: opts.backupStatus ? readBackup(opts.backupStatus) : null };
       },
     },
     { method: "GET", path: /^\/api\/issues\/([^/]+)$/, handle: async (m) => issueView(decodeURIComponent(m[1]!)) },

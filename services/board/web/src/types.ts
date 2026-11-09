@@ -157,6 +157,16 @@ export interface Board {
   grafana: SignInStatus | null;
   /** ClickHouse sign-in, for the Engineers (D-57); null when the board can't ask. */
   clickhouse: SignInStatus | null;
+  /** The off-machine backup of tasks and board (D-58); null when the board can't tell. */
+  backup: BackupStatus | null;
+}
+
+export interface BackupStatus {
+  state: "ok" | "failed" | "missing" | "never";
+  lastSuccess: string | null;
+  error?: string;
+  /** No off-machine backup in the last 26 hours. */
+  stale: boolean;
 }
 
 /** A sign-in through an MCP proxy (Glean, Grafana, ClickHouse). */

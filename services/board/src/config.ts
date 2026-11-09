@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { WEEKDAYS, type Weekday } from "./recurrence.js";
@@ -46,6 +47,8 @@ export interface Config {
   grafana?: { url: string; token: string };
   /** clickhouse-mcp's sign-in endpoints (D-57): off unless the token file exists. */
   clickhouse?: { url: string; token: string };
+  /** The off-machine backup's status file (D-58), written by scripts/backup.sh --offsite. */
+  backupStatus: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -71,6 +74,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     glean: gleanConfig(env),
     grafana: grafanaConfig(env),
     clickhouse: clickhouseConfig(env),
+    backupStatus: env.BOARD_BACKUP_STATUS ?? join(dirname(env.BOARD_DB ?? "/data/board/board.sqlite"), "backup.json"),
   };
 }
 
