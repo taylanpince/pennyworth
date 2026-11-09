@@ -863,6 +863,29 @@ describe("task workspaces (D-41)", async () => {
     assert.match(c.stat, /^1 file changed/);
   });
 
+  it("doesn't base a stacked PR's parent on its own child on GitHub (PEN-4089)", async () => {
+    const { path, commit, seed } = await setup();
+    // GitHub: feat/parent (PR 1) into main, and feat/child (PR 2) stacked on it.
+    for (const [b, from, m] of [["feat/parent", "main", "feat: parent"], ["feat/child", "feat/parent", "feat: child"]]) {
+      execFileSync("git", ["-C", seed, "switch", "-q", "-c", b, from]);
+      writeFileSync(join(seed, `${b.replace("/", "-")}.txt`), m);
+      execFileSync("git", ["-C", seed, "add", "."]);
+      execFileSync("git", ["-C", seed, ...id, "commit", "-q", "-m", m]);
+      execFileSync("git", ["-C", seed, "push", "-q", "origin", b]);
+    }
+    await git(path, "fetch", "-q", "origin");
+    // The task fixes the parent and rebases the child onto the fix: GitHub's child still holds the
+    // parent's old commits, which made it look like the closest base for the parent.
+    await git(path, "switch", "-q", "-c", "feat/parent", "origin/feat/parent");
+    await commit(path, "fix: parent", "fix.txt");
+    await git(path, "switch", "-q", "-c", "feat/child", "origin/feat/child");
+    await git(path, "-c", "user.email=a@b", "-c", "user.name=a", "-c", "commit.gpgsign=false", "rebase", "-q", "feat/parent");
+    const found = await findBranches(path, { base: "main", slug: "acme/api" });
+    assert.deepEqual(found.map((b) => [b.branch, b.base]).sort(), [["feat/child", "feat/parent"], ["feat/parent", "main"]]);
+    const parent = await branchChanges(path, { branch: "feat/parent", base: "main", taskBranches: ["feat/parent", "feat/child"] });
+    assert.deepEqual(parent.unpublished.map((l) => l.replace(/^\w+ /, "")), ["fix: parent"]);
+  });
+
   it("signs the agent's unsigned commits, keeping trees and moving branches and worktrees", async () => {
     const { dir, path, commit } = await setup();
     const key = join(dir, "key");

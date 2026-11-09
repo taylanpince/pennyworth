@@ -332,6 +332,24 @@ recurring:
     assert.equal(githubTip(), theirs, "their commit is still there");
   });
 
+  // PEN-4089: Ada rebased a PR Grace's task had opened; push refused it because this task never pushed it.
+  it("replaces a branch it took over from GitHub, when nobody pushed to it since", async () => {
+    const other = join(dir, "other-task");
+    git(dir, "clone", "-q", join(dir, "github/acme/app.git"), other);
+    git(other, "switch", "-qc", "feat/inherited");
+    writeFileSync(join(other, "inherited.txt"), "first\n");
+    git(other, "add", "inherited.txt");
+    git(other, "commit", "-qm", "feat: inherited");
+    git(other, "push", "-q", "origin", "feat/inherited");
+    const theirs = githubTip("feat/inherited");
+    step("inherit\npennyworth push acme/app feat/inherited");
+    await turn("Rebase the inherited branch, then push it.");
+    const call = toolRuns().at(-1);
+    assert.equal(call.code, 0, call.out);
+    assert.match(call.out, /Replaced the earlier version with 1 commit/);
+    assert.notEqual(githubTip("feat/inherited"), theirs, "GitHub has the rebased branch");
+  });
+
   it("stops a run when told to, mid-run", async () => {
     step("slow");
     const n = starts().length;

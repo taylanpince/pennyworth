@@ -94,8 +94,12 @@ export async function findBranches(path, { base, manifest = [], slug, known = []
     // made it (pushed, maybe with a PR).
     if (!known.includes(branch) && (await hasRef(path, `origin/${branch}`)) && !(await count(path, tip, `origin/${branch}`))) continue;
     let best;
+    const published = (await hasRef(path, `origin/${branch}`)) && `origin/${branch}`;
     for (const r of bases) {
       if (r === branch) continue; // its own pushed copy is not its base
+      // A branch on GitHub that holds this one's pushed copy is stacked on it, never its base: after a
+      // fix here, GitHub's child still has the old commits and looks closest (PEN-4089).
+      if (published && r !== base && (await git(path, "merge-base", "--is-ancestor", published, `origin/${r}`).then(() => true, () => false))) continue;
       const n = await count(path, tip, `origin/${r}`);
       if (!best || n < best.n) best = { base: r, n };
     }

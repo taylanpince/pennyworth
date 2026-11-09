@@ -53,6 +53,13 @@ if (step === "commit") {
   writeFileSync(join(repo, "chains.txt"), `polygon\n# ${Date.now()}\n`);
   git("add", "chains.txt");
   git("commit", "-q", "--amend", "-m", "fix: drop Telos");
+} else if (step === "inherit") {
+  // Takes over a branch another task pushed (its PR) and rewrites it, as a rebase does (PEN-4089).
+  git("fetch", "-q", "origin");
+  git("switch", "-qc", "feat/inherited", "origin/feat/inherited");
+  writeFileSync(join(repo, "inherited.txt"), `rebased\n# ${Date.now()}\n`);
+  git("add", "inherited.txt");
+  git("commit", "-q", "--amend", "-m", "feat: inherited");
 } else if (step.startsWith("describe")) {
   // A PR description in the workspace, with Claude Code's own footer (and an internal name, for "describe-leak").
   mkdirSync(join(process.cwd(), ".pennyworth"), { recursive: true });

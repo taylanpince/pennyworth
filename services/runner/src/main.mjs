@@ -1271,9 +1271,10 @@ async function publish(issue, workspace, command, signal, { only = [], text, che
  * base, the parent branch for a stacked one. Returns the result line for the table.
  */
 /**
- * A branch this task pushed and then rewrote (a rebase) can replace its earlier version (D-49): only
- * when GitHub's tip is a commit the task's own branch once pointed at (its reflog), so nothing anyone
- * else pushed is lost, and leased to exactly that commit. Undefined when the push is a fast-forward.
+ * A branch this task rewrote (a rebase) can replace GitHub's version (D-49): only when GitHub's tip is
+ * a commit the task's own branch once pointed at (its reflog), so nothing anyone else pushed is lost,
+ * and leased to exactly that commit. That includes a branch checked out from GitHub that another task
+ * or the user pushed, as long as GitHub hasn't moved since (PEN-4089). Undefined for a fast-forward.
  */
 async function leaseFor(r) {
   if (!r.onGitHub) return undefined;
@@ -1281,7 +1282,7 @@ async function leaseFor(r) {
   const remote = await git(r.path, "rev-parse", `refs/remotes/origin/${r.branch}`);
   if (await git(r.path, "merge-base", "--is-ancestor", remote, `refs/heads/${r.branch}`).then(() => true, () => false)) return undefined;
   const seen = (await git(r.path, "reflog", "show", "--format=%H", `refs/heads/${r.branch}`).catch(() => "")).split("\n");
-  if (r.branch === r.defaultBase || !r.pushed || !seen.includes(remote)) {
+  if (r.branch === r.defaultBase || !seen.includes(remote)) {
     throw new UserError(`not replaced: GitHub's \`${r.branch}\` has commits this task didn't make (\`${remote.slice(0, 9)}\`). Ask me to build on GitHub's version instead`);
   }
   return remote;
