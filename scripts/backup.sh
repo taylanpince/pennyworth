@@ -177,7 +177,7 @@ case "$mode" in
       fi
     } > "$log" 2>&1
     snapshot="$(node -e 'const s = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); console.log(s.snapshot_id?.slice(0, 8) ?? "")' "$cache/summary.json")"
-    added="$(node -e 'const s = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); console.log((s.data_added / 1e6).toFixed(1))' "$cache/summary.json")"
+    added="$(node -e 'const s = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); console.log(((s.data_added_packed ?? s.data_added) / 1e6).toFixed(1))' "$cache/summary.json")"
     write_status ok "" "$snapshot"
     echo "Snapshot $snapshot ($added MB uploaded)"
     ;;
