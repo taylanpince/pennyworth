@@ -382,9 +382,9 @@ recurring:
   });
 
   // PEN-3024: Ada's description was swapped for a generated one over Claude Code's footer, and an
-  // open PR's description couldn't be changed at all.
+  // open PR's description couldn't be changed at all. PEN-4063: nor one Taylan had opened himself.
   it("updates an open PR's description with the agent's own, and sends a leaky one back to it", async () => {
-    new State(join(dir, "state")).updateBranch("part", "acme/app", "feat/second", { pr_url: "https://github.com/acme/app/pull/7" });
+    writeFileSync(join(dir, "gh-prs.json"), JSON.stringify({ "acme/app acme:feat/second": "https://github.com/acme/app/pull/7" }));
     const edits = () => fakeLog().filter((e) => e.kind === "gh");
     step("describe-leak\npennyworth pr acme/app feat/second --title fix:-drop-Telos --body-file .pennyworth/pr-body.md");
     await turn("Go ahead and write a proper description on the PR.");
@@ -401,6 +401,13 @@ recurring:
     const edit = edits().at(-1).data;
     assert.deepEqual(edit.slice(0, 5), ["pr", "edit", "https://github.com/acme/app/pull/7", "--title", "fix:-drop-Telos"]);
     assert.equal(edit[6], "## Why\n\nTelos is gone.", "the agent's text, without the footer");
+
+    step("describe\npennyworth pr acme/app feat/second --body-file .pennyworth/pr-body.md");
+    await turn("Go ahead and update just the description, the title is fine.");
+    const bodyOnly = toolRuns().at(-1);
+    assert.equal(bodyOnly.code, 0, bodyOnly.out);
+    assert.match(bodyOnly.out, /Updated the description of https:\/\/github.com\/acme\/app\/pull\/7/);
+    assert.deepEqual(edits().at(-1).data, ["pr", "edit", "https://github.com/acme/app/pull/7", "--body", "## Why\n\nTelos is gone."], "the title left alone");
   });
 
   it("reads another task's whole conversation, and finds tasks by agent or words", async () => {

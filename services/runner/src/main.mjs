@@ -680,7 +680,7 @@ async function agentPublish(ctx, command, args) {
     .filter((b) => b.repo && b.branch);
   const { text } = await publish(ctx.issue, ctx.workspace, command, ctx.signal, {
     only,
-    text: command === "pr" && args.title ? { title: String(args.title), body: String(args.body ?? "") } : undefined,
+    text: command === "pr" && (args.title || args.body) ? { title: String(args.title ?? ""), body: String(args.body ?? "") } : undefined,
     check: (ordered) => allowWrite(ctx, command, ordered.map((r) => `${r.repo} \`${r.branch}\`${r.prUrl ? ` (PR ${r.prUrl})` : ""}`)),
   });
   return stripHidden(text).trim();
@@ -1214,7 +1214,7 @@ async function publish(issue, workspace, command, signal, { only = [], text, che
   if (text) {
     // Refused before anything is pushed, and back to the agent to reword: a description quietly
     // replaced by a generated one is worse than none (PEN-3024).
-    text = { title: String(text.title).replace(/\s+/g, " ").trim().slice(0, 200), body: stripAttribution(text.body).slice(0, 60_000) };
+    text = { title: String(text.title ?? "").replace(/\s+/g, " ").trim().slice(0, 200), body: stripAttribution(text.body).slice(0, 60_000) };
     const leak = leakIn(`${text.title}\n${text.body}`);
     if (leak) throw new UserError(`Not done: the PR title or description mentions "${leak}". The repository's reviewers mustn't see internal names, tools, task numbers or local paths; reword it and run the command again.`);
   }
@@ -1308,12 +1308,15 @@ async function publishBranch(issue, full, r, command, rows, text) {
     if (target !== r.branch) return `The repository was empty: pushed as its first commits on \`${target}\` → https://github.com/${r.repo}/tree/${encodeURIComponent(target)}`;
     pushed = `${lease ? "Replaced the earlier version with" : "Pushed"} ${r.unpublished.length} commit${r.unpublished.length === 1 ? "" : "s"}`;
   }
-  if (r.prUrl && text?.title && command === "pr") {
-    await execFileP(await findRealGh(), ["pr", "edit", r.prUrl, "--title", text.title, "--body", text.body], { cwd: r.path }).catch((err) => {
+  if (r.prUrl && (text?.title || text?.body) && command === "pr") {
+    // Only what the agent wrote: a description alone keeps the PR's title, and a title alone its description.
+    const fields = [...(text.title ? ["--title", text.title] : []), ...(text.body ? ["--body", text.body] : [])];
+    await execFileP(await findRealGh(), ["pr", "edit", r.prUrl, ...fields], { cwd: r.path }).catch((err) => {
       throw new UserError(`couldn't update the PR. GitHub said: ${String(err.stderr || "gh pr edit failed").trim().slice(-400)}`);
     });
     log("pr description updated", { issue: issue.identifier, url: r.prUrl });
-    return `${pushed ? `${pushed}, updated` : "Updated"} the title and description of ${r.prUrl}`;
+    const what = text.title && text.body ? "title and description" : text.title ? "title" : "description";
+    return `${pushed ? `${pushed}, updated` : "Updated"} the ${what} of ${r.prUrl}`;
   }
   if (r.prUrl) return `${pushed || "Up to date"}. PR: ${r.prUrl}`;
   if (command === "push") return `${pushed} → https://github.com/${r.repo}/compare/${r.base}...${encodeURIComponent(r.branch)}?expand=1`;
@@ -1571,10 +1574,27 @@ async function branchRows(issue, workspace) {
     for (const b of state.branches(issue.id).filter((k) => k.repo === r.slug)) {
       if (!(await git(r.path, "rev-parse", "--verify", "--quiet", `refs/heads/${b.branch}`).catch(() => ""))) continue;
       const c = await branchChanges(r.path, { branch: b.branch, base: b.base, taskBranches });
+      if (c.onGitHub && !b.pr_url && !b.merged) {
+        // A PR the user (or anyone) opened for this branch is its PR too: "pr" edits it rather than failing to open another.
+        b.pr_url = await openPrFor(r.slug, b.branch);
+        if (b.pr_url) state.updateBranch(issue.id, r.slug, b.branch, { pr_url: b.pr_url });
+      }
       rows.push({ repo: r.slug, path: r.path, branch: b.branch, base: b.base, baseRef: await baseRef(r.path, { branch: b.branch, base: b.base, taskBranches }), defaultBase: base, purpose: b.purpose, unpublished: c.unpublished, stat: c.stat, onGitHub: c.onGitHub, pushed: b.pushed, prUrl: b.pr_url ?? undefined, merged: b.merged, writable: writable(r.slug), readOnly: !writable(r.slug) });
     }
   }
   return rows;
+}
+
+/** The open PR from this repository's own `branch`, if GitHub has one (forks' branches of the same name don't count). */
+async function openPrFor(repo, branch) {
+  const head = encodeURIComponent(`${repo.split("/")[0]}:${branch}`);
+  try {
+    const { stdout } = await execFileP(await findRealGh(), ["api", `repos/${repo}/pulls?head=${head}&state=open`]);
+    return JSON.parse(stdout)[0]?.html_url ?? null;
+  } catch (err) {
+    log("open pr lookup failed", { repo, branch, err: String(err.stderr || err.message).slice(0, 300) });
+    return null;
+  }
 }
 
 /** Commit subjects are public: never let a task number or our tooling into one. */
