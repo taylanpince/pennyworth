@@ -50,6 +50,21 @@ gcp:
   # Projects jobs are told to start with; the first is gcloud's default.
   projects: []
   shell: pulumi                       # the devshell with gcloud, added to every Claude Code and Codex job
+# AWS for Claude Code and Codex jobs only (D-59); never OpenRouter. scripts/aws-auth.sh signs Pennyworth
+# in to IAM Identity Center (again when its session ends) and lists the accounts and roles it reaches.
+# Each job gets one-hour credentials for every account's read_role (AWS refuses its writes); the
+# write_role is used only by the runner, for a `pennyworth aws` command the user's words ask for.
+# Leave sso_start_url empty to give jobs no AWS.
+aws:
+  sso_start_url: ""                   # e.g. https://d-0123456789.awsapps.com/start
+  sso_region: ""                      # the Identity Center region, e.g. ca-central-1
+  # home: ~/.config/pennyworth/aws    # Pennyworth's own AWS home (default), hidden from jobs
+  accounts: []
+  #  - name: prod-api                 # the job's profile name (--profile prod-api)
+  #    id: "123456789012"
+  #    region: ca-central-1           # default: sso_region
+  #    read_role: ReadOnlyAccess      # an Identity Center permission set that can't change anything
+  #    write_role: AdministratorAccess # optional: for `pennyworth aws` changes, on the user's word
 
 # Reads plain-language requests (target repo, reference repos, mode, model) with a short Codex call.
 intake:

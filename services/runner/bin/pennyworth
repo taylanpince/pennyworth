@@ -12,13 +12,15 @@
 //   pennyworth primer [<Primer link>]                   publish .pennyworth/primer.md on Primer after runs (a new
 //                                                       document, or new versions of the one linked)
 //   pennyworth pass <name>                              pass the user's latest message on to another agent on the task
+//   pennyworth aws [--account <name>] <service> <operation> [options]...
+//                                                       one AWS change the user asked for, with the account's write role
 //   pennyworth reset                                    start the next turn with a fresh session
 //   pennyworth cleanup                                  remove the workspace when this run ends
 //   pennyworth task <PEN-N>                             read one of the user's tasks: description, parts, conversation
 //   pennyworth tasks [<words>] [--agent <name>]         find tasks, closed ones too
 import { readFileSync } from "node:fs";
 
-const usage = `usage: pennyworth status | push [<org/repo> <branch>]... | pr [<org/repo> <branch>]... [--title <title>] [--body-file <file>] | merge <PR link>... [--gap <minutes>] | repo <org/name> | engine <claude|codex|openrouter> [model] | primer [<Primer link>] | pass <name> | reset | cleanup | task <PEN-N> | tasks [<words>] [--agent <name>]`;
+const usage = `usage: pennyworth status | push [<org/repo> <branch>]... | pr [<org/repo> <branch>]... [--title <title>] [--body-file <file>] | merge <PR link>... [--gap <minutes>] | repo <org/name> | engine <claude|codex|openrouter> [model] | primer [<Primer link>] | pass <name> | aws [--account <name>] <service> <operation> [options] | reset | cleanup | task <PEN-N> | tasks [<words>] [--agent <name>]`;
 const [command, ...rest] = process.argv.slice(2);
 const fail = (msg, code = 1) => {
   console.error(`pennyworth: ${msg}`);
@@ -29,18 +31,28 @@ if (!command || ["help", "-h", "--help"].includes(command) || rest.some((w) => w
   console.log(usage);
   process.exit(0);
 }
-if (!["status", "push", "pr", "merge", "repo", "engine", "primer", "pass", "reset", "cleanup", "task", "tasks"].includes(command)) fail(usage, 2);
+if (!["status", "push", "pr", "merge", "repo", "engine", "primer", "pass", "aws", "reset", "cleanup", "task", "tasks"].includes(command)) fail(usage, 2);
 if (!process.env.PENNYWORTH_REPO_URL) fail("only available inside a task run", 2);
+
+// aws: everything after the account is the AWS CLI's own arguments, passed on as they are.
+const awsBody = () => {
+  const args = rest[0] === "--account" ? rest.slice(2) : rest;
+  if (rest[0] === "--account" && !rest[1]) fail("usage: pennyworth aws [--account <name>] <service> <operation> [options]", 2);
+  if (args.length < 2) fail("usage: pennyworth aws [--account <name>] <service> <operation> [options]", 2);
+  return { account: rest[0] === "--account" ? rest[1] : undefined, args: args[0] === "--" ? args.slice(1) : args };
+};
 
 const flags = {};
 const words = [];
-for (let i = 0; i < rest.length; i++) {
+for (let i = 0; command !== "aws" && i < rest.length; i++) {
   if (rest[i] === "--title" || rest[i] === "--body-file" || rest[i] === "--gap" || rest[i] === "--agent") flags[rest[i].slice(2)] = rest[++i];
   else if (rest[i].startsWith("--")) fail(`unknown option ${rest[i]}\n${usage}`, 2);
   else words.push(rest[i]);
 }
 let body;
-if (command === "repo") {
+if (command === "aws") {
+  body = awsBody();
+} else if (command === "repo") {
   if (words.length !== 1) fail(usage, 2);
   body = { repo: words[0] };
 } else if (command === "engine") {

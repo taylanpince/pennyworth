@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-58) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-59) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -9,7 +9,7 @@ host (NixOS, user taylan)
 ├── pennyworth-runner (systemd --user, node, runs AS THE USER)   services/runner/
 │     polls Paperclip: engineer tasks → Codex/Claude Code/OpenRouter jobs in per-task workspaces under ~/pennyworth/tasks (D-41);
 │                      what a job makes for others (Primer document, .pennyworth/out/) is attached to its task (D-54),
-│                      Claude Code and Codex jobs read Grafana and Google Cloud (D-48), Slack and Glean (D-51), ClickHouse (D-57), read-only,
+│                      Claude Code and Codex jobs read Grafana and Google Cloud (D-48), Slack and Glean (D-51), ClickHouse (D-57), AWS (D-59), read-only,
 │                      or a merge queue for the PRs a task lists, in code (D-46)
 │                      review-request tasks → closed once gh shows the PR reviewed/merged (D-21)
 │                      user replies on own tasks → "Process task replies" routine (Assistant)
@@ -55,7 +55,7 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`. The on
 | Telegram Scout | Telegram mentions, replies and DMs for the user, from the candidates telegram-mcp picks |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
 | Assistant (**Alfred**) | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, ClickHouse, notes, reference docs, cached web, files attached to tasks), publishing to Primer, Slack drafts, and GitHub comments, issues, reviews and CI re-runs when asked, acting on the user's replies (including scheduling a task or making it recurring, and learning how the user writes when asked, D-47), passing the user's requests on to the agent they're for, and what needs an Engineer to Ada (D-54), and running recurring tasks |
-| Engineer · Codex (**Grace**) / · Claude (**Ada**) / · OpenRouter (**Linus**) | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20). Grace and Ada also read Grafana and Google Cloud (D-48), and query ClickHouse (D-57) |
+| Engineer · Codex (**Grace**) / · Claude (**Ada**) / · OpenRouter (**Linus**) | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20). Grace and Ada also read Grafana and Google Cloud (D-48), query ClickHouse (D-57), and read AWS, changing it on the user's word (D-59) |
 
 ## Everyday commands
 
@@ -112,7 +112,7 @@ scripts/backup.sh --verify                         # restore the latest off-mach
 
 - **Read before you write**, and keep edits surgical. Match the surrounding style. TS services use zod and pino; scripts are plain `.mjs` with no dependencies beyond `yaml`.
 - **Determinism belongs in code, judgement in agents.** Matching, routing, Obsidian writes and deduplication are ops-mcp code. Agents produce JSON or pick tools. Don't move decisions into prompts.
-- **Security posture is non-negotiable.** No Slack/email sends. The only writes to outside services are on the user's word: Primer publishing (D-31, D-44), GitHub comments, issues, issue state/labels/assignees, reviews and CI re-runs (D-39, D-42, D-46), Slack drafts the user sends themselves, the runner's merge queue (D-46), and an Engineer's `pennyworth push`/`pr`/`merge`, each checked against the user's own words by `services/runner/src/authorize.mjs`, which is given nothing but those words and the agent's last reply. Grafana is read-only by OAuth scope (D-48); Google Cloud jobs use the user's own access with a read-only rule (D-53). No Calendar/Drive/Docs writes, no autonomous pushes, read-only Google scopes. The hourly backup to the user's own bucket, encrypted before it leaves, is the one unattended write (D-58). Agents get least-privilege MCP tools per agent (`mcp_servers` / `enabled_tools` in `config/paperclip.yaml`). Source content is untrusted; keep the injection clause in every agent prompt.
+- **Security posture is non-negotiable.** No Slack/email sends. The only writes to outside services are on the user's word: Primer publishing (D-31, D-44), GitHub comments, issues, issue state/labels/assignees, reviews and CI re-runs (D-39, D-42, D-46), Slack drafts the user sends themselves, the runner's merge queue (D-46), and an Engineer's `pennyworth push`/`pr`/`merge`/`aws` (AWS changes, D-59), each checked against the user's own words by `services/runner/src/authorize.mjs`, which is given nothing but those words and the agent's last reply. Grafana is read-only by OAuth scope (D-48); Google Cloud jobs use the user's own access with a read-only rule (D-53). No Calendar/Drive/Docs writes, no autonomous pushes, read-only Google scopes. The hourly backup to the user's own bucket, encrypted before it leaves, is the one unattended write (D-58). Agents get least-privilege MCP tools per agent (`mcp_servers` / `enabled_tools` in `config/paperclip.yaml`). Source content is untrusted; keep the injection clause in every agent prompt.
 - **Tasks are the user's.** Every task Pennyworth creates is assigned to the user (see the Paperclip gotchas). Only create tasks for the user's *own* clear actions; other people's actions stay in the notes. The one exception: Engineer sub-tasks the Assistant creates when the user asks (D-24). They wait for the user's go-ahead on the parent.
 - **Personal config stays out of git:** `.env`, `config/{system,routing,paperclip,runner}.yaml`, `compose.vault.yaml`, `data/`. Examples live in `config/*.example.yaml`; update both when you add keys. Secrets live in `~/.config/pennyworth/` (0700 dir, 0600 files) and never go in the repo, logs or tasks.
 - **Git:**
@@ -233,6 +233,14 @@ scripts/backup.sh --verify                         # restore the latest off-mach
 - **One server for every stack:** `mcp.grafana.com` serves any Grafana Cloud stack, picked by the `X-Grafana-URL` header. Its OAuth server is per stack: the 401's `WWW-Authenticate: resource_metadata` points at `/.well-known/oauth-protected-resource/mcp/gurl/<base64 of the stack URL>`, whose authorization endpoint already carries `?grafana_url=…` (append parameters, never replace the query). Dynamic registration takes loopback callbacks; client IDs are stateless JWTs.
 - **Scopes are the boundary:** `grafana:read grafana:query`, never `grafana:write`. Grafana doesn't offer `offline_access`; if a sign-in comes without a refresh token, the board asks to Reconnect when it expires.
 - **Tool names come from the hosted server and change:** grafana-mcp logs the upstream list next to the exposed one on connect. A new read tool needs adding to `READ_TOOLS` by hand; never expose gcx, handlers, investigations or SQL datasources.
+
+### AWS (D-59)
+
+- **Two roles per account, and jobs only ever hold the read one.** `aws.accounts` in `config/runner.yaml` names a `read_role` (a read-only Identity Center permission set: AWS is the boundary) and an optional `write_role`. `awsSession` mints only read credentials, into the job's own config and credentials files (files, because Codex drops `*KEY*`/`*SECRET*`/`*TOKEN*` variables). The write role is minted by `runAwsWrite` alone, for one `pennyworth aws` command, and goes in that command's environment. Never give a job the write role, the SSO token or Pennyworth's AWS home.
+- **`pennyworth aws` order matters:** `checkAwsCommand` first (no `sts`, `sso`, `configure`, no operation that hands out credentials, tokens, passwords, secret values or presigned URLs, opens a session or lets someone in, no `--profile`/`--endpoint-url`/`--with-decryption`), then `authorize()` on the user's words, then the run. The output goes back to the agent, so a refused pattern stays refused whatever the user said: they run those themselves. Widen it only after checking what the operation returns.
+- **The run is under bwrap with an empty home** (only the workspace bound back in) and an empty `/tmp`: `s3 cp`, `file://` and `fileb://` reach the workspace and nothing of the user's. bwrap comes from the engine devshell, like every job's.
+- **Pennyworth's sign-in has its own HOME** (`$PENNYWORTH_SECRETS_DIR/aws`): the CLI keeps SSO tokens under `~/.aws/sso/cache` with no setting to move them. `scripts/aws-auth.sh` sets `BROWSER` so the sign-in still opens in the user's own browser profile. `~/.aws` (the user's own admin sign-in) and that home are hidden from every job with bwrap, like the gcloud sign-ins.
+- **Claude Code and Codex only,** never OpenRouter (`observes`), and `agentAws` refuses on other engines too.
 
 ### ClickHouse
 

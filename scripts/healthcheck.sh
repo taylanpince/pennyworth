@@ -149,6 +149,22 @@ if systemctl --user list-unit-files pennyworth-runner.service >/dev/null 2>&1; t
     return "${PIPESTATUS[0]}"
   }
   check "runner devshell ${eshell:-?} has the job tools" job_tools
+  # AWS for Engineer jobs (D-59): each account's read role mints with Pennyworth's sign-in.
+  aws_roles() {
+    PATH="${runner_path:-/run/current-system/sw/bin}" node --input-type=module -e "
+      import { loadConfig } from './services/runner/src/config.mjs';
+      import { roleCredentials } from './services/runner/src/aws.mjs';
+      const { aws } = loadConfig();
+      let bad = 0;
+      for (const account of aws.accounts.filter((a) => a.readRole)) await roleCredentials({ aws, account, kind: 'read' }).catch((e) => (bad++, console.log(account.name + ': ' + e.message)));
+      process.exit(bad ? 1 : 0);
+    "
+  }
+  if grep -qE '^\s+- .*\bread_role:|^\s+read_role:' "$rcfg" 2>/dev/null; then
+    check "runner AWS sign-in (read roles)" aws_roles
+  else
+    printf '  skip  AWS (no accounts in %s)\n' "$rcfg"
+  fi
 else
   printf '  skip  runner (not installed)\n'
 fi

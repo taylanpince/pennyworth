@@ -145,7 +145,7 @@ describe("talking to an Engineer, end to end", () => {
       mkdirSync(dirname(join(dir, "github", slug)), { recursive: true });
       git(dir, "clone", "-q", "--bare", src, join(dir, "github", `${slug}.git`));
     }
-    for (const name of ["nix", "bwrap", "codex", "claude", "gh"]) {
+    for (const name of ["nix", "bwrap", "codex", "claude", "gh", "aws"]) {
       writeFileSync(join(bin, name), `#!/bin/sh\nexec "${process.execPath}" "${join(FAKES, `${name}.mjs`)}" "$@"\n`);
       chmodSync(join(bin, name), 0o755);
     }
@@ -167,6 +167,11 @@ engines:
 gcp:
   credentials: ${join(secrets, "gcloud/application_default_credentials.json")}
   shell: pulumi
+aws:
+  sso_start_url: https://d-1.awsapps.com/start
+  sso_region: ca-central-1
+  accounts:
+    - { name: prod-api, id: "111111111111", read_role: ReadOnlyAccess, write_role: AdministratorAccess }
 intake:
   timeout_seconds: 30
 devshells:
@@ -186,6 +191,9 @@ recurring:
     writeFileSync(join(secrets, "paperclip_board_key"), "board-key\n", { mode: 0o600 });
     writeFileSync(join(secrets, "claude_oauth_token"), "claude-token\n", { mode: 0o600 });
     writeFileSync(join(secrets, "board_internal_token"), "board-token\n", { mode: 0o600 });
+    // Pennyworth's AWS sign-in (D-59): an SSO token in its own home.
+    mkdirSync(join(secrets, "aws/.aws/sso/cache"), { recursive: true });
+    writeFileSync(join(secrets, "aws/.aws/sso/cache/s.json"), JSON.stringify({ startUrl: "https://d-1.awsapps.com/start", accessToken: "sso" }));
 
     // PEN-2713/PEN-2714: the repositories are on the user's task; Ada's part only says go.
     const engineers = [
@@ -316,6 +324,32 @@ recurring:
     assert.match(call.out, /feat\/second[\s\S]*Pushed 1 commit/);
     assert.ok(githubTip("feat/second"), "on GitHub");
     assert.ok(partComments().some((c) => /\| Branch \| Result \|[\s\S]*feat\/second/.test(c)), "on record on the task");
+  });
+
+  // D-59: the job reads AWS with the read role; a change runs through the runner, on the user's word.
+  it("runs an AWS change only once the user asks for it, with the write role, on record on the task", async () => {
+    const changes = () => fakeLog().filter((e) => e.kind === "aws");
+    step("none\npennyworth aws ecs update-service --cluster prod --service api --force-new-deployment");
+    await turn("Look into why the API is returning 502s.");
+    const refused = toolRuns().at(-1);
+    assert.equal(refused.code, 1);
+    assert.match(refused.out, /Not done: this needs Taylan's go-ahead[\s\S]*what you'd run and ask them/);
+    assert.equal(changes().length, 0, "nothing ran");
+    assert.match(claudeRuns().at(-1).prompt, /\*\*AWS\*\* \(`aws`\): signed in as Taylan with a read-only role[^\n]*`prod-api`/);
+
+    step("none\npennyworth aws ecs update-service --cluster prod --service api --force-new-deployment\npennyworth aws sts get-session-token");
+    await turn("Go ahead and redeploy the api service.");
+    const [ran, credentials] = toolRuns().slice(-2);
+    assert.equal(ran.code, 0, ran.out);
+    assert.match(ran.out, /"status":"ACTIVE"/);
+    assert.deepEqual(changes().at(-1).data.args, ["ecs", "update-service", "--cluster", "prod", "--service", "api", "--force-new-deployment", "--region", "ca-central-1"]);
+    assert.equal(changes().at(-1).data.key, "AKIA-prod-api.write");
+    assert.match(fakeLog().filter((e) => e.kind === "authorize").at(-1).data, /run this AWS CLI command[\s\S]*`aws ecs update-service --cluster prod --service api --force-new-deployment` in prod-api \(111111111111, ca-central-1\) as AdministratorAccess/);
+    assert.ok(partComments().some((c) => /Ran in AWS prod-api \(111111111111\) as AdministratorAccess, for Ada: `aws ecs update-service[^`]*` → done/.test(c)), "on record on the task");
+    // Credentials never come back, whatever the words.
+    assert.equal(credentials.code, 1);
+    assert.match(credentials.out, /aws sts isn't run for agents/);
+    assert.equal(changes().length, 1);
   });
 
   it("never replaces commits someone else pushed to the branch", async () => {

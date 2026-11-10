@@ -200,6 +200,23 @@ grep -q '\*\*Read only:\*\* describe, list, get, read and get-iam-policy command
   && pass "runner: Google Cloud jobs get a one-hour token and the read-only rule (services/runner/src/gcp.mjs, prompt.mjs)" || fail "runner: Google Cloud jobs lost the read-only rule, or got the refresh token"
 grep -q '"bwrap", "--dev-bind", "/", "/"' services/runner/src/engines.mjs && grep -q 'join(homedir(), ".config/gcloud")' services/runner/src/config.mjs \
   && pass "runner: jobs can't read the gcloud sign-ins (bwrap tmpfs)" || fail "runner: the gcloud sign-ins aren't hidden from jobs"
+# Engineer jobs' AWS (D-59): jobs hold only the read roles' one-hour credentials, never Pennyworth's sign-in
+# or a write role. A change is one `pennyworth aws` command: refused first if it hands out credentials or
+# reaches the sign-in, then checked against the user's words, then run by the runner in an empty home.
+grep -q 'join(homedir(), ".aws"), awsHome' services/runner/src/config.mjs && grep -q 'cfg.aws?.hidden' services/runner/src/engines.mjs \
+  && pass "runner: jobs can't read the AWS sign-ins, the user's or Pennyworth's (bwrap tmpfs)" || fail "runner: the AWS sign-ins aren't hidden from jobs"
+aws_session="$(awk '/^export async function awsSession/,/^}/' services/runner/src/aws.mjs)"
+echo "$aws_session" | grep -q 'kind: "read"' && ! echo "$aws_session" | grep -q '"write"' && ! grep -qE 'writeRole|kind: "write"' services/runner/src/engines.mjs \
+  && [ "$(grep -c 'kind: "write"' services/runner/src/aws.mjs)" = 1 ] && grep -q 'roleCredentials({ aws: cfg.aws, account, kind: "write", exec })' services/runner/src/aws.mjs \
+  && pass "runner: AWS jobs get read-role credentials only; the write role is used by runAwsWrite alone (services/runner/src/aws.mjs)" || fail "runner: a job may get AWS write credentials"
+aws_tool="$(awk '/^async function agentAws/,/^}/' services/runner/src/main.mjs)"
+line_of() { echo "$aws_tool" | grep -n "$1" | head -1 | cut -d: -f1; }
+[ -n "$(line_of 'checkAwsCommand(argv)')" ] && [ "$(line_of 'checkAwsCommand(argv)')" -lt "$(line_of 'await allowWrite(ctx, "aws"')" ] && [ "$(line_of 'await allowWrite(ctx, "aws"')" -lt "$(line_of 'await runAwsWrite(')" ] \
+  && echo "$aws_tool" | grep -q 'if (!observes(ctx.kind))' \
+  && grep -qE 'REFUSED_SERVICES = new Set\(\["configure", "sso", "sso-oidc", "login", "logout", "sts"' services/runner/src/aws.mjs \
+  && grep -q '"--tmpfs", home, "--bind", workspace, workspace' services/runner/src/aws.mjs \
+  && pass "runner: every pennyworth aws command is refused if it hands out credentials, then checked against the user's words, then run in an empty home" || fail "runner: pennyworth aws lost a check"
+
 # GitHub: the user's gh token can push and delete; the guard allows fixed reads plus issue comments, new issues,
 # fixed GraphQL documents whose only mutations add an issue to a project and set its status (D-39, D-42), and
 # issue state/labels/assignees, pull request reviews and failed-job re-runs (D-46).
@@ -231,12 +248,12 @@ merge_writes="$(sed -n '/^export const WRITES/,/^\];/p' services/runner/src/merg
 # The Engineer's own tools (docs/design/conversational-engineers.md): a fixed command list on the per-run
 # loopback endpoint, every write checked against the user's words, and the check given nothing else.
 tools="$(grep -oE '^export const TOOLS = \[[^]]*\]' services/runner/src/repohelper.mjs)"
-[ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "pass", "reset", "cleanup", "task", "tasks"]' ] \
+[ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "pass", "aws", "reset", "cleanup", "task", "tasks"]' ] \
   && [ "$(awk '/^async function agentTasks?\(/,/^}/' services/runner/src/main.mjs | grep -c '^  requireTaskReads(ctx);')" = 2 ] \
   && grep -q 'check: (ordered) => allowWrite(ctx, command,' services/runner/src/main.mjs \
   && [ "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "merge"' | cut -d: -f1)" -lt "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'ctx.merge = ' | cut -d: -f1)" ] \
   && [ "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "primer"' | cut -d: -f1)" -lt "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'savePrimer(' | head -1 | cut -d: -f1)" ] \
-  && grep -q '^export function authorizePrompt({ user, action, earlier = \[\], recent = \[\], lastReply = "" })' services/runner/src/authorize.mjs \
+  && grep -q '^export function authorizePrompt({ user, action, aws = false, earlier = \[\], recent = \[\], lastReply = "" })' services/runner/src/authorize.mjs \
   && grep -q 'primerTokenFile: join(secrets, "primer_mcp_read_token")' services/runner/src/config.mjs \
   && ! grep -q primerPublishTokenFile services/runner/src/engines.mjs \
   && grep -q 'slackTokenFile: join(secrets, "slack_mcp_read_token")' services/runner/src/config.mjs \

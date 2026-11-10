@@ -78,27 +78,29 @@ export function privateReads(cfg) {
 }
 
 /**
- * The whole run under bwrap with an empty tmpfs over the gcloud sign-ins (cfg.gcp.hidden): the
- * sandbox limits writes, not reads, and gcloud would otherwise pick up the user's own credentials.
+ * The whole run under bwrap with an empty tmpfs over the gcloud and AWS sign-ins (cfg.gcp.hidden,
+ * cfg.aws.hidden): the sandbox limits writes, not reads, and gcloud and aws would otherwise pick up the
+ * user's own credentials, or Pennyworth's sign-in that can reach the write roles (D-59).
  */
 function hiding(cfg, argv) {
-  const dirs = (cfg.gcp?.hidden ?? []).filter((d) => existsSync(d));
+  const dirs = [...(cfg.gcp?.hidden ?? []), ...(cfg.aws?.hidden ?? [])].filter((d) => existsSync(d));
   return dirs.length ? ["bwrap", "--dev-bind", "/", "/", ...dirs.flatMap((d) => ["--tmpfs", d]), "--die-with-parent", "--", ...argv] : argv;
 }
 
 /**
  * Command line for one engine run. Codex sandboxes its own tool calls; opencode and Claude Code run
- * inside `codex sandbox`. `gcp` is the job's gcloud session (src/gcp.mjs), for engines that observe.
+ * inside `codex sandbox`. `gcp` and `aws` are the job's gcloud and AWS sessions (src/gcp.mjs, src/aws.mjs),
+ * for engines that observe.
  */
-export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp }) {
-  const built = engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp: observes(engine.kind) ? gcp : undefined });
+export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp, aws }) {
+  const built = engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp: observes(engine.kind) ? gcp : undefined, aws: observes(engine.kind) ? aws : undefined });
   return { ...built, argv: hiding(cfg, built.argv) };
 }
 
-function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp }) {
+function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp, aws }) {
   const p = primer(cfg);
   const reads = observes(engine.kind) ? privateReads(cfg) : [];
-  const mcpEnv = { ...(p ? { PRIMER_MCP_TOKEN: p.token } : {}), ...Object.fromEntries(reads.map((r) => [r.env, r.token])), ...(gcp?.env ?? {}) };
+  const mcpEnv = { ...(p ? { PRIMER_MCP_TOKEN: p.token } : {}), ...Object.fromEntries(reads.map((r) => [r.env, r.token])), ...(gcp?.env ?? {}), ...(aws?.env ?? {}) };
   const gcpRoots = gcp ? [gcp.root] : [];
   if (engine.kind === "codex") {
     const base = sessionId ? ["codex", "exec", "resume", sessionId] : ["codex", "exec"];
@@ -198,9 +200,9 @@ const userMessage = (text) => `${JSON.stringify({ type: "user", message: { role:
  * The agent's environment: no SSH agent (fetch only via the runner), read-only gh first on PATH,
  * and a git ssh wrapper that refuses pushes.
  */
-export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, logPath, signal, env: jobEnv = {}, gcp, channel, onProgress }) {
+export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, logPath, signal, env: jobEnv = {}, gcp, aws, channel, onProgress }) {
   const lastMessageFile = `${logPath}.last.md`;
-  const { argv, env, promptAsArg, streamInput } = buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp });
+  const { argv, env, promptAsArg, streamInput } = buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp, aws });
   const full = inDevshells(cfg.devshells.flake, shells, promptAsArg ? [...argv, prompt] : argv);
   const agentEnv = {
     ...process.env,

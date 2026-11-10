@@ -11,6 +11,7 @@ import { FOR_OTHERS, RUNNER_MARKER, deliveredFrom, isAgentSubtask, isUserPart, o
 import { loadConfig } from "./config.mjs";
 import { observes, runAgent } from "./engines.mjs";
 import { gcpSession } from "./gcp.mjs";
+import { awsSession, checkAwsCommand, runAwsWrite, showCommand } from "./aws.mjs";
 import { outputs, shareOutputs, syncFiles } from "./files.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureGuardHooks, git, remoteIsEmpty } from "./git.mjs";
 import { codexModels, readApproval, resolveModelAlias, resolveOpenRouterModel, withParent } from "./intake.mjs";
@@ -666,7 +667,7 @@ async function allowWrite(ctx, action, targets, extra = {}) {
   const words = comments ? wordsAround(comments, { isCommand: (body) => Boolean(parseCommand(body)) }) : ctx.words;
   const verdict = await authorize({ cfg, user: cfg.selfName, action, targets, words, ...extra });
   log("write checked", { issue: ctx.issue.identifier, action, targets: targets.length, allowed: verdict.allowed, how: verdict.how, reason: verdict.reason.slice(0, 200) });
-  if (!verdict.allowed) throw new UserError(`Not done: this needs ${cfg.selfName}'s go-ahead (${verdict.reason}). Say exactly what you'd ${action === "merge" ? "merge" : "publish"} and ask them; don't try again in this turn.`);
+  if (!verdict.allowed) throw new UserError(`Not done: this needs ${cfg.selfName}'s go-ahead (${verdict.reason}). Say exactly what you'd ${action === "merge" ? "merge" : action === "aws" ? "run" : "publish"} and ask them; don't try again in this turn.`);
   (ctx.allowed ??= new Set()).add(key);
 }
 
@@ -684,6 +685,32 @@ async function agentPublish(ctx, command, args) {
     check: (ordered) => allowWrite(ctx, command, ordered.map((r) => `${r.repo} \`${r.branch}\`${r.prUrl ? ` (PR ${r.prUrl})` : ""}`)),
   });
   return stripHidden(text).trim();
+}
+
+/**
+ * `pennyworth aws [--account <name>] <service> <operation> …`: one AWS command with the account's
+ * write role (D-59), for Claude Code and Codex, once the user's words ask for it. Commands that hand
+ * out credentials or secrets are refused first, whatever the words. The command and its exit code go on
+ * the task, so every AWS change is on record there; its output goes back to the agent only.
+ */
+async function agentAws(ctx, args) {
+  if (!observes(ctx.kind)) throw new UserError("AWS isn't available on this engine.");
+  const named = String(args.account ?? "").trim();
+  const accounts = cfg.aws.accounts.filter((a) => a.writeRole);
+  if (!accounts.length) throw new UserError("No AWS account has a write role set up for Pennyworth.");
+  const account = named ? accounts.find((a) => a.name === named || a.id === named) : accounts.length === 1 ? accounts[0] : undefined;
+  if (!account) throw new UserError(`${named ? `${named} isn't an account with a write role` : "Name the account"} (--account): ${accounts.map((a) => a.name).join(", ")}.`);
+  const argv = Array.isArray(args.args) ? args.args.map(String) : [];
+  const refused = checkAwsCommand(argv);
+  if (refused) throw new UserError(`Not run: ${refused}.`);
+  const shown = showCommand(argv);
+  await allowWrite(ctx, "aws", [`\`${shown}\` in ${account.name} (${account.id}, ${account.region}) as ${account.writeRole}`]);
+  const res = await runAwsWrite({ cfg, account, args: argv, workspace: ctx.workspace });
+  log("aws command run", { issue: ctx.issue.identifier, account: account.name, service: argv[0], operation: argv[1], code: res.code });
+  await pc.comment(ctx.issue.id, `Ran in AWS ${account.name} (${account.id}) as ${account.writeRole}, for ${ctx.who ?? "the Engineer"}: \`${shown}\` → ${res.code === 0 ? "done" : `exit ${res.code}`}.`).catch(() => {});
+  const out = [res.stdout.trim(), res.stderr.trim()].filter(Boolean).join("\n").slice(-60_000);
+  if (res.code !== 0) throw new UserError(`${shown} failed (exit ${res.code}):\n${out}`);
+  return out || "Done (no output).";
 }
 
 /** `pennyworth engine <claude|codex|openrouter> [model]`: this request again, on another engine or model. */
@@ -866,6 +893,7 @@ class UserError extends Error {}
 async function startJob({ issue, instructions }) {
   const controller = new AbortController();
   let gcp;
+  let aws;
   running.set(issue.id, { controller, identifier: issue.identifier, startedAt: new Date().toISOString(), request: instructions });
   reportActivity();
   let jobId;
@@ -898,6 +926,9 @@ async function startJob({ issue, instructions }) {
       ? await gcpSession({ credentialsFile: cfg.gcp.credentialsFile, dir: join(cfg.stateDir, "gcloud", issue.identifier), project: cfg.gcp.projects[0], log: (m, f) => log(m, { issue: issue.identifier, ...f }) })
       : undefined;
     if (gcp && gcp.state !== "ok" && gcp.state !== "missing") log("gcp unavailable for the job", { issue: issue.identifier, state: gcp.state, detail: gcp.detail });
+    // AWS for the same engines (D-59): read roles for the job; changes only through `pennyworth aws`.
+    aws = observes(engine.kind) && cfg.aws.accounts.length ? await awsSession({ aws: cfg.aws, dir: join(cfg.stateDir, "aws", issue.identifier), log: (m, f) => log(m, { issue: issue.identifier, ...f }) }) : undefined;
+    if (aws && (aws.state !== "ok" || aws.unavailable.length)) log("aws unavailable for the job", { issue: issue.identifier, state: aws.state, detail: aws.detail ?? aws.unavailable.map((u) => `${u.name}: ${u.detail}`).join("; ") });
 
     const logPath = join(logsDir, `${issue.identifier}-${Date.now()}.log`);
     jobId = state.startJob(issue.id, engineLabel(engine), logPath);
@@ -931,6 +962,7 @@ async function startJob({ issue, instructions }) {
           clickhouse: existsSync(cfg.clickhouseTokenFile),
           sources: slackSources(`${full.description ?? ""}\n${parent?.description ?? ""}\n${instructions}`),
           gcp: { state: gcp.state, detail: gcp.detail, projects: cfg.gcp.projects },
+          aws: aws ? { state: aws.state, detail: aws.detail, accounts: aws.accounts, unavailable: aws.unavailable, writeRoles: aws.writeRoles } : undefined,
         }
       : undefined;
     const engineers = await pc.engineerAgents().catch(() => []);
@@ -948,7 +980,7 @@ async function startJob({ issue, instructions }) {
     const helper = repoHelper.register(tools);
     let result;
     try {
-      result = await runAgent({ cfg, engine, shells: runShells, worktree: workspace, prompt, sessionId: resumed ? state.task(issue.id).session_id : undefined, logPath, signal: controller.signal, env: helper.env, gcp, channel, onProgress: (p) => (Object.assign(running.get(issue.id) ?? {}, { progress: p }), reportProgress()) });
+      result = await runAgent({ cfg, engine, shells: runShells, worktree: workspace, prompt, sessionId: resumed ? state.task(issue.id).session_id : undefined, logPath, signal: controller.signal, env: helper.env, gcp, aws, channel, onProgress: (p) => (Object.assign(running.get(issue.id) ?? {}, { progress: p }), reportProgress()) });
     } finally {
       helper.done();
     }
@@ -1001,6 +1033,7 @@ async function startJob({ issue, instructions }) {
     await reportError(issue, err);
   } finally {
     gcp?.done();
+    aws?.done();
     running.delete(issue.id);
     await afterTurn(issue, tools).catch((err) => reportError(issue, err));
     drainQueue();
@@ -1470,6 +1503,7 @@ const repoHelper = startRepoHelper(async ({ issue, workspace }, raw) => {
   engine: agentEngine,
   primer: agentPrimer,
   pass: agentPass,
+  aws: agentAws,
   reset: agentReset,
   cleanup: agentCleanup,
   task: agentTask,

@@ -31,6 +31,7 @@ export function loadConfig() {
   if (!companyId) throw new Error("paperclip.company_id missing in config/system.yaml (run scripts/paperclip-setup.mjs)");
   const secrets = expand(env.PENNYWORTH_SECRETS_DIR ?? "~/.config/pennyworth");
   const gcpCredentials = expand(cfg.gcp?.credentials ?? join(secrets, "gcloud/application_default_credentials.json"));
+  const awsHome = expand(cfg.aws?.home ?? join(secrets, "aws"));
   return {
     ...cfg,
     file,
@@ -68,6 +69,17 @@ export function loadConfig() {
       // Hidden from every job (D-48): the user's own gcloud sign-in, and Pennyworth's, whose refresh
       // token can be widened back to cloud-platform.
       hidden: [join(homedir(), ".config/gcloud"), dirname(gcpCredentials)],
+    },
+    // AWS for Claude Code and Codex jobs (D-59): Pennyworth's own Identity Center sign-in, in a home of
+    // its own; read roles for jobs, write roles only for the `pennyworth aws` commands the user asks for.
+    aws: {
+      home: awsHome,
+      sso: { startUrl: cfg.aws?.sso_start_url, region: cfg.aws?.sso_region },
+      accounts: (cfg.aws?.sso_start_url ? cfg.aws?.accounts ?? [] : [])
+        .filter((a) => a?.name && a?.id)
+        .map((a) => ({ name: String(a.name), id: String(a.id), region: a.region ?? cfg.aws.region ?? cfg.aws.sso_region, readRole: a.read_role, writeRole: a.write_role })),
+      // Hidden from every job, like the gcloud sign-ins: the user's own AWS sign-in, and Pennyworth's.
+      hidden: [join(homedir(), ".aws"), awsHome],
     },
     workDir: expand(cfg.work_dir ?? "~/pennyworth"),
     stateDir: expand(cfg.state_dir ?? "~/.local/state/pennyworth-runner"),
