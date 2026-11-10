@@ -46,6 +46,10 @@ mcp_servers:
   github:
     url: http://github-mcp:8086/mcp
     bearer_token_env_var: PENNYWORTH_GITHUB_MCP_TOKEN
+  # ClickHouse Cloud, reads only: service and schema reads and checked SELECTs (D-57).
+  clickhouse:
+    url: http://clickhouse-mcp:8088/mcp
+    bearer_token_env_var: PENNYWORTH_CLICKHOUSE_MCP_TOKEN
   paperclip_tasks:
     command: node
     args: [/opt/pennyworth/paperclip-tasks-mcp.mjs]
@@ -159,7 +163,7 @@ agents:
     timeout_sec: 3600
     # Public web pages and search via OpenAI's cached index only (D-19).
     web_search: cached
-    mcp_servers: [slack, telegram, google_workspace, primer, glean, github, paperclip_tasks, ops_mcp]
+    mcp_servers: [slack, telegram, google_workspace, primer, glean, github, clickhouse, paperclip_tasks, ops_mcp]
     enabled_tools:
       # Reads only, on request (D-29); the scout tools stay with the Telegram Scout.
       telegram: [list_allowed_chats, read_chat_history, search_chat_history, get_new_messages]
@@ -171,6 +175,8 @@ agents:
       # Writes only when the user asks, in GITHUB_COMMENT_ORGS (D-39, D-42, D-46).
       github: [github_whoami, github_issue_read, github_search_issues, github_issue_comment, github_issue_create, github_issue_update, github_pr_review, github_rerun_failed]
       google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
+      # Reads only; clickhouse-mcp checks every query (D-57).
+      clickhouse: [get_organizations, get_services_list, get_service_details, list_databases, list_tables, run_select_query]
       # task_create_engineer_task: Engineer sub-tasks that wait for the user's go-ahead (D-24).
       # task_schedule, task_recurring: board moves on a date and recurring tasks (D-25). task_merge: merging tasks (D-56).
       paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status, task_create_engineer_task, task_schedule, task_recurring, task_pass_on, task_merge]

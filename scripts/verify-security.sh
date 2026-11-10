@@ -165,6 +165,9 @@ for a in config/paperclip.yaml config/paperclip.example.yaml; do
   [ -f "$a" ] || continue
   drafters="$(awk '/^  [a-z-]+:$/{agent=$1} /slack_send_message_draft/{print agent}' "$a" | sort -u | tr '\n' ' ')"
   [ "$drafters" = "assistant: " ] && pass "$a: only the Assistant can save Slack drafts" || fail "$a: Slack drafts allowed for: $drafters"
+  # ClickHouse (D-57): production data for the Assistant only, never the scouts that read untrusted messages unattended.
+  ch_agents="$(awk '/^  [a-z-]+:$/{agent=$1} /^    mcp_servers:.*[[ ,]clickhouse[],]/{print agent}' "$a" | sort -u | tr '\n' ' ')"
+  [ "$ch_agents" = "assistant: " ] && pass "$a: only the Assistant reads ClickHouse" || fail "$a: ClickHouse given to: $ch_agents"
 done
 # The session can do anything the account can: every request goes through the guard, which allows reads only (D-37).
 grep -q 'guard(client, allowed' services/telegram-mcp/src/reader.ts && grep -q 'readingClient(' services/telegram-mcp/src/main.ts \

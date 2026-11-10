@@ -35,7 +35,7 @@ host (Linux, systemd user services)
     ├── glean-mcp              proxy to your organization's Glean: company-wide search, reads only
     ├── github-mcp             GitHub issues and pull requests with your gh token: read; comment or open issues when you ask
     ├── grafana-mcp            proxy to Grafana Cloud's MCP server, read/query scopes only, for Engineer jobs (127.0.0.1:3124)
-    ├── clickhouse-mcp         proxy to ClickHouse Cloud's MCP server, checked SELECT queries only, for Engineer jobs (127.0.0.1:3127)
+    ├── clickhouse-mcp         proxy to ClickHouse Cloud's MCP server, checked SELECT queries only, for Engineer jobs (127.0.0.1:3127) and the Assistant
     └── board                  127.0.0.1:3120 task board (optional LAN listener for paired phones)
 services/paperclip-tasks-mcp   stdio bridge, mounted into paperclip, for agents' task updates
 ```
@@ -131,7 +131,7 @@ Then drop a transcript into your transcripts folder, or have a Meet call that pr
 | Slack Scout | every 30 min in work hours | Slack read/search; Paperclip task search/create/update/close |
 | Telegram Scout | every 30 min in work hours | Telegram read (your chats) and mention candidates; Paperclip task search/create/update/close |
 | Inbox Agent | every 30 min in work hours: one task per Gmail thread labelled `pennyworth` (archived or not), closed when the label is removed | Gmail read/search; Paperclip task search/create/update/close |
-| Assistant (Alfred) | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; Glean search; reference docs; Primer read + publish when asked; GitHub issues/PRs read + comment and open issues when asked; notes read + meeting-note corrections; your writing voice guide, with lessons added when you ask; cached web search; Paperclip tasks |
+| Assistant (Alfred) | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; Glean search; reference docs; Primer read + publish when asked; GitHub issues/PRs read + comment and open issues when asked; ClickHouse SELECT queries; notes read + meeting-note corrections; your writing voice guide, with lessons added when you ask; cached web search; Paperclip tasks |
 | Engineer · Codex (Grace) / · Claude (Ada) / · OpenRouter (Linus) | never woken: assignment targets for the runner | none (the runner does the work) |
 
 The agents you assign are your crew: each has a name, a portrait and a one-line voice (`persona` in `config/paperclip.yaml`, D-45). Naming one in a comment ("let Ada do it") picks that Engineer.
@@ -261,7 +261,7 @@ Repositories outside your orgs are read-only (D-35): their branches are listed b
 
 - **Grafana:** set `GRAFANA_URL` in `.env` (e.g. `https://polygonprod.grafana.net`), `docker compose up -d grafana-mcp board`, and press **Connect** in the Grafana banner on the board (`http://127.0.0.1:3120`). Pennyworth asks Grafana for read and query scopes only, so Grafana itself refuses any change; grafana-mcp also exposes only queries and reads.
 - **Google Cloud:** run `scripts/gcloud-auth.sh` (a browser sign-in into Pennyworth's own gcloud directory; your `~/.config/gcloud` is untouched), and list your usual projects under `gcp.projects` in `config/runner.yaml`. It's a plain `gcloud auth application-default login`. Each job gets a one-hour token with your access, and its prompt keeps it to reads (describe, list, logs, IAM policies), never secret values. Your Google Cloud session lasts 16 hours; when it runs out, jobs say so and you run the script again. Jobs can't read either gcloud sign-in.
-- **ClickHouse:** set `CLICKHOUSE_MCP_URL=https://mcp.clickhouse.cloud/mcp` in `.env`, `docker compose up -d clickhouse-mcp board`, and press **Connect** in the ClickHouse banner on the board. Ada and Grace see the organization's services, databases and tables, and run SELECT queries ([D-57](docs/DECISIONS.md)). The sign-in carries your own access, so clickhouse-mcp checks every query itself: one read statement, nothing that reaches outside the database (`url()`, `s3()`, `remote()`…), no `SETTINGS`, at most two minutes.
+- **ClickHouse:** set `CLICKHOUSE_MCP_URL=https://mcp.clickhouse.cloud/mcp` in `.env`, `docker compose up -d clickhouse-mcp board`, and press **Connect** in the ClickHouse banner on the board. Alfred, Ada and Grace see the organization's services, databases and tables, and run SELECT queries ([D-57](docs/DECISIONS.md)). The sign-in carries your own access, so clickhouse-mcp checks every query itself: one read statement, nothing that reaches outside the database (`url()`, `s3()`, `remote()`…), no `SETTINGS`, at most two minutes.
 
 **Merging PRs:** ask the Engineer to merge a list of PRs ("merge these one by one, at least 15 minutes apart, watch CI on master"); it queues them, and the runner merges them in code when its run ends ([D-46](docs/DECISIONS.md)). Before each merge, the PR must be approved with green checks, mergeable, and its base branch green. An approved draft is marked ready first. After each merge it waits for the base branch's CI and the gap, and comments as it goes. Anything red, unapproved, conflicting or stuck for 90 minutes stops the queue with a comment; "carry on" resumes, "stop" stops. Settings: `merges.gap_minutes` and `merges.timeout_minutes` in `config/runner.yaml`.
 

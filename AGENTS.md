@@ -32,7 +32,7 @@ host (NixOS, user taylan)
     ├── grafana-mcp          proxy to Grafana's hosted MCP (GRAFANA_URL): read/query scopes only, for Engineer jobs on 127.0.0.1:3124;
     │                        board sign-in (D-48)
     ├── clickhouse-mcp       proxy to ClickHouse Cloud's hosted MCP: service/schema reads and checked SELECTs only, for Engineer jobs
-    │                        on 127.0.0.1:3127; board sign-in (D-57)
+    │                        on 127.0.0.1:3127 and the Assistant; board sign-in (D-57)
     ├── github-mcp           GitHub issues/PRs with the user's gh token: read; when asked, in GITHUB_COMMENT_ORGS: comment, open issues (on a project board),
     │                        close/label/assign issues, review PRs, re-run failed CI (D-39, D-42, D-46)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
@@ -54,7 +54,7 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`. The on
 | Slack Scout | Slack items for the user |
 | Telegram Scout | Telegram mentions, replies and DMs for the user, from the candidates telegram-mcp picks |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
-| Assistant (**Alfred**) | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, notes, reference docs, cached web, files attached to tasks), publishing to Primer, Slack drafts, and GitHub comments, issues, reviews and CI re-runs when asked, acting on the user's replies (including scheduling a task or making it recurring, and learning how the user writes when asked, D-47), passing the user's requests on to the agent they're for (D-54), and running recurring tasks |
+| Assistant (**Alfred**) | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, ClickHouse, notes, reference docs, cached web, files attached to tasks), publishing to Primer, Slack drafts, and GitHub comments, issues, reviews and CI re-runs when asked, acting on the user's replies (including scheduling a task or making it recurring, and learning how the user writes when asked, D-47), passing the user's requests on to the agent they're for, and what needs an Engineer to Ada (D-54), and running recurring tasks |
 | Engineer · Codex (**Grace**) / · Claude (**Ada**) / · OpenRouter (**Linus**) | assignment targets only, never woken; pennyworth-runner does the work. The assignee picks the engine, the task's model override picks the model (D-20). Grace and Ada also read Grafana and Google Cloud (D-48), and query ClickHouse (D-57) |
 
 ## Everyday commands
@@ -238,6 +238,7 @@ scripts/backup.sh --verify                         # restore the latest off-mach
 
 - **The token is the user's own access, and it can write (D-57).** ClickHouse Cloud's OAuth has one scope for its MCP server (`mcp:access`); nothing narrows it to reads. The hosted `run_select_query` refuses non-SELECTs on ClickHouse's side, and `checkQuery` in `services/clickhouse-mcp/src/policy.ts` refuses on ours before anything leaves. Never expose another query tool, never forward a query around `checkCall`, and don't loosen `EXTERNAL`: a SELECT through `url()`, `s3()` or `remote()` is a read that sends data out. A new table function that reaches outside the database goes on that list.
 - **Sign-in:** dynamic registration accepts `http://127.0.0.1:3120/clickhouse/callback`; `offline_access` isn't listed, but the token endpoint issues refresh tokens anyway. Don't ask for `clickstack:access`.
+- **The Assistant reads it too (2026-11-10),** through the same server on the backplane (`PENNYWORTH_CLICKHOUSE_MCP_TOKEN` in Paperclip). No other Paperclip agent gets it, and `verify-security.sh` checks that: the scouts run unattended over untrusted messages.
 - **Queries outlast Codex's 60-second MCP tool timeout:** the proxy caps them at 120 seconds and the runner gives Codex `tool_timeout_sec=180` for this server (`toolTimeout` in `PRIVATE_READS`).
 
 ### Backups (D-58)

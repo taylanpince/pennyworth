@@ -21,8 +21,8 @@ services:
     entrypoint:
       - /bin/sh
       - -c
-      # Also exports the bearer tokens Codex sends to ops-mcp, google-workspace-mcp, slack-mcp, telegram-mcp, primer-mcp, glean-mcp and github-mcp
-      # (bearer_token_env_var in the shared Codex config). $$ escapes compose interpolation.
+      # Also exports the bearer tokens Codex sends to ops-mcp, google-workspace-mcp, slack-mcp, telegram-mcp, primer-mcp, glean-mcp, github-mcp
+      # and clickhouse-mcp (bearer_token_env_var in the shared Codex config). $$ escapes compose interpolation.
       - >-
         export BETTER_AUTH_SECRET="$$(cat /run/secrets/paperclip_auth_secret)"
         PAPERCLIP_AGENT_JWT_SECRET="$$(cat /run/secrets/paperclip_agent_jwt_secret)"
@@ -33,6 +33,7 @@ services:
         PENNYWORTH_PRIMER_MCP_TOKEN="$$(cat /run/secrets/primer_mcp_token)"
         PENNYWORTH_GLEAN_MCP_TOKEN="$$(cat /run/secrets/glean_mcp_token)"
         PENNYWORTH_GITHUB_MCP_TOKEN="$$(cat /run/secrets/github_mcp_token)"
+        PENNYWORTH_CLICKHOUSE_MCP_TOKEN="$$(cat /run/secrets/clickhouse_mcp_token)"
         PENNYWORTH_BOARD_TOKEN="$$(cat /run/secrets/board_internal_token)"
         && exec /usr/bin/tini -- docker-entrypoint.sh "$$@"
       - paperclip
@@ -68,6 +69,8 @@ services:
       - primer_mcp_token
       - glean_mcp_token
       - github_mcp_token
+      # The Assistant's ClickHouse reads (D-57).
+      - clickhouse_mcp_token
       # The board's internal API, for the Assistant's task_schedule / task_recurring (D-25).
       - board_internal_token
     pids_limit: 2048
@@ -294,7 +297,7 @@ services:
       - egress
 
   # ClickHouse Cloud through its hosted MCP server (CLICKHOUSE_MCP_URL): reads only, for the runner's
-  # Engineer jobs (D-57). Signed in from the board; the token carries the user's own access, so
+  # Engineer jobs and the Assistant (D-57). Signed in from the board; the token carries the user's own access, so
   # services/clickhouse-mcp/src/policy.ts allows only reads and checks every query.
   clickhouse-mcp:
     <<: *hardening
