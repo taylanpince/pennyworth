@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:24.14.1-bookworm-slim AS build
+FROM node:24.22.3-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -8,7 +8,7 @@ COPY src ./src
 COPY web ./web
 RUN npm run build && npm prune --omit=dev
 
-FROM node:24.14.1-bookworm-slim
+FROM node:24.22.3-bookworm-slim
 ENV NODE_ENV=production
 # pdftotext: attached PDFs get a text version the agents can read (D-43).
 RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils && rm -rf /var/lib/apt/lists/*
