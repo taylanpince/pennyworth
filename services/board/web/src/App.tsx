@@ -1,3 +1,5 @@
+import { boardName, boardIcon } from "./branding";
+import { WhatsAppPanel } from "./WhatsApp";
 import {
   DndContext,
   DragOverlay,
@@ -491,8 +493,8 @@ export function App() {
     <div className={`app${mobile ? " mobile" : ""}`}>
       <header className="topbar">
         <a className="brand" href="#/" onClick={() => setQuery("")}>
-          <img src="/icon.png" alt="" />
-          <span>Pennyworth</span>
+          <img src={boardIcon} alt="" />
+          <span>{boardName}</span>
         </a>
         <div className="search">
           <input ref={searchRef} type="search" placeholder="Search  /" value={query} onChange={(e) => setQuery(e.target.value)} />
@@ -540,6 +542,7 @@ export function App() {
 
       {error && <div className="offline">Offline: {error}. Retrying…</div>}
       <GoogleBanner google={board.google} canReconnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
+      <WhatsAppPanel />
       <TelegramBanner telegram={board.telegram} canSignIn={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
       <GleanBanner glean={board.glean} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
       <GrafanaBanner grafana={board.grafana} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />

@@ -396,19 +396,21 @@ async function ensureRoutines(companyId, agents) {
     }
 
     if (r.webhook) {
-      const label = "transcript watcher";
+      const prefix = r.webhook_prefix ?? "meeting";
+      if (!/^[a-z][a-z0-9_-]*$/.test(prefix)) fail("invalid webhook_prefix");
+      const label = r.webhook_label ?? "transcript watcher";
       const existing = triggers.find((t) => t.kind === "webhook" && t.label === label);
       let material;
       if (!existing) {
         material = (await api("POST", `/api/routines/${routine.id}/triggers`, { kind: "webhook", label, signingMode: "hmac_sha256", replayWindowSec: 300 })).json.secretMaterial;
         step(`Added signed webhook trigger to ${r.title}`);
-      } else if (!readSecret("meeting_webhook_secret")) {
+      } else if (!readSecret(`${prefix}_webhook_secret`)) {
         material = (await api("POST", `/api/routine-triggers/${existing.id}/rotate-secret`, {})).json.secretMaterial;
         step("Rotated webhook secret (local copy was missing)");
       }
       if (material) {
-        writeSecret("meeting_webhook_url", material.webhookUrl);
-        writeSecret("meeting_webhook_secret", material.webhookSecret);
+        writeSecret(`${prefix}_webhook_url`, material.webhookUrl);
+        writeSecret(`${prefix}_webhook_secret`, material.webhookSecret);
       }
     }
   }

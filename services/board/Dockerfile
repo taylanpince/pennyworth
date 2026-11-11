@@ -6,7 +6,10 @@ RUN npm ci --ignore-scripts
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 COPY web ./web
-RUN npm run build && npm prune --omit=dev
+ARG BOARD_NAME=Pennyworth
+ARG BOARD_ICON=/icon.png
+ARG BOARD_APP_ID=/
+RUN BOARD_NAME="$BOARD_NAME" BOARD_ICON="$BOARD_ICON" BOARD_APP_ID="$BOARD_APP_ID" npm run build && npm prune --omit=dev
 
 FROM node:24.14.1-bookworm-slim
 ENV NODE_ENV=production

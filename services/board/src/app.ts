@@ -1,3 +1,4 @@
+import type { WhatsAppAuth } from "./whatsapp.js";
 import { timingSafeEqual } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -44,6 +45,7 @@ export interface AppOptions {
   google?: GoogleAuth;
   /** Telegram sign-in state and sign-in (D-37); no banner and no sign-in without it. */
   telegram?: TelegramAuth;
+  whatsapp?: WhatsAppAuth;
   /** Glean sign-in state and sign-in (D-38); no banner and no sign-in without it. */
   glean?: GleanAuth;
   /** Grafana sign-in state and sign-in; no banner and no sign-in without it. */
@@ -533,6 +535,15 @@ export function createApp(opts: AppOptions): Server {
   ];
 
   const routes: { method: string; path: RegExp; maxBody?: number; handle: (m: RegExpMatchArray, body: unknown, url: URL) => Promise<unknown> }[] = [
+    ...([['GET','status'],['GET','chats'],['PUT','chats'],['POST','connect'],['POST','disconnect']] as const).map(([method,path]) => ({
+      method, path: new RegExp(`^/api/whatsapp/${path}$`),
+      handle: async (_m: RegExpMatchArray, body: unknown) => {
+        if (!opts.whatsapp) throw new HttpError(404, 'WhatsApp is not configured');
+        const data = method === 'PUT' ? parse(z.object({ ids: z.array(z.string().min(1).max(200)).max(1000) }).strict(), body) : undefined;
+        try { return await opts.whatsapp.call(method, path, data); }
+        catch { throw new HttpError(502, 'WhatsApp is unavailable; try again shortly'); }
+      },
+    })),
     {
       method: "GET",
       path: /^\/api\/board$/,

@@ -168,6 +168,10 @@ describe("engines, modes and shells", () => {
     assert.throws(() => resolveShells({ shells: "cobol" }, [], "", cfg), /unknown devshell/);
   });
 
+  it("uses host tools when no devshell is configured", () => {
+    assert.deepEqual(inDevshells("", ["", null], ["codex", "exec"]), ["codex", "exec"]);
+  });
+
   it("nests devshells", () => {
     assert.deepEqual(inDevshells("/f", ["llm", "go"], ["codex", "exec"]), ["nix", "develop", "/f#llm", "--command", "nix", "develop", "/f#go", "--command", "codex", "exec"]);
   });

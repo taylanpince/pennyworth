@@ -1,0 +1,32 @@
+services:
+  whatsapp-mcp:
+    build: ./services/whatsapp-mcp
+    image: pennyworth/whatsapp-mcp:local
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      WHATSAPP_STATE_DIR: /state
+      WHATSAPP_AUTH_TOKEN_FILE: /run/secrets/whatsapp_auth_token
+      MCP_TOKEN_FILE: /run/secrets/whatsapp_mcp_token
+    volumes:
+      - ${PENNYWORTH_SECRETS_DIR}/whatsapp:/state
+    secrets: [whatsapp_auth_token, whatsapp_mcp_token]
+    networks: [backplane, egress]
+    dns: [1.1.1.1, 8.8.8.8]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://localhost:8089/healthz').then(r=>process.exit(r.ok?0:1))"]
+      interval: 30s
+  paperclip:
+    secrets: [whatsapp_mcp_token]
+  board:
+    secrets: [whatsapp_auth_token]
+secrets:
+  whatsapp_auth_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/whatsapp_auth_token
+  whatsapp_mcp_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/whatsapp_mcp_token

@@ -8,7 +8,7 @@ const expand = (p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
 
 /** Wrap a command in the requested devshells: nix develop A --command nix develop B --command … */
 export function inDevshells(flake, shells, argv) {
-  return shells.reduceRight((inner, shell) => ["nix", "develop", `${flake}#${shell}`, "--command", ...inner], argv);
+  return shells.filter(Boolean).reduceRight((inner, shell) => ["nix", "develop", `${flake}#${shell}`, "--command", ...inner], argv);
 }
 
 function sandboxConfig(cfg, worktree, stateRoots = []) {

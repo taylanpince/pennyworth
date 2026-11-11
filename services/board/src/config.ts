@@ -41,6 +41,7 @@ export interface Config {
   google?: { url: string; token: string };
   /** telegram-mcp's sign-in endpoints (D-37): off unless the token file exists. */
   telegram?: { url: string; token: string };
+  whatsapp?: { url: string; token: string };
   /** glean-mcp's sign-in endpoints (D-38): off unless the token file exists. */
   glean?: { url: string; token: string };
   /** grafana-mcp's sign-in endpoints: off unless the token file exists. */
@@ -71,6 +72,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     internal: internalConfig(env),
     google: googleConfig(env),
     telegram: telegramConfig(env),
+    whatsapp: existsSync(env.WHATSAPP_AUTH_TOKEN_FILE ?? "/run/secrets/whatsapp_auth_token") ? { url: env.WHATSAPP_URL ?? "http://whatsapp-mcp:8089", token: readFileSync(env.WHATSAPP_AUTH_TOKEN_FILE ?? "/run/secrets/whatsapp_auth_token", "utf8").trim() } : undefined,
     glean: gleanConfig(env),
     grafana: grafanaConfig(env),
     clickhouse: clickhouseConfig(env),
