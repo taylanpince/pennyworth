@@ -8,6 +8,7 @@ const expand = (p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
 
 /** Wrap a command in the requested devshells: nix develop A --command nix develop B --command … */
 export function inDevshells(flake, shells, argv) {
+  if (flake === "") return argv; // Explicit host-toolchain mode, including optional service shells.
   return shells.filter(Boolean).reduceRight((inner, shell) => ["nix", "develop", `${flake}#${shell}`, "--command", ...inner], argv);
 }
 
@@ -279,6 +280,7 @@ export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, log
       }
     });
     child.stderr.on("data", (d) => log.write(d));
+    child.on("error", (err) => log.write(`Engine could not start: ${err.message}\n`));
     child.stdin.on("error", () => {}); // a message sent as the process exits
     if (streamInput) {
       child.stdin.write(userMessage(prompt));

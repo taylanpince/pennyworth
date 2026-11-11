@@ -8,7 +8,7 @@ Shared changes must be optional and preserve existing defaults. Ship and review 
 
 `BOARD_NAME`, `BOARD_ICON` and `BOARD_APP_ID` are board build arguments, configurable in `.env`. They default to Pennyworth, `/icon.png`, and `/`. Put a custom PNG in `services/board/web/public`, exclude personal artwork from Git, and set `BOARD_ICON` to its URL path. Rebuild the board. Name, HTML metadata, manifest, pairing screen and board header use the same values. Use a distinct HTTPS origin for each phone installation.
 
-For a host without Nix, set runner `devshells.engine_shell: ""`, `available: []`, `detect: {}` and `keyword_shells: {}`. Install Node 24, Codex, opencode and gh on the runner's PATH. Its existing sandbox still applies. On Ubuntu, install the distribution's Bubblewrap package so its AppArmor profile applies. Verify `codex sandbox` before enabling jobs. A systemd user runner needs lingering to survive logout/reboot.
+For a host without Nix, set runner `devshells.flake: ""`, `devshells.engine_shell: ""`, `available: []`, `detect: {}` and `keyword_shells: {}`. Install Node 24, Codex, opencode and gh on the runner's PATH. Its existing sandbox still applies. On Ubuntu, install the distribution's Bubblewrap package so its AppArmor profile applies. Verify `codex sandbox` before enabling jobs. A systemd user runner needs lingering to survive logout/reboot.
 
 ## Optional WhatsApp
 
