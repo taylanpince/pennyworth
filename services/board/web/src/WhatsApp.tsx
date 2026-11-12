@@ -27,17 +27,7 @@ async function request<T>(
   return res.json();
 }
 export function WhatsAppPanel() {
-  const [available, setAvailable] = useState(false);
-  useEffect(() => {
-    void request<Status>("status")
-      .then((s) => {
-        setStatus(s);
-        setAvailable(true);
-      })
-      .catch(() => {});
-  }, []);
-  const [open, setOpen] = useState(false),
-    [status, setStatus] = useState<Status | null>(null),
+  const [status, setStatus] = useState<Status | null>(null),
     [chats, setChats] = useState<Chat[]>([]),
     [selected, setSelected] = useState<string[]>([]),
     [query, setQuery] = useState(""),
@@ -55,12 +45,11 @@ export function WhatsAppPanel() {
     setSelected(c.chats.filter((c) => c.selected).map((c) => c.id));
   }
   useEffect(() => {
-    if (!open) return;
     let live = true;
     const poll = () =>
       request<Status>("status")
         .then((s) => {
-          if (live) setStatus(s);
+          if (live) { setStatus(s); setError(""); }
         })
         .catch(() => {
           if (live) setError("WhatsApp is unavailable. Try again shortly.");
@@ -72,7 +61,7 @@ export function WhatsAppPanel() {
       live = false;
       clearInterval(timer);
     };
-  }, [open]);
+  }, []);
   async function act(fn: () => Promise<unknown>) {
     setBusy(true);
     setError("");
@@ -86,22 +75,18 @@ export function WhatsAppPanel() {
       setBusy(false);
     }
   }
-  if (!available) return null;
+  if (!status) return <section className="settings-card"><h2>WhatsApp</h2><p role="status">{error || "Loading connection…"}</p></section>;
   return (
-    <section className="alert">
-      <div className="alert-row">
-        <span>
+    <section className="settings-card">
+      <div className="settings-card-heading">
+        <h2>
           WhatsApp
           {status
             ? ` · ${status.state} · ${status.mode === "attention" ? "all chats" : `${status.selected} selected chats`}`
             : ""}
-        </span>
-        <button className="btn" onClick={() => setOpen(!open)}>
-          {open ? "Close" : "Settings"}
-        </button>
+        </h2>
       </div>
-      {open && (
-        <div>
+      <div>
           <p>
             {status?.mode === "attention" ? (
               <>
@@ -228,8 +213,7 @@ export function WhatsAppPanel() {
             Text, links and captions are supported. Voice notes and media
             downloads are not connected yet.
           </p>
-        </div>
-      )}
+      </div>
     </section>
   );
 }

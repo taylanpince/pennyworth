@@ -653,3 +653,14 @@ kbd {
 .new-task h2 { margin: 0; font-size: 15px; }
 .new-title { font-size: 16px; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); outline: none; }
 .new-where { margin-right: auto; }
+
+.settings-page { width: min(760px, 100%); align-self: center; padding: 24px 16px; overflow-y: auto; flex: 1; }
+.settings-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.settings-page h1 { margin: 0 0 6px; font-size: 24px; }
+.settings-page-heading p { margin: 0; color: var(--muted); }
+.settings-card { padding: 20px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+.settings-card h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.settings-card p { line-height: 1.6; }
+.settings-card img { max-width: 100%; height: auto; }
+.settings-card [role="alert"] { color: var(--danger); }
+.icon-btn[aria-current="page"] { color: var(--accent); background: var(--accent-soft); }
