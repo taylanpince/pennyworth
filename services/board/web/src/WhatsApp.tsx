@@ -1,6 +1,18 @@
 import { useEffect, useState } from "react";
-type Status = { state: string; qr: string | null; selected: number };
-type Chat = { id: string; name: string; selected: number };
+type Status = {
+  state: string;
+  qr: string | null;
+  selected: number;
+  mode?: "selected" | "attention";
+  taskEmoji?: string;
+};
+type Chat = {
+  id: string;
+  name: string;
+  selected: number;
+  mode?: "selected" | "attention";
+  taskEmoji?: string;
+};
 async function request<T>(
   path: string,
   method = "GET",
@@ -81,18 +93,29 @@ export function WhatsAppPanel() {
         <span>
           WhatsApp
           {status
-            ? ` · ${status.state} · ${status.selected} selected chats`
+            ? ` · ${status.state} · ${status.mode === "attention" ? "all chats" : `${status.selected} selected chats`}`
             : ""}
         </span>
         <button className="btn" onClick={() => setOpen(!open)}>
-          {open ? "Close" : "Manage chats"}
+          {open ? "Close" : "Settings"}
         </button>
       </div>
       {open && (
         <div>
           <p>
-            Connect WhatsApp, then select the conversations Manor should watch.
-            You can change this list at any time.
+            {status?.mode === "attention" ? (
+              <>
+                Watching all chats. Mentions of you, replies to your messages,
+                and messages you react to with {status.taskEmoji || "📌"} become
+                tasks. Removing that reaction closes a pin-only task; replying
+                to an ask closes its response task.
+              </>
+            ) : (
+              <>
+                Connect WhatsApp, then select the conversations to watch. You
+                can change this list at any time.
+              </>
+            )}
           </p>
           {error && <p role="alert">{error}</p>}
           {status?.state !== "connected" && (
@@ -132,65 +155,74 @@ export function WhatsAppPanel() {
               Disconnect
             </button>
           )}
-          <p>
-            <button
-              className="btn"
-              disabled={busy}
-              onClick={() => void act(loadChats)}
-            >
-              Refresh chat list
-            </button>
-          </p>
-          <label>
-            Find a chat{" "}
-            <input value={query} onChange={(e) => setQuery(e.target.value)} />
-          </label>
-          <div style={{ maxHeight: 300, overflowY: "auto" }}>
-            {chats
-              .filter((c) =>
-                `${c.name} ${c.id}`.toLowerCase().includes(query.toLowerCase()),
-              )
-              .map((c) => (
-                <label key={c.id} style={{ display: "block", padding: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(c.id)}
-                    onChange={(e) => {
-                      setSaved(false);
-                      setSelected(
-                        e.target.checked
-                          ? [...selected, c.id]
-                          : selected.filter((id) => id !== c.id),
-                      );
-                    }}
-                  />{" "}
-                  {c.name}
-                </label>
-              ))}
-          </div>
-          {!chats.length && (
-            <p>
-              Chats appear after linking and syncing. Refresh the list after a
-              few moments.
-            </p>
-          )}
-          <button
-            className="btn primary"
-            disabled={busy}
-            onClick={() =>
-              void act(async () => {
-                await request("chats", "PUT", { ids: selected });
-                setSaved(true);
-              })
-            }
-          >
-            Save selected chats ({selected.length})
-          </button>
-          {saved && (
-            <p role="status">
-              Saved. Only selected chats feed Manor. Retained messages from
-              deselected chats have been removed.
-            </p>
+          {status?.mode !== "attention" && (
+            <>
+              <p>
+                <button
+                  className="btn"
+                  disabled={busy}
+                  onClick={() => void act(loadChats)}
+                >
+                  Refresh chat list
+                </button>
+              </p>
+              <label>
+                Find a chat{" "}
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </label>
+              <div style={{ maxHeight: 300, overflowY: "auto" }}>
+                {chats
+                  .filter((c) =>
+                    `${c.name} ${c.id}`
+                      .toLowerCase()
+                      .includes(query.toLowerCase()),
+                  )
+                  .map((c) => (
+                    <label key={c.id} style={{ display: "block", padding: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(c.id)}
+                        onChange={(e) => {
+                          setSaved(false);
+                          setSelected(
+                            e.target.checked
+                              ? [...selected, c.id]
+                              : selected.filter((id) => id !== c.id),
+                          );
+                        }}
+                      />{" "}
+                      {c.name}
+                    </label>
+                  ))}
+              </div>
+              {!chats.length && (
+                <p>
+                  Chats appear after linking and syncing. Refresh the list after
+                  a few moments.
+                </p>
+              )}
+              <button
+                className="btn primary"
+                disabled={busy}
+                onClick={() =>
+                  void act(async () => {
+                    await request("chats", "PUT", { ids: selected });
+                    setSaved(true);
+                  })
+                }
+              >
+                Save selected chats ({selected.length})
+              </button>
+              {saved && (
+                <p role="status">
+                  Saved. Only selected chats feed Manor. Retained messages from
+                  deselected chats have been removed.
+                </p>
+              )}
+            </>
           )}
           <p>
             Text, links and captions are supported. Voice notes and media

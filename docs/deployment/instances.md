@@ -20,6 +20,14 @@ The MCP URL is `http://whatsapp-mcp:8089/mcp`; its token is `whatsapp_mcp_token`
 
 A scan routine can set `webhook: true`, `webhook_prefix: whatsapp`, and `webhook_label: selected chat intake`. Existing routines default to the original meeting webhook names. Copy the generated `whatsapp_webhook_url` and `whatsapp_webhook_secret` into the sidecar state directory as `webhook_url` and `webhook_secret` (0600). The sidecar sends a content-free HMAC wake-up once a minute only while connected and unprocessed messages exist; use `coalesce_if_active`. This avoids idle model runs. Real linking, chat sync and agent intake must be verified with the user's account before relying on it.
 
+### Attention mode across all chats
+
+Set `WHATSAPP_MODE=attention` and recreate `whatsapp-mcp`. The board then displays all-chat attention settings instead of the selection list. `WHATSAPP_TASK_EMOJI` defaults to 📌; optional comma-separated `WHATSAPP_ME_ALIASES` matches plain-text names as well as native mentions. Existing installations stay in selected mode unless explicitly changed.
+
+Attention mode retains context across chats and queues native/name mentions, quoted replies to the user, and the user's own task-emoji reactions. Other people's reactions and ordinary conversation do not create candidates. A reaction can target an older message; if its original content was never delivered or has expired, the candidate clearly says context is unavailable. History sync supplies context but does not backfill old mention tasks. WhatsApp only exposes messages delivered to this linked session; this is not a complete historical archive. The 30-day retention limit remains.
+
+Use `config/agents/whatsapp-scout.md` for the attention scout. Grant task_create/search/list/get/update/comment/set_status/current plus the three WhatsApp tools. The scout uses one stable source marker per message and closed-task deduplication. Own quoted answers and removed task reactions queue follow-up changes. A pending item's revision must be returned to whatsapp_ack so an acknowledgement cannot swallow a newer pin/unpin or answer. Removing a pin closes only a pin-only task; an unanswered mention/reply remains actionable. Explicit pins survive an answer. Previously created board tasks are not deleted when switching modes.
+
 ## Optional Family calendar creation
 
 The normal Google server, credential and OAuth scopes remain read-only. `compose.calendar-write.yaml` starts a separate process from the same built image. It requires a dedicated `calendar_write_oauth.json`, `calendar_write_token`, and an explicit `GOOGLE_WRITE_CALENDAR_ID`. Do not use `primary` as the target. Generate the token securely and keep both files in the private secrets directory.

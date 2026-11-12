@@ -11,6 +11,9 @@ services:
     tmpfs: [/tmp]
     environment:
       WHATSAPP_STATE_DIR: /state
+      WHATSAPP_MODE: ${WHATSAPP_MODE:-selected}
+      WHATSAPP_TASK_EMOJI: ${WHATSAPP_TASK_EMOJI:-📌}
+      WHATSAPP_ME_ALIASES: ${WHATSAPP_ME_ALIASES:-}
       WHATSAPP_AUTH_TOKEN_FILE: /run/secrets/whatsapp_auth_token
       MCP_TOKEN_FILE: /run/secrets/whatsapp_mcp_token
     volumes:
