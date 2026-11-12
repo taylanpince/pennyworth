@@ -98,10 +98,12 @@ board to apply restored branding assets. Integration credentials and the backup
 repository password stay outside snapshots and must be recovered separately.
 
 For Backblaze B2, run `python3 scripts/configure-backup.py` interactively on the
-server. It collects bucket details and hidden credentials, and asks for a long
-backup password already saved in a password manager. Configuration is written
-privately under the instance's secrets directory, and existing backup credentials
-are never overwritten. Then run `scripts/backup.sh --init`,
+server with Python 3.14 or newer. It shows masked secret input and character
+counts, and retries mismatched passwords. The key ID is visible; the application
+key and backup password are masked. Save the backup password in a password manager
+first. Configuration is written privately under the instance's secrets directory.
+To correct saved B2 credentials, rerun with `--replace-key`; this replaces only the
+B2 key pair and preserves the repository location and encryption password. Then run `scripts/backup.sh --init`,
 `scripts/backup.sh --offsite`, and `scripts/backup.sh --verify` before enabling an
 instance-specific hourly systemd timer. Verification restores into scratch space,
 checks the SQLite databases, and loads the SQL dump into an isolated Postgres;
