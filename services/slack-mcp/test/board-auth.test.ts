@@ -40,3 +40,16 @@ test("first-time client setup survives restart and cannot replace a configured c
     expect(new URL(restarted.start().url).searchParams.get("client_id")).toBe("12345.67890");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("token exchange reports safe actionable Slack errors without exposing response secrets", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "slack-error-"));
+  try {
+    for (const status of [200, 400]) {
+      const store = new TokenStore(join(dir, "token.json"), "cid");
+      const auth = new BoardAuth("cid", store, (async () => new Response(JSON.stringify({ ok: false, error: "bad_client_secret", access_token: "must-not-leak", error_description: "private-response" }), { status })) as typeof fetch);
+      const state = new URL(auth.start().url).searchParams.get("state")!;
+      await expect(auth.finish(state, "code")).rejects.toThrow("Slack returned bad_client_secret. Enable PKCE");
+      expect(store.available()).toBe(false);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

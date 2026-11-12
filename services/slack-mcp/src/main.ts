@@ -1,4 +1,4 @@
-import { BoardAuth } from "./board-auth.js";
+import { BoardAuth, BoardSignInError } from "./board-auth.js";
 // Proxy in front of Slack's official MCP server (mcp.slack.com).
 // Holds the user's Slack token; exposes only an allowlist of read tools, plus saving a draft
 // for the user to send themselves (D-46). Tools that post, react, edit, schedule or upload are
@@ -138,7 +138,11 @@ const http = createServer(async (req, res) => {
         return void reply(200, result);
       }
       return void reply(404, { error: "not found" });
-    } catch { return void reply(400, { error: "Could not connect Slack. Check the client configuration or start sign-in again." }); }
+    } catch (err) {
+      const error = err instanceof BoardSignInError ? err.message : "Could not connect Slack. Check the client configuration or start sign-in again.";
+      log.warn({ path: url.pathname, error }, "Slack board sign-in failed");
+      return void reply(400, { error });
+    }
   }
   const read = url.pathname === "/mcp/read";
   if (url.pathname !== "/mcp" && !(read && readToken)) return void res.writeHead(404).end();

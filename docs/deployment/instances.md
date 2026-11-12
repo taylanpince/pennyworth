@@ -66,7 +66,8 @@ accounts are preserved. This connection requests the existing read-only scopes;
 Family Calendar writes still use the separately configured calendar writer.
 
 Slack needs `SLACK_CLIENT_ID` for the intended workspace, registered with
-`http://localhost:3118/callback`. Set it in the server environment or enter it in Settings for first-time setup. Settings
+`http://localhost:3118/callback`. Enable PKCE in the Slack app’s OAuth & Permissions
+before connecting; this localhost flow does not send a client secret. Set it in the server environment or enter it in Settings for first-time setup. Settings
 can then connect or reconnect that workspace. It uses the same scopes, token
 store and MCP tool policy as the command-line sign-in. Connecting a different
 workspace replaces this instance's Slack connection, not another instance's.

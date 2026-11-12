@@ -1,3 +1,5 @@
+export class SlackConnectionError extends Error {}
+
 export class SlackAuth {
   constructor(
     private readonly url: string,
@@ -13,8 +15,8 @@ export class SlackAuth {
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(20_000),
     });
-    if (!res.ok)
-      throw new Error("Slack connection unavailable; try reconnecting");
-    return res.json();
+    const data = await res.json().catch(() => ({})) as { error?: unknown };
+    if (!res.ok) throw new SlackConnectionError(typeof data.error === "string" ? data.error.slice(0, 500) : "Slack connection unavailable; try reconnecting");
+    return data;
   }
 }

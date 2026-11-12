@@ -1,4 +1,4 @@
-import type { SlackAuth } from "./slack.js";
+import { SlackConnectionError, type SlackAuth } from "./slack.js";
 import type { WhatsAppAuth } from "./whatsapp.js";
 import { timingSafeEqual } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
@@ -584,6 +584,7 @@ export function createApp(opts: AppOptions): Server {
           return provider === "google" ? await opts.google!.finish(pending.state, code) : await opts.slackAuth!.call("POST", "finish", { state: pending.state, code });
         } catch (err) {
           if (err instanceof HttpError) throw err;
+          if (err instanceof SlackConnectionError) throw new HttpError(400, err.message);
           throw new HttpError(400, provider === "google" ? "Google sign-in failed. Check the OAuth client configuration and try again." : "Slack sign-in failed. Check SLACK_CLIENT_ID and try again.");
         }
       },
