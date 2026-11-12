@@ -106,6 +106,9 @@ function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp,
     const base = sessionId ? ["codex", "exec", "resume", sessionId] : ["codex", "exec"];
     // The workspace holds several clones and isn't a git repository itself (D-41).
     const args = [...base, "--json", "--skip-git-repo-check", "-o", lastMessageFile, ...sandboxConfig(cfg, worktree, gcpRoots)];
+    // A login shell (`bash -lc`) reruns NixOS's /etc/profile, which resets PATH: `pennyworth` and the
+    // devshell's tools were "command not found" in every Codex job (PEN-4506).
+    args.push("-c", "allow_login_shell=false");
     if (p) {
       args.push(
         "-c", `mcp_servers.primer.url=${JSON.stringify(p.url)}`,

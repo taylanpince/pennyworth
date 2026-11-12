@@ -154,6 +154,8 @@ describe("engines, modes and shells", () => {
     const codex = buildCommand({ cfg: c, engine: { kind: "codex" }, worktree: "/w", lastMessageFile: "/x" }).argv;
     assert.ok(codex.includes('mcp_servers.clickhouse.url="http://127.0.0.1:3127/mcp"'));
     assert.ok(codex.includes("mcp_servers.clickhouse.tool_timeout_sec=180"));
+    // A login shell resets PATH from NixOS's /etc/profile, losing `pennyworth` (PEN-4506).
+    assert.ok(codex.includes("allow_login_shell=false"));
     const or = buildCommand({ cfg: c, engine: { kind: "openrouter", model: "z-ai/glm" }, worktree: "/w" });
     assert.equal(or.env.CLICKHOUSE_MCP_TOKEN, undefined);
     assert.doesNotMatch(or.env.OPENCODE_CONFIG_CONTENT, /clickhouse|3127/);
