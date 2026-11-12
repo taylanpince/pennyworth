@@ -78,3 +78,34 @@ The localhost page may show a connection error; it does not need to load. The
 callback is accepted only by the paired browser that started the flow, expires
 after ten minutes, and is single-use. OAuth tokens stay in their sidecars. Neither
 MCP agents nor unpaired browsers can use these board connection endpoints.
+
+### Instance-specific backups
+
+Backups and restores accept these optional settings; existing Pennyworth defaults
+remain unchanged:
+
+- `PENNYWORTH_BACKUP_NAME`: snapshot host/tag, archive prefix and local backup cache namespace.
+- `PENNYWORTH_RUNNER_STATE_DIR`: the instance's runner database directory.
+- `PENNYWORTH_RUNNER_SERVICE`: its systemd user service, checked before restoring.
+- `PENNYWORTH_WHATSAPP_STATE_DIR`: when configured, copy only `messages.sqlite`
+  through SQLite's online backup API. Login/session files and webhook secrets
+  are excluded. Relink WhatsApp and reprovision webhook credentials after recovery.
+
+The archive includes root-level personal Markdown prompts, Compose overlays, and
+board public assets alongside the existing databases and Paperclip master key.
+Restore keeps conflicting deployment files as `.restored` for review. Rebuild the
+board to apply restored branding assets. Integration credentials and the backup
+repository password stay outside snapshots and must be recovered separately.
+
+For Backblaze B2, run `python3 scripts/configure-backup.py` interactively on the
+server. It collects bucket details and hidden credentials, and asks for a long
+backup password already saved in a password manager. Configuration is written
+privately under the instance's secrets directory, and existing backup credentials
+are never overwritten. Then run `scripts/backup.sh --init`,
+`scripts/backup.sh --offsite`, and `scripts/backup.sh --verify` before enabling an
+instance-specific hourly systemd timer. Verification restores into scratch space,
+checks the SQLite databases, and loads the SQL dump into an isolated Postgres;
+it does not replace the running instance.
+
+Run `python3 scripts/test-backup.py` to exercise archive coverage and restore
+safety against temporary fixture data.
