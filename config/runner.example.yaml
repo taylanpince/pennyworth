@@ -25,6 +25,7 @@ engines:
     key_file: ~/.config/pennyworth/openrouter_key
   claude:                             # "engine: claude" / "use Claude": Claude Code, headless, inside codex sandbox
     model: ""                         # empty = Claude Code's default; or opus, sonnet, haiku, fable, claude-…
+    auth: token                       # or login: native CLI login in the isolated config_dir
     token_file: ~/.config/pennyworth/claude_oauth_token   # from `claude setup-token` (0600)
     # Runner-owned Claude Code home: none of your plugins, hooks, MCP servers or claude.ai connectors.
     config_dir: ~/.local/state/pennyworth-runner/claude

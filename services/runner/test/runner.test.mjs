@@ -100,6 +100,25 @@ describe("engines, modes and shells", () => {
     assert.throws(() => buildCommand({ cfg: { ...c, claudeTokenFile: join(dir, "missing") }, engine: { kind: "claude" }, worktree: "/w" }), /claude setup-token/);
   });
 
+  it("supports isolated Claude CLI login with explicit Opus medium effort and no static token", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pw-claude-login-"));
+    try {
+      const home = join(dir, "home"); mkdirSync(home);
+      const c = { ...cfg, claudeAuth: "login", claudeTokenFile: join(dir, "absent"), claudeConfigDir: home, sandbox: { extra_writable_roots: [] } };
+      const args = { cfg: c, engine: { kind: "claude", model: "claude-opus-5-5", effort: "medium" }, worktree: "/w" };
+      assert.throws(() => buildCommand(args), /runner-owned config directory/);
+      writeFileSync(join(home, ".credentials.json"), "{}");
+      const { argv, env } = buildCommand(args);
+      assert.equal(env.CLAUDE_CONFIG_DIR, home);
+      assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+      assert.equal(env.ENABLE_CLAUDEAI_MCP_SERVERS, "false");
+      assert.equal(argv[argv.indexOf("--setting-sources") + 1], "");
+      assert.ok(argv.includes("--strict-mcp-config"));
+      assert.deepEqual(argv.slice(-4), ["--model", "claude-opus-5-5", "--effort", "medium"]);
+      assert.throws(() => buildCommand({ ...args, cfg: { ...c, claudeAuth: "invalid" } }), /auth must be/);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("gives every engine Primer's read-only endpoint, with the token only in the environment", () => {
     const dir = mkdtempSync(join(tmpdir(), "pw-primer-"));
     for (const [f, v] of [["claude", "tok"], ["or", "ork"], ["primer", "ptok\n"]]) writeFileSync(join(dir, f), v);

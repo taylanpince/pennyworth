@@ -42,6 +42,7 @@ export function loadConfig() {
     boardTokenFile: join(secrets, "board_internal_token"),
     boardInternalUrl: env.BOARD_INTERNAL_URL ?? cfg.recurring?.board_url ?? "http://127.0.0.1:3122",
     openrouterKeyFile: expand(cfg.engines?.openrouter?.key_file ?? join(secrets, "openrouter_key")),
+    claudeAuth: cfg.engines?.claude?.auth ?? "token",
     claudeTokenFile: expand(cfg.engines?.claude?.token_file ?? join(secrets, "claude_oauth_token")),
     claudeConfigDir: expand(cfg.engines?.claude?.config_dir ?? join(cfg.state_dir ?? "~/.local/state/pennyworth-runner", "claude")),
     // Primer for every Engineer job, read-only (D-40): primer-mcp's loopback port.

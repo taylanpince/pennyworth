@@ -153,8 +153,11 @@ function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp,
     };
   }
   if (engine.kind === "claude") {
-    if (!existsSync(cfg.claudeTokenFile)) throw new Error(`Claude Code isn't set up for the runner: run \`claude setup-token\` and save the token to \`${cfg.claudeTokenFile}\` (0600).`);
-    const token = readFileSync(cfg.claudeTokenFile, "utf8").trim();
+    const auth = cfg.claudeAuth ?? "token";
+    if (!["token", "login"].includes(auth)) throw new Error("Claude auth must be token or login");
+    if (auth === "token" && !existsSync(cfg.claudeTokenFile)) throw new Error(`Claude Code isn't set up for the runner: run \`claude setup-token\` and save the token to \`${cfg.claudeTokenFile}\` (0600).`);
+    if (auth === "login" && !existsSync(join(cfg.claudeConfigDir, ".credentials.json"))) throw new Error("Sign in to Claude in the runner-owned config directory before using login authentication.");
+    const token = auth === "token" ? readFileSync(cfg.claudeTokenFile, "utf8").trim() : undefined;
     mkdirSync(cfg.claudeConfigDir, { recursive: true, mode: 0o700 });
     // Headless, no prompts (the codex sandbox is the write boundary), and nothing from your own
     // Claude setup: a runner-owned config dir, no settings files (yours or the repo's: no hooks),
@@ -179,7 +182,7 @@ function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp,
       argv: codexSandbox(cfg, worktree, [cfg.claudeConfigDir, ...gcpRoots], claude),
       env: {
         ...mcpEnv,
-        CLAUDE_CODE_OAUTH_TOKEN: token,
+        ...(token ? { CLAUDE_CODE_OAUTH_TOKEN: token } : {}),
         CLAUDE_CONFIG_DIR: cfg.claudeConfigDir,
         ENABLE_CLAUDEAI_MCP_SERVERS: "false",
         DISABLE_AUTOUPDATER: "1",
@@ -227,6 +230,7 @@ export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, log
   delete agentEnv.SSH_ASKPASS;
   agentEnv.SSH_ASKPASS_REQUIRE = "never";
   agentEnv.GIT_ASKPASS = "false";
+  if (engine.kind === "claude" && cfg.claudeAuth === "login") delete agentEnv.CLAUDE_CODE_OAUTH_TOKEN;
   if (engine.kind === "claude") delete agentEnv.ANTHROPIC_API_KEY; // the subscription token, never an API key
 
   return new Promise((resolve) => {

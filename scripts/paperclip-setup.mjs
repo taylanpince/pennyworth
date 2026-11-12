@@ -224,6 +224,12 @@ function runnerAgentBody(key, a, existing) {
   const model = a.model || existing?.adapterConfig?.model || "";
   if (a.adapter === "opencode_local" && !/^openrouter\/\S+$/.test(model)) fail(`agent ${key}: opencode_local needs model: openrouter/<model>`);
   const adapterConfig = { ...(model ? { model } : {}) };
+  const effortKey = a.adapter === "claude_local" ? "effort" : a.adapter === "codex_local" ? "modelReasoningEffort" : null;
+  const effort = a.reasoning_effort ?? (effortKey && existing?.adapterConfig?.[effortKey]);
+  if (effortKey && effort) {
+    if (!["minimal", "low", "medium", "high", "xhigh", "max"].includes(effort)) fail(`agent ${key}: invalid reasoning_effort`);
+    adapterConfig[effortKey] = effort;
+  }
   // Models offered in the board picker and known to the runner (opencode ids, openrouter/<model>).
   const models = a.models ?? [];
   if (!Array.isArray(models) || models.some((m) => typeof m !== "string" || (a.adapter === "opencode_local" && !/^openrouter\/\S+$/.test(m)))) fail(`agent ${key}: models must be a list of model ids${a.adapter === "opencode_local" ? " (openrouter/<model>)" : ""}`);

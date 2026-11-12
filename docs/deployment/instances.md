@@ -111,3 +111,21 @@ it does not replace the running instance.
 
 Run `python3 scripts/test-backup.py` to exercise archive coverage and restore
 safety against temporary fixture data.
+
+### Claude CLI engineer
+
+The optional Claude engineer uses the host's Claude CLI through the runner. Set
+its `model` and `reasoning_effort` in `paperclip.yaml`; provisioning preserves
+those defaults in the task executor picker. Personal names and choices belong
+in the instance configuration.
+
+The default authentication remains `engines.claude.auth: token`, reading the
+configured `token_file`. To use a native CLI subscription login with refresh,
+set `auth: login` and a dedicated `config_dir` outside the interactive Claude
+home. Authenticate with `CLAUDE_CONFIG_DIR=/path/to/isolated/home claude auth login`,
+or initially import only `.credentials.json` from an existing authorized login.
+Never copy interactive settings, plugins, hooks or MCP configuration. The CLI
+maintains its credentials in the isolated directory; do not overwrite refreshed
+credentials on each run. Login mode ignores inherited `CLAUDE_CODE_OAUTH_TOKEN`
+and `ANTHROPIC_API_KEY`. The existing tool allowlist, strict MCP configuration,
+disabled claude.ai connectors and process sandbox apply in both modes.
