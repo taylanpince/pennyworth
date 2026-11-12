@@ -1,3 +1,4 @@
+import type { SlackAuth } from "./slack.js";
 import type { WhatsAppAuth } from "./whatsapp.js";
 import { timingSafeEqual } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
@@ -46,6 +47,7 @@ export interface AppOptions {
   /** Telegram sign-in state and sign-in (D-37); no banner and no sign-in without it. */
   telegram?: TelegramAuth;
   whatsapp?: WhatsAppAuth;
+  slackAuth?: SlackAuth;
   /** Glean sign-in state and sign-in (D-38); no banner and no sign-in without it. */
   glean?: GleanAuth;
   /** Grafana sign-in state and sign-in; no banner and no sign-in without it. */
@@ -534,7 +536,58 @@ export function createApp(opts: AppOptions): Server {
     },
   ];
 
-  const routes: { method: string; path: RegExp; maxBody?: number; handle: (m: RegExpMatchArray, body: unknown, url: URL) => Promise<unknown> }[] = [
+  const connectionFlows = new Map<string, { state: string; expires: number }>();
+  const routes: { method: string; path: RegExp; maxBody?: number; handle: (m: RegExpMatchArray, body: unknown, url: URL, req: IncomingMessage) => Promise<unknown> }[] = [
+    {
+      method: "GET", path: /^\/api\/connections\/(google|slack)\/status$/,
+      handle: async (m) => {
+        if (m[1] === "google") return { enabled: Boolean(opts.google), ...(await opts.google?.status(0)) };
+        return opts.slackAuth ? { enabled: true, ...await opts.slackAuth.call("GET", "status") as object } : { enabled: false };
+      },
+    },
+    {
+      method: "POST", path: /^\/api\/connections\/(google|slack)\/configure$/,
+      handle: async (m, body) => {
+        const data = parse(z.object({ client_id: z.string().min(5).max(500), client_secret: z.string().min(1).max(500).optional() }).strict(), body);
+        try {
+          if (m[1] === "google" && opts.google && data.client_secret) return await opts.google.configure(data.client_id, data.client_secret);
+          if (m[1] === "slack" && opts.slackAuth) return await opts.slackAuth.call("POST", "configure", { client_id: data.client_id });
+        } catch { throw new HttpError(400, "Client configuration could not be saved. Existing clients must be changed on the server."); }
+        throw new HttpError(400, "Connection service or client credentials are missing");
+      },
+    },
+    {
+      method: "POST", path: /^\/api\/connections\/(google|slack)\/(start|finish)$/,
+      handle: async (m, body, _url, req) => {
+        const provider = m[1]!, action = m[2]!;
+        const key = `${sessionToken(req) || "local"}:${provider}`;
+        if ((provider === "google" && !opts.google) || (provider === "slack" && !opts.slackAuth)) throw new HttpError(400, "Connection is not configured on this server");
+        try {
+          if (action === "start") {
+            const data = parse(z.object({ account: z.string().email().max(320).optional() }).strict(), body);
+            if (provider === "google" && !data.account) throw new HttpError(400, "Enter your Google email address");
+            const result = provider === "google" ? await opts.google!.start(data.account!, "http://localhost:3120/google/callback", true) : await opts.slackAuth!.call("POST", "start", {}) as { url: string };
+            const state = new URL(result.url).searchParams.get("state");
+            if (!state) throw new Error("Missing sign-in state");
+            for (const [k, v] of connectionFlows) if (v.expires < Date.now()) connectionFlows.delete(k);
+            connectionFlows.set(key, { state, expires: Date.now() + 600_000 });
+            return result;
+          }
+          const { callback } = parse(z.object({ callback: z.string().url().max(4096) }).strict(), body);
+          const url = new URL(callback);
+          const expected = provider === "google" ? "http://localhost:3120/google/callback" : "http://localhost:3118/callback";
+          const pending = connectionFlows.get(key);
+          if (url.origin + url.pathname !== expected || !pending || pending.expires < Date.now() || pending.state !== url.searchParams.get("state")) throw new HttpError(400, "This callback does not match your sign-in. Start again.");
+          const code = url.searchParams.get("code");
+          if (!code || code.length > 2000) throw new HttpError(400, "Access was not granted. Start sign-in again.");
+          connectionFlows.delete(key);
+          return provider === "google" ? await opts.google!.finish(pending.state, code) : await opts.slackAuth!.call("POST", "finish", { state: pending.state, code });
+        } catch (err) {
+          if (err instanceof HttpError) throw err;
+          throw new HttpError(400, provider === "google" ? "Google sign-in failed. Check the OAuth client configuration and try again." : "Slack sign-in failed. Check SLACK_CLIENT_ID and try again.");
+        }
+      },
+    },
     ...([['GET','status'],['GET','chats'],['PUT','chats'],['POST','connect'],['POST','disconnect']] as const).map(([method,path]) => ({
       method, path: new RegExp(`^/api/whatsapp/${path}$`),
       handle: async (_m: RegExpMatchArray, body: unknown) => {
@@ -771,7 +824,7 @@ export function createApp(opts: AppOptions): Server {
     const route = internal.find((r) => r.method === req.method && r.path.test(url.pathname));
     if (!route) throw new HttpError(404, "not found");
     const body = await readJson(req);
-    send(res, 200, JSON.stringify(await route.handle(url.pathname.match(route.path)!, body, url)), "application/json");
+    send(res, 200, JSON.stringify(await route.handle(url.pathname.match(route.path)!, body, url, req)), "application/json");
   }
 
   async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
@@ -788,7 +841,7 @@ export function createApp(opts: AppOptions): Server {
     const route = routes.find((r) => r.method === req.method && r.path.test(path));
     if (!route) throw new HttpError(404, "not found");
     const body = req.method === "GET" ? undefined : await readJson(req, route.maxBody);
-    const result = await route.handle(path.match(route.path)!, body, url);
+    const result = await route.handle(path.match(route.path)!, body, url, req);
     send(res, 200, JSON.stringify(result), "application/json");
   }
 

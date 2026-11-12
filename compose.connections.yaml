@@ -1,0 +1,11 @@
+# Optional browser-managed Slack sign-in. Google uses its existing board auth credential.
+services:
+  slack-mcp:
+    environment:
+      SLACK_AUTH_TOKEN_FILE: /run/secrets/slack_auth_token
+    secrets: [slack_auth_token]
+  board:
+    secrets: [slack_auth_token]
+secrets:
+  slack_auth_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/slack_auth_token

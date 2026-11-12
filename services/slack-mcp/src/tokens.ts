@@ -70,7 +70,7 @@ export class TokenStore {
 
   constructor(
     private readonly path: string,
-    private readonly clientId: string,
+    private clientId: string,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
@@ -85,6 +85,10 @@ export class TokenStore {
     }
     return this.token;
   }
+
+  setClientId(value: string): void { this.clientId = value; }
+
+  install(t: StoredToken): void { this.save(t); }
 
   private save(t: StoredToken): void {
     const tmp = join(dirname(this.path), `.token.${process.pid}.tmp`);

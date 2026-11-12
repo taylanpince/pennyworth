@@ -664,3 +664,7 @@ kbd {
 .settings-card img { max-width: 100%; height: auto; }
 .settings-card [role="alert"] { color: var(--danger); }
 .icon-btn[aria-current="page"] { color: var(--accent); background: var(--accent-soft); }
+.settings-card + .settings-card { margin-top: 20px; }
+.connection-field { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; }
+.connection-field input { width: 100%; padding: 10px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+.connection-flow { margin-top: 16px; border-top: 1px solid var(--border); }

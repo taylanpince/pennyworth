@@ -1,3 +1,4 @@
+import { SlackAuth } from "./slack.js";
 import pino from "pino";
 import { WhatsAppAuth } from "./whatsapp.js";
 import { createApp } from "./app.js";
@@ -30,12 +31,13 @@ rollover();
 setInterval(rollover, 60_000).unref();
 
 const google = cfg.google && new GoogleAuth(cfg.google.url, cfg.google.token, log);
+const slackAuth = cfg.slackAuth && new SlackAuth(cfg.slackAuth.url, cfg.slackAuth.token);
 const whatsapp = cfg.whatsapp && new WhatsAppAuth(cfg.whatsapp.url, cfg.whatsapp.token);
 const telegram = cfg.telegram && new TelegramAuth(cfg.telegram.url, cfg.telegram.token, log);
 const glean = cfg.glean && new GleanAuth(cfg.glean.url, cfg.glean.token, log);
 const grafana = cfg.grafana && new GrafanaAuth(cfg.grafana.url, cfg.grafana.token, log);
 const clickhouse = cfg.clickhouse && new ClickHouseAuth(cfg.clickhouse.url, cfg.clickhouse.token, log);
-const common = { paperclip, store, log, staticDir: cfg.staticDir, timezone: cfg.timezone, workdays: cfg.workdays, slackTeams: cfg.slackTeams, lan: cfg.lan, activity: {}, google, whatsapp, telegram, glean, grafana, clickhouse, backupStatus: cfg.backupStatus };
+const common = { paperclip, store, log, staticDir: cfg.staticDir, timezone: cfg.timezone, workdays: cfg.workdays, slackTeams: cfg.slackTeams, lan: cfg.lan, activity: {}, google, slackAuth, whatsapp, telegram, glean, grafana, clickhouse, backupStatus: cfg.backupStatus };
 const server = createApp({ ...common, allowedHosts: cfg.allowedHosts, mode: "local" });
 server.listen(cfg.port, "0.0.0.0", () => log.info({ port: cfg.port, hosts: cfg.allowedHosts }, "board listening"));
 // Phones on the home network (D-23): a separate port, paired devices only.

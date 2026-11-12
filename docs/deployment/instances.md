@@ -47,3 +47,33 @@ Google's scope covers more than one calendar; the fixed-calendar restriction is 
 ## Slack
 
 Use the existing Slack service, OAuth client, scout prompt, pin reaction rules, response detection, deduplication and draft-only assistant tools unchanged. Put the personal instance's workspace/client ID and Slack user ID in its private configuration. Keep scans disabled until sign-in and workspace identity are verified. Do not import work-instance credentials.
+
+### Google and Slack in board Settings
+
+The navbar gear opens Settings with Google, Slack and WhatsApp connection controls.
+Google uses the existing `google_auth_token`; optional `compose.connections.yaml`
+adds a separate `slack_auth_token` secret for the board and Slack sidecar. Generate
+that secret in the instance's secrets directory and add the overlay to
+`COMPOSE_FILE`. Never reuse either Slack MCP credential for board sign-in.
+
+Google needs a Desktop OAuth client configured in `google_oauth.json` as
+`client_id` and `client_secret` (the same file used by `scripts/google-auth.sh`).
+For a fresh installation, upload the downloaded Desktop client JSON in Settings;
+only the sidecar stores its client credentials. Existing clients cannot be overwritten
+through the board. Settings
+can then add an account or reconnect one by email. Existing primary and other
+accounts are preserved. This connection requests the existing read-only scopes;
+Family Calendar writes still use the separately configured calendar writer.
+
+Slack needs `SLACK_CLIENT_ID` for the intended workspace, registered with
+`http://localhost:3118/callback`. Set it in the server environment or enter it in Settings for first-time setup. Settings
+can then connect or reconnect that workspace. It uses the same scopes, token
+store and MCP tool policy as the command-line sign-in. Connecting a different
+workspace replaces this instance's Slack connection, not another instance's.
+
+On a headless installation, start sign-in in Settings, open the provider's consent
+page, then copy the entire final localhost callback URL back into Settings.
+The localhost page may show a connection error; it does not need to load. The
+callback is accepted only by the paired browser that started the flow, expires
+after ten minutes, and is single-use. OAuth tokens stay in their sidecars. Neither
+MCP agents nor unpaired browsers can use these board connection endpoints.

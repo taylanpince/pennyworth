@@ -1,3 +1,4 @@
+import { ConnectionPanel } from "./Connections";
 import { WhatsAppPanel } from "./WhatsApp";
 
 export function SettingsPage() {
@@ -10,6 +11,8 @@ export function SettingsPage() {
         </div>
         <a className="btn" href="#/">Back to board</a>
       </header>
+      <ConnectionPanel provider="google" />
+      <ConnectionPanel provider="slack" />
       <WhatsAppPanel />
     </main>
   );
