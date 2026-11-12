@@ -9,6 +9,7 @@
 # Paperclip's database comes back by starting Paperclip on an empty database and loading the
 # dump into it with Paperclip's own restore, then restarting it.
 set -euo pipefail
+umask 077
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo"
@@ -16,6 +17,9 @@ env_file="${PENNYWORTH_ENV_FILE:-.env}"
 [ -f "$env_file" ] && { set -a; . "$env_file"; set +a; }
 secrets="${PENNYWORTH_SECRETS_DIR:-$HOME/.config/pennyworth}"
 runner_state="${PENNYWORTH_RUNNER_STATE_DIR:-$HOME/.local/state/pennyworth-runner}"
+backup_name="${PENNYWORTH_BACKUP_NAME:-pennyworth}"
+runner_service="${PENNYWORTH_RUNNER_SERVICE:-pennyworth-runner}"
+whatsapp_state="${PENNYWORTH_WHATSAPP_STATE_DIR:-}"
 dc() { docker compose --env-file "$env_file" "$@"; }
 
 running="$(dc ps --status running --services 2>/dev/null || true)"
@@ -24,9 +28,9 @@ if [ -n "$running" ]; then
   echo "       stop them first: docker compose down" >&2
   exit 1
 fi
-if systemctl --user is-active -q pennyworth-runner 2>/dev/null; then
+if systemctl --user is-active -q "$runner_service" 2>/dev/null; then
   echo "error: refusing to restore while the runner is running" >&2
-  echo "       stop it first: systemctl --user stop pennyworth-runner" >&2
+  echo "       stop it first: systemctl --user stop $runner_service" >&2
   exit 1
 fi
 
@@ -36,7 +40,7 @@ if [ "${1:-}" = --snapshot ]; then
   [ -f "$secrets/backup/restic.env" ] || { echo "error: no $secrets/backup/restic.env" >&2; exit 1; }
   set -a; . "$secrets/backup/restic.env"; set +a
   export RESTIC_PASSWORD_FILE="$secrets/backup/password"
-  restic restore "${2:-latest}" --target "$work/snapshot"
+  restic restore "${2:-latest}" --host "$backup_name" --tag "$backup_name" --target "$work/snapshot"
   src="$(dirname "$(find "$work/snapshot" -name MANIFEST -path '*/stage/MANIFEST' | head -1)")"
 else
   archive="${1:?usage: scripts/restore.sh <backup.tar.gz> | --snapshot [ID]}"
@@ -48,6 +52,9 @@ fi
 [ -f "$src/MANIFEST" ] || { echo "error: not a Pennyworth backup" >&2; exit 1; }
 [ -f "$src/paperclip/paperclip.sql" ] || { echo "error: a backup from before D-58 (no database dump); restore it with that version of this script" >&2; exit 1; }
 cat "$src/MANIFEST"
+if [ -f "$src/whatsapp/messages.sqlite" ] && [ -z "$whatsapp_state" ]; then
+  echo "error: set PENNYWORTH_WHATSAPP_STATE_DIR for this backup" >&2; exit 1
+fi
 
 data="${PENNYWORTH_DATA_DIR:-./data}"
 config="${PENNYWORTH_CONFIG_DIR:-./config}"
@@ -66,6 +73,14 @@ if ls "$runner_state"/state.sqlite* >/dev/null 2>&1; then
   mkdir -p "$aside/runner"
   mv "$runner_state"/state.sqlite* "$aside/runner/"
 fi
+if [ -f "$src/whatsapp/messages.sqlite" ]; then
+  [ -n "$whatsapp_state" ] || { echo "error: set PENNYWORTH_WHATSAPP_STATE_DIR for this backup" >&2; exit 1; }
+  mkdir -p "$whatsapp_state" "$aside/whatsapp"
+  for f in "$whatsapp_state"/messages.sqlite*; do
+    [ ! -f "$f" ] || mv "$f" "$aside/whatsapp/"
+  done
+  cp "$src/whatsapp/messages.sqlite" "$whatsapp_state/"
+fi
 echo "Previous state moved to $aside"
 
 mkdir -p "$instance" "$data/board" "$data/ops-mcp" "$runner_state"
@@ -75,7 +90,7 @@ cp -a "$src/paperclip/instance/." "$instance/"
 [ -f "$src/runner/state.sqlite" ] && cp "$src/runner/state.sqlite" "$runner_state/"
 
 mkdir -p "$config"
-for f in "$src"/config/*.yaml; do
+for f in "$src"/config/*.yaml "$src"/config/*.md; do
   [ -f "$f" ] || continue
   name="$(basename "$f")"
   [ -f "$config/$name" ] && ! cmp -s "$f" "$config/$name" && cp "$config/$name" "$aside/$name"
@@ -86,8 +101,15 @@ done
 if [ -f "$src/repo/env" ]; then
   if [ -f .env ]; then cmp -s "$src/repo/env" .env || cp "$src/repo/env" .env.restored; else cp "$src/repo/env" .env; fi
 fi
-if [ -f "$src/repo/compose.vault.yaml" ]; then
-  if [ -f compose.vault.yaml ]; then cmp -s "$src/repo/compose.vault.yaml" compose.vault.yaml || cp "$src/repo/compose.vault.yaml" compose.vault.yaml.restored; else cp "$src/repo/compose.vault.yaml" .; fi
+for f in "$src"/repo/compose*.yaml; do
+  [ -f "$f" ] || continue
+  name="$(basename "$f")"
+  if [ -f "$name" ]; then cmp -s "$f" "$name" || cp "$f" "$name.restored"; else cp "$f" "$name"; fi
+done
+if [ -d "$src/repo/board-public" ]; then
+  mkdir -p services/board/web/public
+  [ ! -d services/board/web/public ] || cp -r services/board/web/public "$aside/board-public"
+  cp -r "$src/repo/board-public/." services/board/web/public/
 fi
 
 echo "Starting Paperclip on an empty database to load the dump"
@@ -108,5 +130,5 @@ dc restart paperclip
 echo "Restored. Next:"
 echo "  node scripts/paperclip-setup.mjs              # agents' Codex settings (Codex homes aren't backed up)"
 echo "  docker compose up -d"
-echo "  systemctl --user start pennyworth-runner"
+echo "  systemctl --user start $runner_service"
 echo "  scripts/healthcheck.sh"

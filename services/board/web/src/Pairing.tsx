@@ -1,3 +1,4 @@
+import { boardName, boardIcon } from "./branding";
 import QRCode from "qrcode";
 import { useEffect, useState } from "react";
 import { api, type Device } from "./api";
@@ -40,8 +41,8 @@ export function PairScreen({ code: linked, onPaired }: { code?: string; onPaired
   }
   return (
     <div className="pair-screen">
-      <img src="/icon.png" alt="" />
-      <h1>Pennyworth</h1>
+      <img src={boardIcon} alt="" />
+      <h1>{boardName}</h1>
       <p className="muted">
         {linked ? "Pair this phone with your board." : (
           <>

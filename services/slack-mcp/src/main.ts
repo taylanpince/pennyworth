@@ -1,3 +1,4 @@
+import { BoardAuth, BoardSignInError } from "./board-auth.js";
 // Proxy in front of Slack's official MCP server (mcp.slack.com).
 // Holds the user's Slack token; exposes only an allowlist of read tools, plus saving a draft
 // for the user to send themselves (D-46). Tools that post, react, edit, schedule or upload are
@@ -26,6 +27,10 @@ const inboundToken = tokenFile && existsSync(tokenFile) ? readFileSync(tokenFile
 // hold the main token, so they can't reach the draft tool.
 const readTokenFile = process.env.MCP_READ_TOKEN_FILE;
 const readToken = readTokenFile && existsSync(readTokenFile) ? readFileSync(readTokenFile, "utf8").trim() : undefined;
+
+const authFile = process.env.SLACK_AUTH_TOKEN_FILE;
+const authToken = authFile && existsSync(authFile) ? readFileSync(authFile, "utf8").trim() : undefined;
+const boardAuth = new BoardAuth(clientId, tokens, fetch, process.env.SLACK_CLIENT_CONFIG_FILE ?? "/state/client.json");
 
 let upstream: { client: Client; tools: Tool[]; at: number } | undefined;
 
@@ -107,9 +112,37 @@ function authorized(req: IncomingMessage, token: string | undefined): boolean {
 const http = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
   if (url.pathname === "/healthz") {
-    const ok = tokens.available() && Boolean(clientId);
+    const ok = tokens.available() && boardAuth.status().configured;
     res.writeHead(ok ? 200 : 503, { "content-type": "application/json" }).end(JSON.stringify({ ok, detail: ok ? undefined : clientId ? "Slack not connected (run scripts/slack-auth.sh)" : "SLACK_CLIENT_ID not set" }));
     return;
+  }
+  if (url.pathname.startsWith("/auth/")) {
+    if (!authToken || !authorized(req, authToken)) return void res.writeHead(401).end();
+    const reply = (status: number, body: unknown) => res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify(body));
+    try {
+      if (req.method === "GET" && url.pathname === "/auth/status") return void reply(200, boardAuth.status());
+      if (req.method !== "POST") return void reply(405, { error: "method not allowed" });
+      const chunks: Buffer[] = []; let size = 0;
+      for await (const c of req) { size += c.length; if (size > 8192) return void reply(413, { error: "request too large" }); chunks.push(c); }
+      const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+      if (url.pathname === "/auth/configure") {
+        if (typeof body.client_id !== "string" || !/^[a-zA-Z0-9._-]{5,500}$/.test(body.client_id)) return void reply(400, { error: "invalid client ID" });
+        return void reply(200, boardAuth.configure(body.client_id));
+      }
+      if (url.pathname === "/auth/start") return void reply(200, boardAuth.start());
+      if (url.pathname === "/auth/finish") {
+        if (typeof body.state !== "string" || body.state.length > 100 || typeof body.code !== "string" || body.code.length > 2000) return void reply(400, { error: "invalid callback" });
+        const result = await boardAuth.finish(body.state, body.code);
+        const previous = upstream; upstream = undefined;
+        await previous?.client.close().catch(() => {});
+        return void reply(200, result);
+      }
+      return void reply(404, { error: "not found" });
+    } catch (err) {
+      const error = err instanceof BoardSignInError ? err.message : "Could not connect Slack. Check the client configuration or start sign-in again.";
+      log.warn({ path: url.pathname, error }, "Slack board sign-in failed");
+      return void reply(400, { error });
+    }
   }
   const read = url.pathname === "/mcp/read";
   if (url.pathname !== "/mcp" && !(read && readToken)) return void res.writeHead(404).end();

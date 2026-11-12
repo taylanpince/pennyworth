@@ -166,8 +166,8 @@ for a in config/paperclip.yaml config/paperclip.example.yaml; do
   drafters="$(awk '/^  [a-z-]+:$/{agent=$1} /slack_send_message_draft/{print agent}' "$a" | sort -u | tr '\n' ' ')"
   [ "$drafters" = "assistant: " ] && pass "$a: only the Assistant can save Slack drafts" || fail "$a: Slack drafts allowed for: $drafters"
   # ClickHouse (D-57): production data for the Assistant only, never the scouts that read untrusted messages unattended.
-  ch_agents="$(awk '/^  [a-z-]+:$/{agent=$1} /^    mcp_servers:.*[[ ,]clickhouse[],]/{print agent}' "$a" | sort -u | tr '\n' ' ')"
-  [ "$ch_agents" = "assistant: " ] && pass "$a: only the Assistant reads ClickHouse" || fail "$a: ClickHouse given to: $ch_agents"
+  ch_agents="$(node -e 'const fs=require("node:fs"),yaml=require("./services/ops-mcp/node_modules/yaml"); const c=yaml.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(Object.entries(c.agents??{}).filter(([,a])=>(a.mcp_servers??[]).includes("clickhouse")).map(([k])=>k+": ").sort().join(""))' "$a")"
+  { [ -z "$ch_agents" ] || [ "$ch_agents" = "assistant: " ]; } && pass "$a: ClickHouse is disabled or limited to the Assistant" || fail "$a: ClickHouse given to: $ch_agents"
 done
 # The session can do anything the account can: every request goes through the guard, which allows reads only (D-37).
 grep -q 'guard(client, allowed' services/telegram-mcp/src/reader.ts && grep -q 'readingClient(' services/telegram-mcp/src/main.ts \

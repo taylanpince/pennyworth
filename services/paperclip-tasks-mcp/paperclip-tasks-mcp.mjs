@@ -276,7 +276,7 @@ const TOOLS = {
     run: async ({ title, description, marker, labels, priority, dedupe_closed, related_markers }) => {
       if (!COMPANY) throw new Error("PAPERCLIP_COMPANY_ID not set");
       const m = String(marker).trim();
-      if (!/^[A-Za-z0-9:._\/-]{3,200}$/.test(m)) throw new Error("invalid marker");
+      if (!/^[A-Za-z0-9:@._\/-]{3,200}$/.test(m)) throw new Error("invalid marker");
       // A pinned Slack message is the same item as the needs-response or todo task for it:
       // closing either must not bring it back under the other marker.
       const markers = [m, ...(related_markers ?? []).map((r) => String(r).trim())];
@@ -284,7 +284,7 @@ const TOOLS = {
       // ...and the other way round, for a needs-response or todo task (source:slack:<channel>:<ts>).
       const slackAsk = /^source:slack:[^:]+:([0-9]+)(?:\.[0-9]+)?$/.exec(m);
       if (slackAsk) markers.push(m.replace(/^source:slack:/, "source:slack:pin:"));
-      if (markers.some((k) => !/^[A-Za-z0-9:._\/-]{3,200}$/.test(k))) throw new Error("invalid related marker");
+      if (markers.some((k) => !/^[A-Za-z0-9:@._\/-]{3,200}$/.test(k))) throw new Error("invalid related marker");
       // A Slack ask gets an hour for the user to answer or pin it before it becomes a task.
       if (slackAsk && Date.now() / 1000 - Number(slackAsk[1]) < SLACK_GRACE_SECONDS) {
         return { created: false, deferred: true, reason: "the Slack message is less than an hour old; a later scan decides" };

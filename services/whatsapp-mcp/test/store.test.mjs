@@ -1,0 +1,27 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { Store } from "../src/store.mjs";
+test("selection gates storage and reads; removal purges content; replay is deduplicated", () => {
+  const s = new Store(":memory:");
+  s.chat("a", "Family");
+  s.chat("b", "Other");
+  const m = { chat: "a", id: "one", text: "Book dinner", at: Date.now() };
+  s.add(m);
+  assert.equal(s.pending().length, 0);
+  s.select(["a"]);
+  s.add(m);
+  s.add(m);
+  s.add({ ...m, chat: "b" });
+  assert.equal(s.pending().length, 1);
+  assert.equal(s.history("b").length, 0);
+  s.ack([{ chat: "a", id: "one" }]);
+  assert.equal(s.pending().length, 0);
+  s.add(m);
+  assert.equal(s.pending().length, 0);
+  s.select([]);
+  assert.equal(s.history("a").length, 0);
+  s.select(["a"]);
+  assert.equal(s.history("a").length, 0);
+  assert.throws(() => s.select(["unknown"]));
+  assert.equal(s.chats().find((c) => c.id === "a").selected, 1);
+});

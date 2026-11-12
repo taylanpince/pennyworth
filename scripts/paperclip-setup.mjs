@@ -224,6 +224,12 @@ function runnerAgentBody(key, a, existing) {
   const model = a.model || existing?.adapterConfig?.model || "";
   if (a.adapter === "opencode_local" && !/^openrouter\/\S+$/.test(model)) fail(`agent ${key}: opencode_local needs model: openrouter/<model>`);
   const adapterConfig = { ...(model ? { model } : {}) };
+  const effortKey = a.adapter === "claude_local" ? "effort" : a.adapter === "codex_local" ? "modelReasoningEffort" : null;
+  const effort = a.reasoning_effort ?? (effortKey && existing?.adapterConfig?.[effortKey]);
+  if (effortKey && effort) {
+    if (!["minimal", "low", "medium", "high", "xhigh", "max"].includes(effort)) fail(`agent ${key}: invalid reasoning_effort`);
+    adapterConfig[effortKey] = effort;
+  }
   // Models offered in the board picker and known to the runner (opencode ids, openrouter/<model>).
   const models = a.models ?? [];
   if (!Array.isArray(models) || models.some((m) => typeof m !== "string" || (a.adapter === "opencode_local" && !/^openrouter\/\S+$/.test(m)))) fail(`agent ${key}: models must be a list of model ids${a.adapter === "opencode_local" ? " (openrouter/<model>)" : ""}`);
@@ -396,19 +402,21 @@ async function ensureRoutines(companyId, agents) {
     }
 
     if (r.webhook) {
-      const label = "transcript watcher";
+      const prefix = r.webhook_prefix ?? "meeting";
+      if (!/^[a-z][a-z0-9_-]*$/.test(prefix)) fail("invalid webhook_prefix");
+      const label = r.webhook_label ?? "transcript watcher";
       const existing = triggers.find((t) => t.kind === "webhook" && t.label === label);
       let material;
       if (!existing) {
         material = (await api("POST", `/api/routines/${routine.id}/triggers`, { kind: "webhook", label, signingMode: "hmac_sha256", replayWindowSec: 300 })).json.secretMaterial;
         step(`Added signed webhook trigger to ${r.title}`);
-      } else if (!readSecret("meeting_webhook_secret")) {
+      } else if (!readSecret(`${prefix}_webhook_secret`)) {
         material = (await api("POST", `/api/routine-triggers/${existing.id}/rotate-secret`, {})).json.secretMaterial;
         step("Rotated webhook secret (local copy was missing)");
       }
       if (material) {
-        writeSecret("meeting_webhook_url", material.webhookUrl);
-        writeSecret("meeting_webhook_secret", material.webhookSecret);
+        writeSecret(`${prefix}_webhook_url`, material.webhookUrl);
+        writeSecret(`${prefix}_webhook_secret`, material.webhookSecret);
       }
     }
   }

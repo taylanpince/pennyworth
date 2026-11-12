@@ -1,0 +1,15 @@
+{
+  "name": "manor-whatsapp-mcp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/main.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "pino": "^10.4.0",
+    "qrcode": "^1.5.4"
+  }
+}

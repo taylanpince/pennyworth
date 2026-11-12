@@ -454,7 +454,7 @@ export function GoogleBanner({ google, canReconnect }: { google: Board["google"]
   if (!expired.length && !google.error) return null;
   return (
     <div className="alert" role="alert">
-      {google.error && !google.accounts.length && <div>Google isn't connected: {google.error}. Run scripts/google-auth.sh.</div>}
+      {google.error && !google.accounts.length && <div>Google isn't connected. <a href="#/settings">Open Settings to connect.</a></div>}
       {expired.map((a) => (
         <div key={a.email} className="alert-row">
           <span>
@@ -467,7 +467,7 @@ export function GoogleBanner({ google, canReconnect }: { google: Board["google"]
               Reconnect
             </a>
           ) : (
-            <span className="alert-hint">Reconnect from the board on your computer.</span>
+            <a className="btn" href="#/settings">Reconnect in Settings</a>
           )}
         </div>
       ))}

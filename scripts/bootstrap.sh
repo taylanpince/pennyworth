@@ -64,6 +64,8 @@ gen_secret grafana_auth_token    # the board's Grafana sign-in state and sign-in
 gen_secret clickhouse_mcp_token  # the runner's Engineer jobs, on 127.0.0.1:3127 (D-57)
 gen_secret clickhouse_auth_token # the board's ClickHouse sign-in state and sign-in
 gen_secret github_mcp_token
+gen_secret whatsapp_auth_token
+gen_secret whatsapp_mcp_token
 gen_secret board_internal_token   # the board's internal API (D-25)
 placeholder paperclip_ops_key ""
 placeholder google_oauth.json "{}"
@@ -85,7 +87,9 @@ grep -q 'names: \[\]' "$config_dir/system.yaml" && say "edit self.names/self.ema
 
 echo "Data"
 data="${PENNYWORTH_DATA_DIR:-./data}"
-mkdir -p "$data/paperclip" "$data/ops-mcp"
+mkdir -p "$data/paperclip" "$data/ops-mcp" "$data/board"
+mkdir -p "$PENNYWORTH_SECRETS_DIR/whatsapp"
+chmod 0700 "$PENNYWORTH_SECRETS_DIR/whatsapp"
 umask 022
 
 echo "Vault and knowledge mounts"
