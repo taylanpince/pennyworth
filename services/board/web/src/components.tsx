@@ -438,6 +438,12 @@ export const CloseIcon = () => (
     <path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
   </svg>
 );
+export const PhoneIcon = () => (
+  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+    <rect x="4.5" y="1.5" width="7" height="13" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
+    <path d="M7 12h2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+  </svg>
+);
 export const PlusIcon = () => (
   <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
     <path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />

@@ -128,6 +128,17 @@ kbd {
 }
 .icon-btn:hover { background: var(--surface); border-color: var(--border); color: var(--text); }
 .icon-btn.subtle { width: 24px; height: 24px; }
+/* Sections swap the whole page; .show-group only changes the board's columns. */
+.sections { display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--col); border: 1px solid var(--border); }
+.sections button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; cursor: pointer; white-space: nowrap; }
+.sections button:hover { color: var(--text); }
+.sections button.on { background: var(--surface); color: var(--text); font-weight: 500; box-shadow: var(--shadow); }
+.show-group { display: flex; align-items: center; gap: 2px; margin-right: 4px; }
+.show-label { font-size: 12px; color: var(--faint); margin-right: 4px; }
+.show-group button { padding: 3px 9px; border-radius: 999px; border: 1px dashed var(--border-strong); background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; }
+.show-group button:hover { color: var(--text); }
+.show-group button.on { border-style: solid; border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.topbar .icon-btn { font-weight: 600; }
 .link-btn { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font-size: 12px; }
 
 .offline { padding: 6px 16px; background: #fff3bf; color: #5c4400; font-size: 13px; }
@@ -393,6 +404,11 @@ kbd {
 .app.mobile .search { flex: 1; }
 .app.mobile .search input { width: 100%; max-width: none; }
 .app.mobile .spacer.topbar-spacer { display: none; }
+.sections-row { padding: 8px 12px 0; }
+.sections-row .sections { width: 100%; }
+.sections-row .sections button { flex: 1; justify-content: center; padding: 6px 4px; font-size: 13px; }
+.sections-row:has(+ .tabs) + .tabs { padding-top: 8px; }
+.sections-row:not(:has(+ .tabs)) { padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .app.mobile .columns { padding: 10px 10px 16px; flex-direction: column; overflow-x: hidden; }
 .app.mobile .column { max-width: none; min-width: 0; background: transparent; }
 .app.mobile .column-done { display: none; }

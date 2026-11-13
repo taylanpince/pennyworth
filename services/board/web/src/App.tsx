@@ -21,7 +21,7 @@ import { CrewView } from "./Agents";
 import { MemoryView, useMemoryPending } from "./Memory";
 import { StatsView } from "./Stats";
 import { PairRequired, api, type Session } from "./api";
-import { BackupBanner, CardView, ClickHouseBanner, ExecutorPicker, GleanBanner, GoogleBanner, GrafanaBanner, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
+import { BackupBanner, CardView, ClickHouseBanner, ExecutorPicker, GleanBanner, GoogleBanner, GrafanaBanner, PhoneIcon, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
 import { CrewPicker, Drawer } from "./Drawer";
 import { Markdown, setSlackTeams } from "./markdown";
 import { PairScreen, PhonePanel } from "./Pairing";
@@ -419,10 +419,10 @@ export function App() {
       if (k === "c" || k === "n") return e.preventDefault(), setCreating(true);
       if (k === "b") return go("#/brief");
       if (k === "?") return go("#/help");
-      if (k === "d") return setShowDone((s) => !s);
-      if (k === "r") return setShowRecurring((s) => !s);
       if (k === "a") return setView(view === "agents" ? "board" : "agents");
       if (view !== "board") return;
+      if (k === "d") return setShowDone((s) => !s);
+      if (k === "r") return setShowRecurring((s) => !s);
       if (k === "j" || k === "ArrowDown") {
         e.preventDefault();
         if (e.shiftKey && p) return void reorder(lists[p.b][p.i]!.id, 1);
@@ -493,37 +493,51 @@ export function App() {
     go(`#/t/${c.identifier}`);
   };
 
+  // Sections replace the whole page; the Show toggles next to search only add columns to the board.
+  const sections = (
+    <nav className="sections" aria-label="Sections">
+      <button className={view === "board" ? "on" : ""} aria-current={view === "board" ? "page" : undefined} onClick={() => setView("board")}>
+        Board
+      </button>
+      <button className={view === "agents" ? "on" : ""} aria-current={view === "agents" ? "page" : undefined} onClick={() => setView("agents")} title="The crew and what they're on (a)">
+        {board.agentsActive > 0 && <span className="live-dot" />}
+        Crew
+        {board.agentsActive > 0 && <span className="btn-count">{board.agentsActive}</span>}
+      </button>
+      <button className={view === "memory" ? "on" : ""} aria-current={view === "memory" ? "page" : undefined} onClick={() => setView("memory")} title="What the agents remember, and their proposals to review">
+        Memory
+        {memoryPending > 0 && <span className="btn-count needs">{memoryPending}</span>}
+      </button>
+      <button className={view === "stats" ? "on" : ""} aria-current={view === "stats" ? "page" : undefined} onClick={() => setView("stats")} title="What the agents cost and do, over time">
+        Stats
+      </button>
+    </nav>
+  );
+
   return (
     <div className={`app${mobile ? " mobile" : ""}`}>
       <header className="topbar">
-        <a className="brand" href="#/" onClick={() => setQuery("")}>
+        <a className="brand" href="#/" onClick={() => (setQuery(""), setView("board"))}>
           <img src="/icon.png" alt="" />
           <span>Pennyworth</span>
         </a>
+        {!mobile && sections}
+        <span className="spacer topbar-spacer" />
         <div className="search">
           <input ref={searchRef} type="search" placeholder="Search  /" value={query} onChange={(e) => setQuery(e.target.value)} />
         </div>
-        <span className="spacer" />
-        <button className="btn primary" onClick={() => setCreating(true)} title="New task (c)">
-          {mobile ? <PlusIcon /> : "New task"}
-        </button>
-        {!mobile && (
-          <button className={`btn${view === "agents" ? " on" : ""}`} onClick={() => setView(view === "agents" ? "board" : "agents")} title="The crew and what they're on (a)">
-            {board.agentsActive > 0 && <span className="live-dot" />}
-            Crew
-            {board.agentsActive > 0 && <span className="btn-count">{board.agentsActive}</span>}
-          </button>
-        )}
-        {!mobile && (
-          <button className={`btn${view === "memory" ? " on" : ""}`} onClick={() => setView(view === "memory" ? "board" : "memory")} title="What the agents remember, and their proposals to review">
-            Memory
-            {memoryPending > 0 && <span className="btn-count needs">{memoryPending}</span>}
-          </button>
-        )}
-        {!mobile && (
-          <button className={`btn${view === "stats" ? " on" : ""}`} onClick={() => setView(view === "stats" ? "board" : "stats")} title="What the agents cost and do, over time">
-            Stats
-          </button>
+        {view === "board" && !mobile && (
+          <div className="show-group" role="group" aria-label="Show columns">
+            <span className="show-label">Show</span>
+            {board.recurring.length > 0 && (
+              <button className={showRecurring ? "on" : ""} aria-pressed={showRecurring} onClick={() => setShowRecurring(!showRecurring)} title="Recurring tasks (r)">
+                Recurring
+              </button>
+            )}
+            <button className={showDone ? "on" : ""} aria-pressed={showDone} onClick={() => setShowDone(!showDone)} title="Recently done (d)">
+              Done
+            </button>
+          </div>
         )}
         {waiting.length > 0 && (
           <a className="btn" href={`#/t/${waiting[0]}`} title="Open the next agent waiting on you">
@@ -535,17 +549,12 @@ export function App() {
             Brief
           </a>
         )}
-        {board.recurring.length > 0 && (
-          <button className={`btn${showRecurring ? " on" : ""}`} onClick={() => setShowRecurring(!showRecurring)} title="Recurring tasks (r)">
-            Recurring
-          </button>
-        )}
-        <button className={`btn${showDone ? " on" : ""}`} onClick={() => setShowDone(!showDone)} title="Recently done (d)">
-          Done
+        <button className="btn primary" onClick={() => setCreating(true)} title="New task (c)">
+          {mobile ? <PlusIcon /> : "New task"}
         </button>
         {session?.mode === "local" && session.lan && !mobile && (
-          <a className="btn" href="#/phone" title="Open the board on your phone">
-            Phone
+          <a className="icon-btn" href="#/phone" title="Open the board on your phone">
+            <PhoneIcon />
           </a>
         )}
         {!mobile && (
@@ -563,22 +572,11 @@ export function App() {
       <ClickHouseBanner clickhouse={board.clickhouse} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
       <BackupBanner backup={board.backup} />
 
-      {mobile && (
+      {mobile && <div className="sections-row">{sections}</div>}
+      {mobile && view === "board" && (
         <nav className="tabs">
-          <button className={view === "agents" ? "on" : ""} onClick={() => setView("agents")}>
-            {board.agentsActive > 0 && <span className="live-dot" />}
-            Crew
-            {board.agentsActive > 0 && <span className="count">{board.agentsActive}</span>}
-          </button>
-          <button className={view === "memory" ? "on" : ""} onClick={() => setView("memory")}>
-            Memory
-            {memoryPending > 0 && <span className="count">{memoryPending}</span>}
-          </button>
-          <button className={view === "stats" ? "on" : ""} onClick={() => setView("stats")}>
-            Stats
-          </button>
           {BUCKETS.map((b) => (
-            <button key={b} className={view === "board" && b === tab ? "on" : ""} onClick={() => (setTab(b), setView("board"))}>
+            <button key={b} className={b === tab ? "on" : ""} onClick={() => setTab(b)}>
               {BUCKET_NAMES[b]}
               {counts[b] > 0 && <span className="count">{counts[b]}</span>}
             </button>
@@ -843,8 +841,8 @@ function Help() {
     ["c", "New task, for you or someone in the crew (lands in Triage)"],
     ["/", "Search"],
     ["b", "Today's brief"],
-    ["d", "Show recently done"],
-    ["r", "Show recurring tasks"],
+    ["d", "Board: show recently done"],
+    ["r", "Board: show recurring tasks"],
     ["a", "Crew: who is working on what"],
     ["⌘↵", "Send reply / save description"],
     ["Esc", "Close"],
