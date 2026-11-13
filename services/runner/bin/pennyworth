@@ -18,9 +18,14 @@
 //   pennyworth cleanup                                  remove the workspace when this run ends
 //   pennyworth task <PEN-N>                             read one of the user's tasks: description, parts, conversation
 //   pennyworth tasks [<words>] [--agent <name>]         find tasks, closed ones too
+//   pennyworth remember <global|self|Name> <kind> <text>  keep what the user asked to remember (kind: rule, fact, lesson, playbook)
+//   pennyworth propose <global|self|Name> <kind> <text> --why <reason>
+//                                                       suggest a memory for the user to accept
+//   pennyworth memory <words> | #<id>                   search memories and past tasks
 import { readFileSync } from "node:fs";
 
-const usage = `usage: pennyworth status | push [<org/repo> <branch>]... | pr [<org/repo> <branch>]... [--title <title>] [--body-file <file>] | merge <PR link>... [--gap <minutes>] | repo <org/name> | engine <claude|codex|openrouter> [model] | primer [<Primer link>] | pass <name> | aws [--account <name>] <service> <operation> [options] | reset | cleanup | task <PEN-N> | tasks [<words>] [--agent <name>]`;
+const usage = `usage: pennyworth status | push [<org/repo> <branch>]... | pr [<org/repo> <branch>]... [--title <title>] [--body-file <file>] | merge <PR link>... [--gap <minutes>] | repo <org/name> | engine <claude|codex|openrouter> [model] | primer [<Primer link>] | pass <name> | aws [--account <name>] <service> <operation> [options] | reset | cleanup | task <PEN-N> | tasks [<words>] [--agent <name>] | remember <global|self|Name> <rule|fact|lesson|playbook> <text> | propose <global|self|Name> <rule|fact|lesson|playbook> <text> --why <reason> | memory <words>`;
+const MEMORY_COMMANDS = ["remember", "propose", "memory"];
 const [command, ...rest] = process.argv.slice(2);
 const fail = (msg, code = 1) => {
   console.error(`pennyworth: ${msg}`);
@@ -31,7 +36,7 @@ if (!command || ["help", "-h", "--help"].includes(command) || rest.some((w) => w
   console.log(usage);
   process.exit(0);
 }
-if (!["status", "push", "pr", "merge", "repo", "engine", "primer", "pass", "aws", "reset", "cleanup", "task", "tasks"].includes(command)) fail(usage, 2);
+if (!["status", "push", "pr", "merge", "repo", "engine", "primer", "pass", "aws", "reset", "cleanup", "task", "tasks", ...MEMORY_COMMANDS].includes(command)) fail(usage, 2);
 if (!process.env.PENNYWORTH_REPO_URL) fail("only available inside a task run", 2);
 
 // aws: everything after the account is the AWS CLI's own arguments, passed on as they are.
@@ -42,9 +47,22 @@ const awsBody = () => {
   return { account: rest[0] === "--account" ? rest[1] : undefined, args: args[0] === "--" ? args.slice(1) : args };
 };
 
+// Memory (D-61): the text is free words (a `--flag` in it is text too); a proposal's reason follows --why.
+const memoryBody = () => {
+  if (command === "memory") {
+    if (!rest.length) fail("usage: pennyworth memory <words> | #<id>", 2);
+    return { query: rest.join(" ") };
+  }
+  const at = command === "propose" ? rest.indexOf("--why") : -1;
+  const [target, kind, ...text] = at >= 0 ? rest.slice(0, at) : rest;
+  const why = at >= 0 ? rest.slice(at + 1).join(" ") : "";
+  if (!target || !kind || !text.length || (command === "propose" && !why)) fail(`usage: pennyworth ${command} <global|self|Name> <rule|fact|lesson|playbook> <text>${command === "propose" ? " --why <reason>" : ""}`, 2);
+  return { target, kind, text: text.join(" "), ...(command === "propose" ? { why } : {}) };
+};
+
 const flags = {};
 const words = [];
-for (let i = 0; command !== "aws" && i < rest.length; i++) {
+for (let i = 0; command !== "aws" && !MEMORY_COMMANDS.includes(command) && i < rest.length; i++) {
   if (rest[i] === "--title" || rest[i] === "--body-file" || rest[i] === "--gap" || rest[i] === "--agent") flags[rest[i].slice(2)] = rest[++i];
   else if (rest[i].startsWith("--")) fail(`unknown option ${rest[i]}\n${usage}`, 2);
   else words.push(rest[i]);
@@ -52,6 +70,8 @@ for (let i = 0; command !== "aws" && i < rest.length; i++) {
 let body;
 if (command === "aws") {
   body = awsBody();
+} else if (MEMORY_COMMANDS.includes(command)) {
+  body = memoryBody();
 } else if (command === "repo") {
   if (words.length !== 1) fail(usage, 2);
   body = { repo: words[0] };

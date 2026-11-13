@@ -176,8 +176,12 @@ describe("memory routes (D-61)", () => {
     expect(r.json.text).toMatch(/### Yours\n\n- \[\d+\] Playbook: Removing a network from Sequence infra/);
     // A scout (no persona) gets the global rules only.
     expect((await internal("recall", { scope: "slack-scout" })).json.text).not.toMatch(/Yours/);
+    store.memory.addEpisode({ issueId: "e1", identifier: "PEN-40", title: "Remove the Telos network", scope: "sre", summary: "Done.", links: [], closedAt: "2026-11-01T10:00:00Z" });
     const s = await internal("search", { scope: "sre", query: "network removal" });
     expect(s.json.memories[0].text).toMatch(/2\. relayer/);
+    expect(s.json.episodes.map((e: { identifier: string }) => e.identifier)).toEqual(["PEN-40"]);
+    // Past tasks summarize other tasks: never for OpenRouter (D-52).
+    expect((await internal("search", { scope: "sre", query: "network removal", engine: "openrouter" })).json.episodes).toEqual([]);
   });
 
   it("serves the Memory view: list with portraits and budgets, add, edit, accept, reject, delete", async () => {

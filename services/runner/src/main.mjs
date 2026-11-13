@@ -29,6 +29,7 @@ import { State } from "./state.mjs";
 import { REPLY_MARKER, fence, prSnapshot, stateSection, threadEntries, threadSection, transcript, wordsAround } from "./thread.mjs";
 import { authorize } from "./authorize.mjs";
 import { readBusy } from "./busy.mjs";
+import { boardMessage, formatSearch, memoryHash, memoryScope, recallMemory } from "./memory.mjs";
 
 const execFileP = promisify(execFile);
 const cfg = loadConfig();
@@ -764,6 +765,49 @@ async function agentPass(ctx, args) {
   return `Passed on to ${res.to} (${res.part}), with ${cfg.selfName}'s words and this conversation for context. Say so in one line in your reply; don't do their part yourself.`;
 }
 
+// ------------------------------------------------------------------ memory (D-61)
+
+/** The user's latest comment on the task, which this run answers (a remember is checked against it). */
+const latestAsk = async (ctx) => (await pc.comments(ctx.issue.id)).filter((c) => Paperclip.isUserInstruction(c) && !parseCommand(c.body)).at(-1);
+
+/** Memory writes are the board's, for crew agents (with a persona); the scope is the assignee's, in code. */
+async function memoryWrite(ctx, path, body) {
+  if (!ctx.memoryScope) throw new UserError("Memory is only for crew agents with a name; this one has none.");
+  if (!boardApi) throw new UserError("Memory needs the board, which isn't set up here.");
+  const res = await boardApi.post(path, { scope: ctx.memoryScope, issue: ctx.issue.identifier, ...body }).catch((err) => {
+    throw new UserError(`Not kept: ${boardMessage(err)}`);
+  });
+  log("memory written", { issue: ctx.issue.identifier, action: path.split("/").pop(), memory: res.id, status: res.status, scope: res.scope });
+  return String(res.message ?? `#${res.id}: ${res.status}`);
+}
+
+/**
+ * `pennyworth remember <global|self|Name> <kind> <text>`: what the user asked to remember. The board
+ * checks the user's latest comment here asks for it; otherwise it waits as a proposal for them.
+ */
+async function agentRemember(ctx, args) {
+  const asked = await latestAsk(ctx);
+  return memoryWrite(ctx, "/internal/memory/remember", { target: String(args.target ?? "self"), kind: String(args.kind ?? ""), text: String(args.text ?? ""), comment: asked?.id ?? "" });
+}
+
+/** `pennyworth propose <global|self|Name> <kind> <text> --why <reason>`: a memory for the user to accept on the board. */
+async function agentPropose(ctx, args) {
+  const asked = await latestAsk(ctx);
+  return memoryWrite(ctx, "/internal/memory/propose", { target: String(args.target ?? "self"), kind: String(args.kind ?? ""), text: String(args.text ?? ""), why: String(args.why ?? ""), ...(asked ? { comment: asked.id } : {}) });
+}
+
+/** `pennyworth memory <words>`: memories (the agent's and everyone's) and past tasks; private ones never for OpenRouter. */
+async function agentMemory(ctx, args) {
+  const query = String(args.query ?? "").trim().slice(0, 300);
+  if (!query) throw new UserError("Say what to look for: `pennyworth memory <words>`, or `pennyworth memory #<id>`.");
+  if (!boardApi) throw new UserError("Memory needs the board, which isn't set up here.");
+  const res = await boardApi.post("/internal/memory/search", { scope: ctx.memoryScope ?? null, query, engine: ctx.kind }).catch((err) => {
+    throw new UserError(`Memory isn't available: ${boardMessage(err)}`);
+  });
+  log("memory searched", { issue: ctx.issue.identifier, memories: res.memories?.length ?? 0, episodes: res.episodes?.length ?? 0 });
+  return formatSearch(res, cfg.selfName);
+}
+
 /** `pennyworth reset`: the next turn starts a fresh session (the conversation and the workspace stay). */
 async function agentReset(ctx) {
   ctx.reset = true;
@@ -953,6 +997,11 @@ async function startJob({ issue, instructions }) {
     const crewHash = crewCtx ? createHash("sha256").update(JSON.stringify(crewCtx)).digest("hex") : "";
     const crew = crewCtx && (!resumed || state.get(crewKey) !== crewHash) ? crewCtx : undefined;
     if (crewHash) state.set(crewKey, crewHash);
+    // What the agent learned in earlier tasks (D-61), for its own scope: on the first run, then again when it changed.
+    const memoryOf = memoryScope(await pc.agents().catch(() => []), full.assigneeAgentId);
+    const memoryText = await recallMemory(boardApi, { scope: memoryOf, engine: engine.kind, log: (m, f) => log(m, { issue: issue.identifier, ...f }) });
+    const memory = memoryText && (!resumed || state.get(`memory:${issue.id}`) !== memoryHash(memoryText)) ? memoryText : "";
+    if (memoryText) state.set(`memory:${issue.id}`, memoryHash(memoryText));
     // Private reads for Claude Code and Codex (D-48, D-51, D-57), and the Slack messages the task came from.
     const observe = observes(engine.kind)
       ? {
@@ -973,10 +1022,10 @@ async function startJob({ issue, instructions }) {
     // The conversation (all of it for a new session, what's new for a resumed one) and where the work stands.
     const { thread, stand, words } = await conversation(issue, workspace, { instructions, resumed, persona });
     const prompt = resumed
-      ? followUpPrompt({ user: cfg.selfName, instructions, workspace, repos, branches, files, primer, crew, observe, thread, stand })
-      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, shells: runShells, instructions, files, primer, persona, crew, observe, thread, stand, team: crewNames(engineers) });
+      ? followUpPrompt({ user: cfg.selfName, instructions, workspace, repos, branches, files, primer, crew, observe, thread, stand, memory })
+      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, shells: runShells, instructions, files, primer, persona, crew, observe, thread, stand, team: crewNames(engineers), memory });
     const tipsBefore = await branchTips(workspace);
-    tools = { issue, workspace, words, instructions, kind: engine.kind, who: persona?.name, signal: controller.signal };
+    tools = { issue, workspace, words, instructions, kind: engine.kind, who: persona?.name, memoryScope: memoryOf, signal: controller.signal };
     const helper = repoHelper.register(tools);
     let result;
     try {
@@ -1508,6 +1557,9 @@ const repoHelper = startRepoHelper(async ({ issue, workspace }, raw) => {
   cleanup: agentCleanup,
   task: agentTask,
   tasks: agentTasks,
+  remember: agentRemember,
+  propose: agentPropose,
+  memory: agentMemory,
 });
 
 /** Each repository in the workspace for the prompt; with `naming`, its branch naming rules and examples. */

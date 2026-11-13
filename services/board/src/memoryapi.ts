@@ -74,6 +74,7 @@ export interface MemoryDeps {
 
 /** The comment an agent named, checked as the user's own words asking to remember something; or why not. */
 export async function rememberGate(pc: Paperclip, issue: Issue, commentId: string, now = Date.now()): Promise<{ ok: true; comment: Comment } | { ok: false; reason: string }> {
+  if (!commentId) return { ok: false, reason: "there's no comment of the user's to check it against" };
   const me = await pc.me();
   const comment = await findComment(pc, issue, commentId, me);
   if (!comment) return { ok: false, reason: "the comment it names isn't on this task or its parts" };
@@ -154,7 +155,8 @@ export function memoryRoutes({ paperclip: pc, memory, log, fail }: MemoryDeps) {
         const { scope, query, limit, engine } = parse(SearchSchema, body);
         const own = scope && (await scopes()).some((s) => s.scope === scope) ? scope : null;
         const found = memory.search(own, query, { limit, engine });
-        return { memories: found.memories.map(forAgent), episodes: found.episodes };
+        // Past tasks summarize other tasks (Slack, mail, meetings): not for OpenRouter's providers (D-52).
+        return { memories: found.memories.map(forAgent), episodes: engine === "openrouter" ? [] : found.episodes };
       },
     },
     {

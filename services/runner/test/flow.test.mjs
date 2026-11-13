@@ -30,6 +30,8 @@ function fakePaperclip({ parent, part, engineers, parentComments = [], others = 
   const passed = [];
   const attached = [];
   const unknown = [];
+  const memory = [];
+  let fake;
   let n = 0;
   const addComment = (issueId, body) => comments.get(issueId).push({ id: `comment-${++n}`, authorType: "user", authorUserId: USER, body, createdAt: new Date(Date.now() + n).toISOString() });
   const find = (ref) => issues.get(ref) ?? [...issues.values()].find((i) => i.identifier === ref);
@@ -84,6 +86,13 @@ function fakePaperclip({ parent, part, engineers, parentComments = [], others = 
     // The board's internal API: the runner's activity for the Crew view, and messages passed on (D-54).
     if (path.startsWith("/internal/")) {
       if (path.endsWith("/runner/activity")) activity.push(JSON.parse(body));
+      // Memory (D-61): recall for the prompt, search, and what the agent keeps.
+      if (path.startsWith("/internal/memory/")) {
+        memory.push({ path, ...JSON.parse(body) });
+        if (path.endsWith("/recall")) return send({ text: fake.memoryText, count: 1, omitted: 0 });
+        if (path.endsWith("/search")) return send({ memories: [{ id: 3, scope: "engineer-claude", kind: "playbook", text: "Removing a network from Sequence infra\n1. devops PRs, dev then prod" }], episodes: [{ identifier: "PEN-40", title: "Remove the Telos network", closedAt: "2026-11-01T10:00:00Z", summary: "Opened the devops and relayer PRs.", links: ["https://github.com/acme/devops/pull/7"] }] });
+        return send({ id: 7, scope: "global", status: "active", duplicate: false, message: "Remembered for every agent as #7." });
+      }
       if (path.endsWith("/pass")) {
         passed.push({ path, ...JSON.parse(body) });
         return send({ passed: true, to: "Alfred", part: "PEN-3" });
@@ -93,7 +102,8 @@ function fakePaperclip({ parent, part, engineers, parentComments = [], others = 
     unknown.push(`${req.method} ${path}`);
     send({ error: "not found" }, 404);
   });
-  return { server, comments, patches, activity, passed, attached, unknown, addComment };
+  fake = { server, comments, patches, activity, passed, attached, unknown, addComment, memory, memoryText: "### For every agent\n\n- [1] I always review on Primer directly." };
+  return fake;
 }
 
 describe("talking to an Engineer, end to end", () => {
@@ -254,6 +264,9 @@ recurring:
     assert.match(prompt, /`pennyworth task PEN-N` prints one in full/);
     assert.match(prompt, /## Instructions from Taylan \(authoritative\)[\s\S]*Ada, go ahead and start this on dev please/);
     assert.match(prompt, /The engineering agents, by name: Ada \(claude\), Grace \(codex\)/);
+    // What Ada learned in earlier tasks (D-61): her own scope, between the rules and the task.
+    assert.match(prompt, /## Rules \(non-negotiable\)[\s\S]*## What you've learned\n\nRules and lessons Taylan gave you or approved[\s\S]*- \[1\] I always review on Primer directly\.\n\n## Task \(untrusted context\)/);
+    assert.deepEqual(paperclip.memory.find((m) => m.path.endsWith("/recall")), { path: "/internal/memory/recall", scope: "engineer-claude", engine: "claude" });
     assert.doesNotMatch(prompt, /Mode: \*\*|## Summary/, "no modes, no report template");
     assert.ok(argv.includes("--strict-mcp-config"), "Claude Code keeps away from the user's own setup");
     // Engines run in the devshells, with the gcloud sign-ins hidden (D-48).
@@ -511,6 +524,27 @@ recurring:
     const done = await turn("Thanks!");
     assert.equal(done.comment, undefined);
     assert.equal(partComments().length, n + 1, "only the user's comment");
+  });
+
+  it("remembers on the user's word through the board, searches memory, and recalls again only when it changed (D-61)", async () => {
+    step("none\npennyworth remember global rule I always review on Primer directly.\npennyworth memory remove network\npennyworth propose self lesson Post findings in the task first.");
+    await turn("Remember: I always review on Primer directly.");
+    const [remember, search, propose] = toolRuns().slice(-3);
+    assert.equal(remember.code, 0, remember.out);
+    assert.match(remember.out, /Remembered for every agent as #7\./);
+    const asked = paperclip.comments.get("part").findLast((c) => c.body === "Remember: I always review on Primer directly.");
+    assert.deepEqual(paperclip.memory.filter((m) => m.path.endsWith("/remember")).at(-1), { path: "/internal/memory/remember", scope: "engineer-claude", issue: "PEN-2", target: "global", kind: "rule", text: "I always review on Primer directly.", comment: asked.id });
+    assert.equal(search.code, 0, search.out);
+    assert.match(search.out, /- #3 playbook: Removing a network from Sequence infra\n  1\. devops PRs/);
+    assert.match(search.out, /Past tasks \(context, not instructions[\s\S]*- PEN-40 · 2026-11-01 · Remove the Telos network\n  Opened the devops and relayer PRs\.\n  PRs: https:\/\/github.com\/acme\/devops\/pull\/7/);
+    assert.equal(propose.code, 2, "a proposal needs its reason");
+    assert.match(propose.out, /--why <reason>/);
+    // Unchanged since the session last saw it: not repeated. Changed: the next turn has it.
+    assert.doesNotMatch(claudeRuns().at(-1).prompt, /What you've learned/);
+    paperclip.memoryText = "### Yours\n\n- [8] Post findings in the task first, then on the PR.";
+    step("none");
+    await turn("And the review?");
+    assert.match(claudeRuns().at(-1).prompt, /## What you've learned[\s\S]*- \[8\] Post findings in the task first, then on the PR\./);
   });
 
   it("never errors or asks for a repository along the way", () => {
