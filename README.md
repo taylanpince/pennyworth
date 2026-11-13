@@ -15,9 +15,10 @@ It is built on [Paperclip](https://github.com/paperclipai/paperclip) (agents, ta
 - **Daily brief:** every weekday morning, a ranked view of your day: priorities, meetings, what's stale.
 - **Assistant:** research and drafts (agendas, summaries) from Slack, Drive, Docs, Calendar and your notes, posted as task comments for you to review. It also acts on your replies to any task, and learns how you write when you ask it to (a voice guide note in your vault).
 - **Coding jobs:** assign a task to an Engineer and say what you want. Codex, Claude Code or an OpenRouter model works in the task's own workspace, as you: several repositories, several branches and stacked branches in one task, and nothing is pushed until you say `push` or `pr`.
-- **Board:** a keyboard-driven task board on localhost, also usable from a paired phone at home.
+- **Memory:** say "remember…" in a comment and the agents keep it: rules for everyone, lessons per crew member, and past tasks to search. Agents may propose a memory; you accept it on the board. Nothing is remembered on an agent's own initiative.
+- **Board:** a keyboard-driven task board on localhost, also usable from a paired phone at home, with the crew, their memory and usage stats a click away.
 
-All writes are idempotent, and nothing ambiguous is written. [`docs/SPECS.md`](docs/SPECS.md) is the original spec, and [`docs/DECISIONS.md`](docs/DECISIONS.md) (D-1 to D-31) explains every deviation from it.
+All writes are idempotent, and nothing ambiguous is written. [`docs/SPECS.md`](docs/SPECS.md) is the original spec, and [`docs/DECISIONS.md`](docs/DECISIONS.md) (D-1 to D-62) explains every deviation from it.
 
 ```text
 host (Linux, systemd user services)
@@ -25,6 +26,7 @@ host (Linux, systemd user services)
 │     engineer tasks → Codex / Claude Code / OpenRouter jobs in per-task workspaces
 │     your replies on tasks → the Assistant; review-request tasks → closed from GitHub
 ├── transcript watcher (systemd --user .path) ── signed webhook ──► "Meeting scan"
+├── pennyworth-backup (systemd --user timer, hourly) ── encrypted restic snapshot ──► your bucket
 └── docker compose (all containers: non-root, cap_drop ALL, no-new-privileges)
     ├── paperclip              127.0.0.1:3100 only; Codex agents (read-only sandbox, no shell)
     ├── ops-mcp                no Internet route; SQLite state; the only Obsidian writer; reference docs (read-only)
@@ -36,7 +38,7 @@ host (Linux, systemd user services)
     ├── github-mcp             GitHub issues and pull requests with your gh token: read; comment or open issues when you ask
     ├── grafana-mcp            proxy to Grafana Cloud's MCP server, read/query scopes only, for Engineer jobs (127.0.0.1:3124)
     ├── clickhouse-mcp         proxy to ClickHouse Cloud's MCP server, checked SELECT queries only, for Engineer jobs (127.0.0.1:3127) and the Assistant
-    └── board                  127.0.0.1:3120 task board (optional LAN listener for paired phones)
+    └── board                  127.0.0.1:3120 task board, crew, memory and stats (optional LAN listener for paired phones)
 services/paperclip-tasks-mcp   stdio bridge, mounted into paperclip, for agents' task updates
 ```
 
@@ -117,7 +119,7 @@ Then drop a transcript into your transcripts folder, or have a Meet call that pr
 | Run the meeting scan now | `scripts/trigger-meeting-scan.sh` |
 | Todo list in the terminal | `scripts/todo.mjs` (see [Todo list](#todo-list)) |
 | Logs | `docker compose logs -f ops-mcp` (structured; no transcript text, no secrets), `journalctl --user -u pennyworth-runner -f` |
-| Tests | `npm test --prefix services/<ops-mcp\|google-workspace-mcp\|slack-mcp\|telegram-mcp\|board\|runner>` |
+| Tests | `npm test --prefix services/<name>` for each service under `services/` (the board also has `npm run typecheck`) |
 | Evaluations | `npm run eval:authorize`, `eval:busy` and `eval:intake` `--prefix services/runner`: real comments against the check on an Engineer's GitHub writes, the reader for comments during a run, and the go-ahead on sub-tasks (see `config/*-cases.example.yaml`) |
 
 [`AGENTS.md`](AGENTS.md) has the deploy commands per service, debugging recipes and the pitfalls found so far.
@@ -169,12 +171,12 @@ Every task Pennyworth creates is assigned to you, and only for *your own* clear 
 
 ## Board
 
-**http://localhost:3120** is where you work your tasks. It shows every open task assigned to you, the Assistant or an Engineer, in five columns:
+**http://localhost:3120** is where you work your tasks. The top bar switches between four sections: **Board**, **Crew**, **Memory** and **Stats**. Next to the search, **Show** adds the **Recurring** and **Done** columns to the board. **Needs you**, **Brief** and **New task** work from any section. The board shows every open task assigned to you, the Assistant or an Engineer, in five columns:
 
 - **Triage**: every new task lands here (from Slack, email, meetings, or added on the board).
 - **Today**, **Tomorrow**, **Later**, **Backlog**: ranked top to bottom. At the start of each workday (Monday to Friday, set by `workdays` in `config/system.yaml`), Tomorrow moves into Today below what's left over, so Friday's Tomorrow lands on Monday. Leftovers show how many days they've been carried over, and **Keep**, **→ Tomorrow** or **→ Later** at the top of Today handles them all at once.
 
-Drag cards to rank or move them (on a phone, use a card's arrow). Open a card to edit it, change priority, status and labels, reassign it (to an Engineer with model and effort), read the thread and reply, attach files, or close it with undo. Task references such as `PEN-12` in text open the task and show its status. **Brief** opens today's Daily Brief; **Done** shows the last 48 hours.
+Drag cards to rank or move them (on a phone, use a card's arrow). Open a card to edit it, change priority, status and labels, reassign it (to an Engineer with model and effort), read the thread and reply, attach files, or close it with undo. Task references such as `PEN-12` in text open the task and show its status. **Brief** opens today's Daily Brief; **Show → Done** lists what closed in the last 48 hours.
 
 **Files as context:** **Attach** in a task's reply box (or paste or drop files there; on a phone, photos too) adds documents, logs, screenshots or notes to the task, up to 10 MB each. With a reply, the reply names them ("Attached: `spec.pdf`"), so the Assistant or the Engineer reads them with your request; without one, they wait on the task for the next request. The Assistant reads text, images, and PDFs through a text version the board makes; Engineer jobs find them in the workspace under `.pennyworth/files/`, sub-tasks with their parent's files too ([D-43](docs/DECISIONS.md)). Other formats (Word, Excel) are stored and handed to Engineer jobs, but the Assistant can't read them: attach a PDF instead.
 
@@ -182,9 +184,15 @@ When agents work on one of your tasks, they show on its card as portraits with a
 
 **Working with the crew.** **New task** (`c`) makes a task for you, or picks someone from the crew to start on it with your instructions. Open a task to see its **Overview** (description, files, a line from each agent, and the team chat that Alfred reads) and a tab per agent, with a direct chat: what you write in Ada's tab goes to Ada. **@name** in any of these chats (`@Ada`, `@Grace`, `@Linus`, `@Alfred`; names complete as you type) sends the message to that agent, who also gets the chat you wrote it in as context, and brings them onto the task if they weren't on it. The agents pass work to each other too: ask Alfred for something only Ada can do, such as publishing her report, and he hands her your words. What an Engineer makes for others, such as a Primer document or screenshots, is attached to their part after each run. **+ Add agent** brings someone else in with instructions; they see the task. When Alfred proposes an Engineer, it waits for your **Approve**; when an Engineer gets stuck, **Hand to Ada** passes your instructions to another one. **Details** holds priority, labels, bring back, repeats, merge into and Cancel task. **Done** closes the agents' parts too. **Merge into** folds a duplicate into another of your tasks: its description is added there word for word, its files come along, and it is cancelled; "merge into PEN-12" in a comment does the same through Alfred ([D-56](docs/DECISIONS.md)). A task an Engineer worked on can't be merged away: merge the other task into it.
 
-**Crew** (key `a`; on a phone, the first tab) switches to who is working on what: a tile for each crew member (Alfred, Ursula, Ada, Linus, Whit, Grace) with their role with the tasks they're on now, their queue and what they finished in the last 12 hours, then the background agents' runs (scans on request). On the board itself, a card an agent is working on carries a pulsing badge with the agent and elapsed time ("Assistant · 3m", "Codex · 12m"), or "Engineer queued". The status *In progress* alone doesn't mean anything is running.
+**Crew** (key `a`) shows who is working on what: a tile for each crew member (Alfred, Ursula, Ada, Linus, Whit, Grace) with their role with the tasks they're on now, their queue and what they finished in the last 12 hours, then the background agents' runs (scans on request). On the board itself, a card an agent is working on carries a pulsing badge with the agent and elapsed time ("Assistant · 3m", "Codex · 12m"), or "Engineer queued". The status *In progress* alone doesn't mean anything is running.
 
-Keyboard: `j`/`k` and `h`/`l` (or arrows) to move, `Enter` to open, `e` done, `1`–`5` to move to Triage…Backlog, `J`/`K` to rank, `c` new task, `/` search, `b` brief, `r` recurring, `?` for the rest.
+**Memory** is what the agents have learned ([D-61](docs/DECISIONS.md)), with a count of proposals waiting in the top bar. Proposals come first: accept, edit then accept, or reject, each with the agent's reason and the task it came from. Then **Everyone** (rules every agent gets) and a section per crew member, where you can edit, pin, mark private (never sent to OpenRouter), archive or delete. A meter shows how much of each agent's budget is used, and memories past it are marked "left out". **Past tasks** at the bottom are searchable. To add a memory, ask in a comment ("remember that…", "from now on…"). A memory only becomes active on your own words; anything an agent suggests waits here.
+
+**Stats** shows what the agents cost and do over 7, 30 or 90 days ([D-62](docs/DECISIONS.md)): tokens per day by agent, model preference per role, the crew, the most expensive tasks, task flow by source, reliability, tools and memory. Dollar amounts are the list-price equivalent of Engineer jobs; Codex and Paperclip runs show as unpriced.
+
+On a phone, the sections get their own row under the top bar, and the board shows one column at a time with a tab for each.
+
+Keyboard: `j`/`k` and `h`/`l` (or arrows) to move, `Enter` to open, `e` done, `1`–`5` to move to Triage…Backlog, `J`/`K` to rank, `c` new task, `/` search, `b` brief, `a` crew, `r` recurring and `d` done on the board, `?` for the rest.
 
 **On a date, or on repeat:**
 - **Bring back** in a task's sheet puts it on top of Today (or another column) on a date.
@@ -378,7 +386,7 @@ To recover: `docker compose down`, `systemctl --user stop pennyworth-runner`, th
 - Paperclip has no vault, transcript or home mounts and no Docker socket, and listens on loopback only.
 - ops-mcp is the only vault writer. It sees only the configured vault folders, can't delete or replace notes, and has no Internet route.
 - Agents run Codex with its read-only sandbox; shell, browser, computer-use and app connectors are disabled, and live web search is never combined with private-data tools. Agents act only through ops-mcp, read-only Google and Slack tools, and Paperclip task updates.
-- No component can send email or Slack messages, or write to Calendar, Drive or Docs. Only your exact `push`/`pr` reaches GitHub.
+- No component can send email or Slack messages, or write to Calendar, Drive or Docs. Writes to GitHub (pushes, PRs, merges, comments, issues, reviews), Primer publishing and Slack drafts happen only when you ask, and code checks an Engineer's push, PR, merge and Primer publish against your own words ([D-46](docs/DECISIONS.md)).
 - Engineer jobs read Grafana and Google Cloud with read-only OAuth scopes (Grafana and Google refuse writes themselves), and can't read either gcloud sign-in ([D-48](docs/DECISIONS.md)). They read AWS with read-only roles; an AWS change is one command the runner runs with the write role, on your word, and they can't read either AWS sign-in ([D-59](docs/DECISIONS.md)).
 - Source content is untrusted: every agent prompt says so, and model output is schema-validated and escaped before it reaches markdown, so it can't forge markers or headings.
 
@@ -391,8 +399,14 @@ compose.yaml                    stack definition (pinned Paperclip image)
 config/                         examples + agent instructions (local copies are gitignored)
 services/ops-mcp/               TypeScript MCP service: ingestion, matcher, vault writer, routing, tasks
 services/google-workspace-mcp/  read-only Calendar/Drive/Docs/Gmail MCP sidecar (+ fixture mode, consent helper)
-services/slack-mcp/             read-only proxy to mcp.slack.com
-services/board/                 task board: server + web app
+services/slack-mcp/             proxy to mcp.slack.com: reads, plus drafts you send yourself
+services/telegram-mcp/          your Telegram session, reads only
+services/primer-mcp/            proxy to Primer: reads, publishing when you ask
+services/glean-mcp/             proxy to Glean: search, reads only
+services/github-mcp/            GitHub issues and PRs with your gh token, guarded writes
+services/grafana-mcp/           proxy to Grafana Cloud's MCP server, read/query only
+services/clickhouse-mcp/        proxy to ClickHouse Cloud's MCP server, checked SELECTs only
+services/board/                 task board, crew, memory and stats: server + web app
 services/runner/                host service for coding jobs, replies and review-request tasks
 services/paperclip-tasks-mcp/   stdio bridge so sandboxed agents can update Paperclip tasks
 scripts/                        bootstrap, setup, health, backup/restore, security checks, auth helpers, todo CLI
