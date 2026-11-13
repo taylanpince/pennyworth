@@ -250,3 +250,69 @@ export interface Update {
   effort?: string;
   labelIds?: string[];
 }
+
+// ---------------------------------------------------------------- memory (D-61)
+
+export type MemoryKind = "rule" | "fact" | "lesson" | "playbook";
+export type MemoryStatus = "active" | "proposed" | "rejected" | "archived";
+
+export interface Memory {
+  id: number;
+  scope: string;
+  kind: MemoryKind;
+  text: string;
+  status: MemoryStatus;
+  pinned: boolean;
+  sensitive: boolean;
+  origin: "remember" | "proposal" | "board";
+  createdBy: string | null;
+  why: string | null;
+  sourceIssue: string | null;
+  sourceComment: string | null;
+  createdAt: string;
+  updatedAt: string;
+  decidedAt: string | null;
+  lastUsedAt: string | null;
+  uses: number;
+}
+
+/** "global" (everyone) or a crew member's scope, with its portrait. */
+export interface MemoryScope {
+  scope: string;
+  name: string;
+  avatar: string | null;
+  agentId: string | null;
+}
+
+export interface MemoryBudget {
+  used: number;
+  budget: number;
+  included: number[];
+  omitted: number[];
+}
+
+export interface MemoryList {
+  memories: Memory[];
+  scopes: MemoryScope[];
+  budgets: Record<string, MemoryBudget>;
+  pending: number;
+}
+
+export interface Episode {
+  issueId: string;
+  identifier: string;
+  title: string;
+  scope: string;
+  summary: string;
+  links: string[];
+  closedAt: string;
+}
+
+export interface MemoryPatch {
+  text?: string;
+  kind?: MemoryKind;
+  scope?: string;
+  pinned?: boolean;
+  sensitive?: boolean;
+  status?: MemoryStatus;
+}

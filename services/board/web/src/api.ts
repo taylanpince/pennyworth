@@ -1,4 +1,5 @@
 import type { Agents, Board, Bucket, Cadence, IssueView, Models, RecurringView, TelegramStep, Update } from "./types";
+import type { Episode, Memory, MemoryKind, MemoryList, MemoryPatch } from "./types";
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -71,4 +72,16 @@ export const api = {
   telegramStart: (phone: string) => call<TelegramStep>("POST", "/api/telegram/start", { phone }),
   telegramCode: (login_id: string, code: string) => call<TelegramStep>("POST", "/api/telegram/code", { login_id, code }),
   telegramPassword: (login_id: string, password: string) => call<TelegramStep>("POST", "/api/telegram/password", { login_id, password }),
+};
+
+/** The Memory view (D-61): the agents' memories, proposals to review, and past tasks. */
+export const memoryApi = {
+  list: () => call<MemoryList>("GET", "/api/memory"),
+  pending: () => call<{ pending: number }>("GET", "/api/memory/pending"),
+  episodes: (q = "") => call<{ episodes: Episode[] }>("GET", `/api/memory/episodes${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  add: (m: { scope: string; kind: MemoryKind; text: string }) => call<Memory>("POST", "/api/memory", m),
+  update: (id: number, patch: MemoryPatch) => call<Memory>("PATCH", `/api/memory/${id}`, patch),
+  accept: (id: number, patch: Pick<MemoryPatch, "text" | "kind" | "scope"> = {}) => call<Memory>("POST", `/api/memory/${id}/accept`, patch),
+  reject: (id: number) => call<Memory>("POST", `/api/memory/${id}/reject`, {}),
+  remove: (id: number) => call<{ ok: true }>("DELETE", `/api/memory/${id}`),
 };
