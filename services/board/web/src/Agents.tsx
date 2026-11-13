@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { PairRequired, api } from "./api";
+import { PairRequired, api, statsApi } from "./api";
 import { Avatar, Plan } from "./components";
-import type { Agents, Assignee, Finished, Session, TaskRef } from "./types";
+import { Sparkline, compact } from "./Stats";
+import type { Agents, Assignee, Finished, Session, Sparklines, TaskRef } from "./types";
 import { ago, elapsed, executorLabel, roleLine, roleTitle } from "./util";
 
 const STATUS: Record<string, { text: string; tone: "ok" | "bad" | "meh" }> = {
@@ -36,6 +37,15 @@ export function CrewView({ query, crew, onPairing }: { query: string; crew: Assi
     }
   }, [onPairing]);
 
+  // Weekly tokens per crew member (D-62); a failure just leaves the sparklines out.
+  const [sparks, setSparks] = useState<Sparklines | null>(null);
+  useEffect(() => {
+    const get = () => void statsApi.sparklines().then(setSparks, () => {});
+    get();
+    const t = setInterval(get, 10 * 60_000);
+    return () => clearInterval(t);
+  }, []);
+
   useEffect(() => {
     void load();
     const poll = setInterval(() => document.visibilityState === "visible" && void load(), 5000);
@@ -69,7 +79,7 @@ export function CrewView({ query, crew, onPairing }: { query: string; crew: Assi
       )}
       <div className="crew-tiles">
         {members.map((m) => (
-          <CrewTile key={m.key} member={m} sessions={data.sessions.filter((s) => s.agentId === m.key && match(s))} finished={data.finished.filter((f) => f.agentId === m.key && f.tasks.length && match(f))} now={now} />
+          <CrewTile key={m.key} member={m} sessions={data.sessions.filter((s) => s.agentId === m.key && match(s))} finished={data.finished.filter((f) => f.agentId === m.key && f.tasks.length && match(f))} now={now} spark={sparks?.agents[m.key]} />
         ))}
       </div>
       <section>
@@ -120,7 +130,7 @@ function role(m: Assignee): string {
 }
 
 /** One crew member: who they are, what they're on now, their queue, and what they finished lately. */
-function CrewTile({ member, sessions, finished, now }: { member: Assignee; sessions: Session[]; finished: Finished[]; now: number }) {
+function CrewTile({ member, sessions, finished, now, spark }: { member: Assignee; sessions: Session[]; finished: Finished[]; now: number; spark?: number[] }) {
   const on = sessions.filter((s) => s.state === "working");
   const queued = sessions.filter((s) => s.state === "queued");
   return (
@@ -136,6 +146,12 @@ function CrewTile({ member, sessions, finished, now }: { member: Assignee; sessi
       </header>
       <p className="crew-role">{roleLine(member)}</p>
       {member.persona?.voice && <p className="crew-voice">{member.persona.voice}</p>}
+      {spark && spark.some((v) => v > 0) && (
+        <div className="crew-spark">
+          <Sparkline values={spark} title={`Tokens per week, last ${spark.length} weeks: ${spark.map(compact).join(", ")}`} />
+          <span>{compact(spark.at(-1) ?? 0)} tokens this week</span>
+        </div>
+      )}
       <h3>On it now{on.length ? ` · ${on.length}` : ""}</h3>
       {on.map((s) => (
         <div key={s.id} className="crew-job">

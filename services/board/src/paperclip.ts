@@ -112,12 +112,12 @@ export class Paperclip {
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
-  async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  async request<T>(method: string, path: string, body?: unknown, timeoutMs = 20_000): Promise<T> {
     const res = await this.fetchImpl(new URL(path, this.baseUrl), {
       method,
       headers: { authorization: `Bearer ${this.key}`, accept: "application/json", ...(body ? { "content-type": "application/json" } : {}) },
       body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const text = await res.text();
     if (!res.ok) {
@@ -198,6 +198,24 @@ export class Paperclip {
       const raw = await this.request<(PastRun & { contextSnapshot?: { issueId?: string } | null })[]>("GET", `/api/companies/${this.companyId}/heartbeat-runs?limit=${limit}`);
       return raw.map((r) => ({ id: r.id, status: r.status, agentId: r.agentId, issueId: r.contextSnapshot?.issueId ?? null, startedAt: r.startedAt, finishedAt: r.finishedAt, error: r.error ? String(r.error).slice(0, 200) : null }));
     });
+  }
+
+  /**
+   * Agent runs with their usage, newest first, for the Stats view (D-62). Paperclip has no offset or
+   * date filter here: `limit` (≤ 1000) takes the newest, `agentId` one agent's, and no limit all of them.
+   */
+  runsWithUsage<T>(opts: { limit?: number; agentId?: string } = {}): Promise<T[]> {
+    const q = new URLSearchParams();
+    if (opts.limit) q.set("limit", String(Math.min(Math.max(1, opts.limit), 1000)));
+    if (opts.agentId) q.set("agentId", opts.agentId);
+    return this.request<T[]>("GET", `/api/companies/${this.companyId}/heartbeat-runs${q.size ? `?${q}` : ""}`, undefined, 60_000);
+  }
+
+  /** One page of every task in any status (routine runs left out), for the Stats view's task facts (D-62). */
+  issuesPage(opts: { offset: number; limit: number; updatedSince?: string }): Promise<Issue[]> {
+    const q = new URLSearchParams({ status: `${OPEN},done,cancelled`, limit: String(opts.limit), offset: String(opts.offset), excludeRoutineExecutions: "true" });
+    if (opts.updatedSince) q.set("updatedSince", opts.updatedSince);
+    return this.request<Issue[]>("GET", `/api/companies/${this.companyId}/issues?${q}`, undefined, 60_000);
   }
 
   /** An issue's title and origin, which rarely change: cached for a minute. */

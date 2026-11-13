@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-61) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-62) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -41,7 +41,9 @@ host (NixOS, user taylan)
                              :3121 on the LAN (pennyworth.local, paired devices from the home subnet only, D-23)
                              :3122 internal API (bearer token): scheduled moves and recurring tasks for the bridge and the runner (D-25),
                              and the runner's job activity for the Crew view (D-34, D-45); agents passing the user's comments on (D-54);
-                             memory: recall, search, remember (gated on the user's comment) and propose; the Memory view; past tasks (D-61)
+                             memory: recall, search, remember (gated on the user's comment) and propose; the Memory view; past tasks (D-61);
+                             the runner's per-job usage (/internal/runner/usage) for the Stats view, which also copies Paperclip's
+                             agent runs (every 5 minutes) and a fact row per task (hourly) into board.sqlite (D-62)
 services/paperclip-tasks-mcp  stdio MCP bridge (mounted into paperclip) for task updates by agents
 ```
 
@@ -265,6 +267,14 @@ scripts/backup.sh --verify                         # restore the latest off-mach
 - **OpenRouter gets no private memories and no past tasks** (they summarize other tasks, D-52); the board filters both by `engine`.
 - **Past tasks are recorded as the board loads closed tasks** (done crew parts and Engineer tasks, once each). For an install from before D-61: `docker compose exec board node --disable-warning=ExperimentalWarning dist/src/backfill-episodes.js 60`.
 - **The tables live in `board.sqlite`** (FTS5 shadow tables included), so the backup already has them; a new memory database file would need `stage` and `restore.sh`.
+
+### Stats (D-62)
+
+- **Paperclip's `heartbeat-runs` has no paging:** no offset, cursor or date filter, only `limit` (≤ 1,000, newest first) and `agentId`; no `limit` returns every run (about 13 MB for 3,900). `summary=true` drops `usageJson`, so it's no use here. The sync (`services/board/src/statssync.ts`) takes the newest 200, then 1,000 when that doesn't reach back to the last sync or a run still unfinished from the last 2 days, and past that copies everything again agent by agent. The issue list does page (`offset`, `limit` ≤ 1,000, `updatedSince`).
+- **Paperclip's `inputTokens` include `cachedInputTokens`;** the runner's report keeps input, cache reads and cache writes apart. `runTokens`/`jobTokens` in `statsmath.ts` are the one place that knows; Codex runs are `model: "unknown"`, `costStatus: "unpriced"`. Only runner jobs carry a list-price `costUsd`.
+- **Source markers are `<!-- source:source:<platform>:… -->` for the scouts** (Slack pins `…:slack:pin:…`), `source:meeting:` and `source:review:` for meetings, `source:brief:<date>`, `source:recurring:`, `source:subtask:`; some carry `source:` three times. List descriptions are cut short (`descriptionTruncated`), taking the marker with them, so a new task without one is fetched in full once (`markerSource`, `factFromIssue`).
+- **`stats.ts` must not import `board.ts`:** `store.ts` imports it, and `board.ts` imports `store.ts` (`BUCKETS` before initialization when the store loads first). Code that needs personas takes them as an argument or lives in `statsmath.ts`/`statssync.ts`.
+- **The tables are in `board.sqlite`,** so the backup has them. `BOARD_STATS_SYNC=off` stops the Paperclip copy (tests, a board pointed at someone else's Paperclip).
 
 ### Backups (D-58)
 

@@ -12,6 +12,7 @@ import { inNetworks } from "./config.js";
 import { INLINE_TYPES, MAX_UPLOAD_BODY, UploadSchema, decode, fileType, fileViews, isPdf, pdfText, safeName } from "./files.js";
 import { MergeSchema, mergedDescription } from "./merge.js";
 import { memoryRoutes } from "./memoryapi.js";
+import { statsRoutes } from "./statsapi.js";
 import { McpAuthFailed, type ClickHouseAuth, type GleanAuth, type GrafanaAuth } from "./mcpauth.js";
 import { GoogleAuthFailed, loopbackPort, type GoogleAuth } from "./google.js";
 import { Paperclip, PaperclipError, type Issue } from "./paperclip.js";
@@ -398,6 +399,8 @@ export function createApp(opts: AppOptions): Server {
 
   // Memory (D-61): recall, search, remember and propose for the agents; the Memory view; past tasks.
   const mem = memoryRoutes({ paperclip: pc, memory: store.memory, log, fail: (status, message) => new HttpError(status, message) });
+  // Stats (D-62): the runner's per-job usage, and the Stats view.
+  const statsApi = statsRoutes({ paperclip: pc, stats: store.stats, memory: store.memory, timezone: opts.timezone, log });
 
   // The tasks bridge (Assistant tools) and the runner (recurring runs), with the internal token (D-25).
   const internal: typeof routes = [
@@ -457,6 +460,7 @@ export function createApp(opts: AppOptions): Server {
       },
     },
     ...mem.internal,
+    ...statsApi.internal,
   ];
 
   const mode = opts.mode ?? "local";
@@ -753,6 +757,7 @@ export function createApp(opts: AppOptions): Server {
       },
     },
     ...mem.api,
+    ...statsApi.api,
   ];
 
   // Referenced tasks change rarely; a short cache keeps the brief cheap to render.
@@ -771,7 +776,7 @@ export function createApp(opts: AppOptions): Server {
   async function handleInternal(req: IncomingMessage, res: ServerResponse, url: URL) {
     const route = internal.find((r) => r.method === req.method && r.path.test(url.pathname));
     if (!route) throw new HttpError(404, "not found");
-    const body = await readJson(req);
+    const body = await readJson(req, route.maxBody);
     send(res, 200, JSON.stringify(await route.handle(url.pathname.match(route.path)!, body, url)), "application/json");
   }
 
