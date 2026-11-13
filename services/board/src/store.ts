@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MemoryStore } from "./memory.js";
+import { StatsStore } from "./stats.js";
 import type { Rule } from "./recurrence.js";
 
 /** The board's own columns. Paperclip has no ordering or buckets, so these live here (D-22). */
@@ -90,6 +91,8 @@ export class Store {
   private db: DatabaseSync;
   /** Memories and past tasks (D-61), in the same database file (so the backup has them). */
   readonly memory: MemoryStore;
+  /** Usage and task facts for the Stats view (D-62), in the same file. */
+  readonly stats: StatsStore;
 
   constructor(path: string) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
@@ -109,6 +112,7 @@ export class Store {
     if (!columns.includes("carried")) this.db.exec("ALTER TABLE placements ADD COLUMN carried INTEGER NOT NULL DEFAULT 0");
     if (!this.meta("installed_at")) this.setMeta("installed_at", new Date().toISOString());
     this.memory = new MemoryStore(this.db);
+    this.stats = new StatsStore(this.db);
   }
 
   meta(key: string): string | undefined {
