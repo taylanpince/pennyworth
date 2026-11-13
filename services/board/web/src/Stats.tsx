@@ -520,6 +520,12 @@ function RolesSection({ s }: { s: Stats }) {
                 <dd>{minutes(r.medianMinutes)}</dd>
                 <dt>Tokens</dt>
                 <dd>{compact(r.tokens)}</dd>
+                {r.costUsd === null && r.jobs > 0 && (
+                  <>
+                    <dt>List price</dt>
+                    <dd className="muted">unpriced (Codex)</dd>
+                  </>
+                )}
                 {r.costUsd !== null && (
                   <>
                     <dt>List price</dt>

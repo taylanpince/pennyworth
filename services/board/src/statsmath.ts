@@ -295,6 +295,8 @@ export function computeStats(input: StatsInput) {
         const mine = cur.jobs.filter((x) => x.agentId === a.id).map((x) => x.j);
         const tasks = new Set(mine.map((j) => j.issueId)).size;
         const cost = sum(mine.map((j) => j.costUsd ?? 0));
+        // Codex reports no price (a subscription): a role whose jobs all ran there is unpriced, not $0.
+        const priced = mine.some((j) => j.costUsd !== null);
         const ctx = mine.map((j) => j.contextTokens).filter((n) => n > 0);
         return {
           agentId: a.id,
@@ -305,8 +307,8 @@ export function computeStats(input: StatsInput) {
           jobs: mine.length,
           jobsPerTask: tasks ? round(mine.length / tasks, 1) : null,
           medianMinutes: round(median(mine.map((j) => minutes(j.startedAt, j.finishedAt)).filter((m): m is number => m !== null)) ?? NaN, 1),
-          costUsd: round(cost),
-          costPerTask: tasks ? round(cost / tasks) : null,
+          costUsd: priced ? round(cost) : null,
+          costPerTask: priced && tasks ? round(cost / tasks) : null,
           medianContext: median(ctx),
           maxContext: ctx.length ? Math.max(...ctx) : null,
           restarted: mine.filter((j) => j.restarted).length,
