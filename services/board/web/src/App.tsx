@@ -18,6 +18,7 @@ import {
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CrewView } from "./Agents";
+import { MemoryView, useMemoryPending } from "./Memory";
 import { PairRequired, api, type Session } from "./api";
 import { BackupBanner, CardView, ClickHouseBanner, ExecutorPicker, GleanBanner, GoogleBanner, GrafanaBanner, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
 import { CrewPicker, Drawer } from "./Drawer";
@@ -98,11 +99,12 @@ function useMedia(query: string) {
   return on;
 }
 
-type View = "board" | "agents";
+type View = "board" | "agents" | "memory";
 const VIEW_KEY = "pennyworth.view";
 const savedView = (): View => {
   try {
-    return localStorage.getItem(VIEW_KEY) === "agents" ? "agents" : "board";
+    const v = localStorage.getItem(VIEW_KEY);
+    return v === "agents" || v === "memory" ? v : "board";
   } catch {
     return "board";
   }
@@ -136,6 +138,9 @@ export function App() {
   }, []);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [creating, setCreating] = useState(false);
+  // Memory proposals waiting for review (D-61), for the nav badge.
+  const [memoryChanged, setMemoryChanged] = useState(0);
+  const memoryPending = useMemoryPending(memoryChanged);
   const mobile = useMedia("(max-width: 860px)");
   const holdUntil = useRef(0); // ignore polls briefly after a local change, so cards don't jump back
   const itemsRef = useRef<Items | null>(null);
@@ -416,7 +421,7 @@ export function App() {
       if (k === "d") return setShowDone((s) => !s);
       if (k === "r") return setShowRecurring((s) => !s);
       if (k === "a") return setView(view === "agents" ? "board" : "agents");
-      if (view === "agents") return;
+      if (view !== "board") return;
       if (k === "j" || k === "ArrowDown") {
         e.preventDefault();
         if (e.shiftKey && p) return void reorder(lists[p.b][p.i]!.id, 1);
@@ -508,6 +513,12 @@ export function App() {
             {board.agentsActive > 0 && <span className="btn-count">{board.agentsActive}</span>}
           </button>
         )}
+        {!mobile && (
+          <button className={`btn${view === "memory" ? " on" : ""}`} onClick={() => setView(view === "memory" ? "board" : "memory")} title="What the agents remember, and their proposals to review">
+            Memory
+            {memoryPending > 0 && <span className="btn-count needs">{memoryPending}</span>}
+          </button>
+        )}
         {waiting.length > 0 && (
           <a className="btn" href={`#/t/${waiting[0]}`} title="Open the next agent waiting on you">
             Needs you <span className="btn-count needs">{waiting.length}</span>
@@ -553,6 +564,10 @@ export function App() {
             Crew
             {board.agentsActive > 0 && <span className="count">{board.agentsActive}</span>}
           </button>
+          <button className={view === "memory" ? "on" : ""} onClick={() => setView("memory")}>
+            Memory
+            {memoryPending > 0 && <span className="count">{memoryPending}</span>}
+          </button>
           {BUCKETS.map((b) => (
             <button key={b} className={view === "board" && b === tab ? "on" : ""} onClick={() => (setTab(b), setView("board"))}>
               {BUCKET_NAMES[b]}
@@ -563,6 +578,7 @@ export function App() {
       )}
 
       {view === "agents" && <CrewView query={query} crew={board.assignees} onPairing={() => setNeedsPairing(true)} />}
+      {view === "memory" && <MemoryView query={query} onPairing={() => setNeedsPairing(true)} onChanged={() => setMemoryChanged((n) => n + 1)} />}
       <main className="columns" hidden={view !== "board"}>
         <DndContext sensors={sensors} collisionDetection={collision} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={() => (setActiveId(null), (dragFrom.current = null), void refresh(true))}>
           {visibleBuckets.map((b) => (

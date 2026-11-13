@@ -109,7 +109,7 @@ agents:
     # Only these MCP servers (and tools) are visible to this agent.
     mcp_servers: [ops_mcp, google_workspace, paperclip_tasks]
     enabled_tools:
-      paperclip_tasks: [task_current, task_get, task_comment, task_set_status]
+      paperclip_tasks: [task_current, task_get, task_comment, task_set_status, memory_recall]
 
   chief-of-staff:
     name: Chief of Staff
@@ -122,7 +122,7 @@ agents:
     mcp_servers: [google_workspace, paperclip_tasks]
     enabled_tools:
       google_workspace: [calendar_list_events, calendar_get_event]
-      paperclip_tasks: [task_current, task_get, task_comments, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status]
+      paperclip_tasks: [task_current, task_get, task_comments, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status, memory_recall]
 
   slack-scout:
     name: Slack Scout
@@ -136,7 +136,7 @@ agents:
     enabled_tools:
       # Reads only: drafts stay with the Assistant (D-46).
       slack: [slack_search_public, slack_search_public_and_private, slack_search_channels, slack_search_users, slack_read_channel, slack_read_thread, slack_read_user_profile, slack_list_user_channels]
-      paperclip_tasks: [task_current, task_get, task_search, task_known, task_list, task_create, task_update, task_comment, task_set_status]
+      paperclip_tasks: [task_current, task_get, task_search, task_known, task_list, task_create, task_update, task_comment, task_set_status, memory_recall]
 
   telegram-scout:
     name: Telegram Scout
@@ -148,7 +148,7 @@ agents:
     timeout_sec: 1800
     mcp_servers: [telegram, paperclip_tasks]
     enabled_tools:
-      paperclip_tasks: [task_current, task_get, task_search, task_known, task_list, task_create, task_update, task_comment, task_set_status]
+      paperclip_tasks: [task_current, task_get, task_search, task_known, task_list, task_create, task_update, task_comment, task_set_status, memory_recall]
 
   inbox-agent:
     name: Inbox Agent
@@ -161,7 +161,7 @@ agents:
     mcp_servers: [google_workspace, paperclip_tasks]
     enabled_tools:
       google_workspace: [gmail_search, gmail_read_thread]
-      paperclip_tasks: [task_current, task_get, task_search, task_known, task_list, task_create, task_update, task_comment, task_set_status]
+      paperclip_tasks: [task_current, task_get, task_search, task_known, task_list, task_create, task_update, task_comment, task_set_status, memory_recall]
 
   assistant:
     name: Assistant
@@ -195,7 +195,7 @@ agents:
       clickhouse: [get_organizations, get_services_list, get_service_details, list_databases, list_tables, run_select_query]
       # task_create_engineer_task: Engineer sub-tasks that wait for the user's go-ahead (D-24).
       # task_schedule, task_recurring: board moves on a date and recurring tasks (D-25). task_merge: merging tasks (D-56).
-      paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status, task_create_engineer_task, task_schedule, task_recurring, task_pass_on, task_merge]
+      paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status, task_create_engineer_task, task_schedule, task_recurring, task_pass_on, task_merge, memory_recall, memory_search, memory_remember, memory_propose]
 
   # The writer (D-60): drafts in the user's voice, Slack drafts, Primer documents and agendas. A woken
   # Codex agent like the Assistant, with the Assistant's reading tools and only its writing ones.
@@ -220,7 +220,7 @@ agents:
       # Reads only: comments, issues and reviews stay with the Assistant.
       github: [github_whoami, github_issue_read, github_search_issues]
       google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
-      paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_comment, task_handoff, task_set_status, task_pass_on]
+      paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_comment, task_handoff, task_set_status, task_pass_on, memory_recall, memory_search, memory_remember, memory_propose]
 
   # The crew's runner roles (D-60): a role is the character (what it takes on, its memory), the engine
   # is a setting. Paperclip never wakes them; pennyworth-runner does the work. Each role runs on its

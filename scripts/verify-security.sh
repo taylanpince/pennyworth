@@ -141,6 +141,8 @@ for c in $containers; do
           && pass "board: internal API published on 127.0.0.1 only" || fail "board internal API is not loopback-only: $internal_port"
         code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST http://127.0.0.1:3122/internal/recurring/claim)"
         [ "$code" = "401" ] && pass "board: internal API refuses requests without the token" || fail "board internal API answered without the token ($code)"
+        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST -H 'content-type: application/json' -d '{"scope":"assistant"}' http://127.0.0.1:3122/internal/memory/recall)"
+        [ "$code" = "401" ] && pass "board: memory routes refuse requests without the token" || fail "board memory routes answered without the token ($code)"
       fi
       ;;
   esac
@@ -169,7 +171,19 @@ for a in config/paperclip.yaml config/paperclip.example.yaml; do
   # ClickHouse (D-57): production data for the Assistant only, never the scouts that read untrusted messages unattended.
   ch_agents="$(awk '/^  [a-z-]+:$/{agent=$1} /^    mcp_servers:.*[[ ,]clickhouse[],]/{print agent}' "$a" | sort -u | tr '\n' ' ')"
   [ "$ch_agents" = "assistant: " ] && pass "$a: only the Assistant reads ClickHouse" || fail "$a: ClickHouse given to: $ch_agents"
+  # Memory (D-61): only crew agents (with a persona) write memories; the scouts read the global rules only.
+  mem_writers="$(awk '/^  [a-z0-9-]+:$/{agent=$1} /memory_(remember|propose)/{print agent}' "$a" | sort -u | tr '\n' ' ')"
+  personas="$(awk '/^  [a-z0-9-]+:$/{agent=$1} /^    persona:/{print agent}' "$a" | sort -u | tr '\n' ' ')"
+  bad_writers="$(for w in $mem_writers; do case " $personas " in *" $w "*) ;; *) printf '%s ' "$w" ;; esac; done)"
+  [ -z "$bad_writers" ] && pass "$a: only crew agents (with a persona) can remember or propose memories" || fail "$a: memory writes allowed for agents without a persona: $bad_writers"
 done
+# Memory routes (D-61): the agents' routes only on the internal listener (bearer token), the Memory view's on /api,
+# the remember gate in code, and the bridge takes an agent's scope from its own setup key, never from the agent.
+grep -q '^    \.\.\.mem\.internal,$' services/board/src/app.ts && grep -q '^    \.\.\.mem\.api,$' services/board/src/app.ts \
+  && [ "$(grep -cF 'path: /^\/internal\/memory\/' services/board/src/memoryapi.ts)" = 4 ] && [ "$(grep -cE 'path: /\^' services/board/src/memoryapi.ts)" = 12 ] && [ "$(grep -cF 'path: /^\/api\/memory' services/board/src/memoryapi.ts)" = 8 ] \
+  && grep -q 'const gate = await rememberGate(pc, issue, input.comment);' services/board/src/memoryapi.ts && grep -q 'status: gate.ok ? "active" : "proposed",' services/board/src/memoryapi.ts \
+  && grep -q 'memoryScope = key && typeof me?.metadata?.persona?.name === "string" ? key : null;' services/paperclip-tasks-mcp/paperclip-tasks-mcp.mjs && grep -q 'scope: await crewMemoryScope()' services/paperclip-tasks-mcp/paperclip-tasks-mcp.mjs \
+  && pass "board: agents' memory routes are internal-only, a remember is active only through the gate, and scopes come from code" || fail "board: memory routes, the remember gate or the bridge's scope changed"
 # The session can do anything the account can: every request goes through the guard, which allows reads only (D-37).
 grep -q 'guard(client, allowed' services/telegram-mcp/src/reader.ts && grep -q 'readingClient(' services/telegram-mcp/src/main.ts \
   && pass "telegram-mcp: the reading client is wrapped in the request guard" || fail "telegram-mcp: request guard not wired in"
@@ -249,7 +263,7 @@ merge_writes="$(sed -n '/^export const WRITES/,/^\];/p' services/runner/src/merg
 # The Engineer's own tools (docs/design/conversational-engineers.md): a fixed command list on the per-run
 # loopback endpoint, every write checked against the user's words, and the check given nothing else.
 tools="$(grep -oE '^export const TOOLS = \[[^]]*\]' services/runner/src/repohelper.mjs)"
-[ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "pass", "aws", "reset", "cleanup", "task", "tasks"]' ] \
+[ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "pass", "aws", "reset", "cleanup", "task", "tasks", "remember", "propose", "memory"]' ] \
   && [ "$(awk '/^async function agentTasks?\(/,/^}/' services/runner/src/main.mjs | grep -c '^  requireTaskReads(ctx);')" = 2 ] \
   && grep -q 'check: (ordered) => allowWrite(ctx, command,' services/runner/src/main.mjs \
   && [ "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "merge"' | cut -d: -f1)" -lt "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'ctx.merge = ' | cut -d: -f1)" ] \

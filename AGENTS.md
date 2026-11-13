@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-59) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-61) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -40,7 +40,8 @@ host (NixOS, user taylan)
                              files attached as context go to Paperclip's attachments, PDFs with a text version (D-43);
                              :3121 on the LAN (pennyworth.local, paired devices from the home subnet only, D-23)
                              :3122 internal API (bearer token): scheduled moves and recurring tasks for the bridge and the runner (D-25),
-                             and the runner's job activity for the Crew view (D-34, D-45); agents passing the user's comments on (D-54)
+                             and the runner's job activity for the Crew view (D-34, D-45); agents passing the user's comments on (D-54);
+                             memory: recall, search, remember (gated on the user's comment) and propose; the Memory view; past tasks (D-61)
 services/paperclip-tasks-mcp  stdio MCP bridge (mounted into paperclip) for task updates by agents
 ```
 
@@ -251,6 +252,16 @@ scripts/backup.sh --verify                         # restore the latest off-mach
 - **Sign-in:** dynamic registration accepts `http://127.0.0.1:3120/clickhouse/callback`; `offline_access` isn't listed, but the token endpoint issues refresh tokens anyway. Don't ask for `clickstack:access`.
 - **The Assistant reads it too (2026-11-10),** through the same server on the backplane (`PENNYWORTH_CLICKHOUSE_MCP_TOKEN` in Paperclip). No other Paperclip agent gets it, and `verify-security.sh` checks that: the scouts run unattended over untrusted messages.
 - **Queries outlast Codex's 60-second MCP tool timeout:** the proxy caps them at 120 seconds and the runner gives Codex `tool_timeout_sec=180` for this server (`toolTimeout` in `PRIVATE_READS`).
+
+### Memory (D-61)
+
+- **Only the user's word writes memory.** `memory_remember`/`pennyworth remember` name the user's comment; `rememberGate` in `services/board/src/memoryapi.ts` makes it active only if that comment is the user's own (no agent author, no runner marker), on the task, its parent or a sibling part, under 7 days old, and asks to keep something (`REMEMBER_INTENT`). Anything else is stored as a proposal, never an error. Never let an agent's text, a document or a Slack message become an active memory, and never move this check into a prompt.
+- **Scopes come from code,** never from the agent: the bridge reads the agent's own setup key (`/api/agents/me`), the runner the assignee's. A scope is any agent with a persona (setup key without `pennyworth:`); don't hard-code the crew list. Agents without a persona read the global rules only and can't write (`verify-security.sh` checks the config).
+- **Limits and the secret check are in `memory.ts`** (600 characters, 4,000 for a playbook; AWS/GitHub/Slack/API keys, private keys, JWTs refused). Caps: 10 remembers and 3 proposals a day per task, 20 proposals waiting per scope.
+- **Recall is budgeted** (about 6,000 characters global, 8,000 own; pinned, then rule, fact, lesson, playbook); what doesn't fit is counted, and the Memory view marks it "left out". A job's prompt repeats the section on a resumed session only when it changed (`memory:<issue>` in the runner's state). Recall never fails a job.
+- **OpenRouter gets no private memories and no past tasks** (they summarize other tasks, D-52); the board filters both by `engine`.
+- **Past tasks are recorded as the board loads closed tasks** (done crew parts and Engineer tasks, once each). For an install from before D-61: `docker compose exec board node --disable-warning=ExperimentalWarning dist/src/backfill-episodes.js 60`.
+- **The tables live in `board.sqlite`** (FTS5 shadow tables included), so the backup already has them; a new memory database file would need `stage` and `restore.sh`.
 
 ### Backups (D-58)
 
