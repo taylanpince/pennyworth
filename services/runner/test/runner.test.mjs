@@ -1139,11 +1139,11 @@ describe("the crew (D-45)", () => {
       { name: "Grace", role: "", engine: undefined },
       { name: "Ada", role: "", engine: undefined },
     ]);
-    const roles = [{ ...engineers[1], metadata: { ...engineers[1].metadata, runnerEngine: true, role: { job: "Builds features.", engine: "claude" } } }, { metadata: { persona: { name: "Joan" }, role: { job: "Drafts." } } }];
-    assert.deepEqual(crewNames(roles), [{ name: "Ada", role: "Builds features.", engine: "claude" }, { name: "Joan", role: "Drafts.", engine: undefined }]);
-    const base = { user: "Taylan", task: { identifier: "PEN-18", title: "t", description: "" }, workspace: "/w", repos: [], shells: ["llm"], instructions: "let Joan write it up" };
+    const roles = [{ ...engineers[1], metadata: { ...engineers[1].metadata, runnerEngine: true, role: { job: "Builds features.", engine: "claude" } } }, { metadata: { persona: { name: "Ursula" }, role: { job: "Drafts." } } }];
+    assert.deepEqual(crewNames(roles), [{ name: "Ada", role: "Builds features.", engine: "claude" }, { name: "Ursula", role: "Drafts.", engine: undefined }]);
+    const base = { user: "Taylan", task: { identifier: "PEN-18", title: "t", description: "" }, workspace: "/w", repos: [], shells: ["llm"], instructions: "let Ursula write it up" };
     const p = firstPrompt({ ...base, persona: personaFor(roles[0]), team: crewNames(roles) });
-    assert.match(p, /The crew, by name:\n  - Joan: Drafts\.\n  When Taylan wants one of them/);
+    assert.match(p, /The crew, by name:\n  - Ursula: Drafts\.\n  When Taylan wants one of them/);
     assert.doesNotMatch(p, /  - Ada/);
     assert.doesNotMatch(firstPrompt(base), /by name:/);
   });

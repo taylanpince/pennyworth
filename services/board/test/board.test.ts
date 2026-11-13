@@ -47,11 +47,11 @@ describe("assignees", () => {
       role("00000000-0000-0000-0000-0000000000d1", "sre", "Grace", "codex_local", { job: "Incidents.", engine: "claude", model: "claude-opus-5-5" }),
       role("00000000-0000-0000-0000-0000000000d2", "reviewer", "Linus", "opencode_local", { job: "Reviews PRs.", engine: "claude", model: "claude-opus-5-5" }),
       role("00000000-0000-0000-0000-0000000000d3", "engineer-claude", "Ada", "claude_local", { job: "Builds.", engine: "claude", model: "claude-opus-5-5" }),
-      { id: "00000000-0000-0000-0000-0000000000d4", name: "Writer", status: "idle", adapterType: "codex_local", adapterConfig: { modelReasoningEffort: "medium" }, metadata: { setupKey: "pennyworth:writer", role: { job: "Drafts." }, persona: { name: "Joan", voice: "v", avatar: "joan" } } } as unknown as Agent,
+      { id: "00000000-0000-0000-0000-0000000000d4", name: "Writer", status: "idle", adapterType: "codex_local", adapterConfig: { modelReasoningEffort: "medium" }, metadata: { setupKey: "pennyworth:writer", role: { job: "Drafts." }, persona: { name: "Ursula", voice: "v", avatar: "ursula" } } } as unknown as Agent,
     ]);
-    expect(crew.map((a) => a.persona?.name ?? a.name)).toEqual(["You", "Assistant", "Joan", "Ada", "Linus", "Grace"]);
+    expect(crew.map((a) => a.persona?.name ?? a.name)).toEqual(["You", "Assistant", "Ursula", "Ada", "Linus", "Grace"]);
     expect(crew.find((a) => a.persona?.name === "Linus")).toMatchObject({ kind: "engineer", role: "Reviews PRs.", engine: "claude", defaultModel: "claude-opus-5-5", adapterType: "opencode_local" });
-    expect(crew.find((a) => a.persona?.name === "Joan")).toMatchObject({ kind: "agent", role: "Drafts.", engine: "codex", engines: ["codex"], defaultEffort: "medium" });
+    expect(crew.find((a) => a.persona?.name === "Ursula")).toMatchObject({ kind: "agent", role: "Drafts.", engine: "codex", engines: ["codex"], defaultEffort: "medium" });
     const linus = "00000000-0000-0000-0000-0000000000d2";
     const c = { me: "user-1", assignees: crew, labels: [] };
     // Another engine for the role goes in the override; its model belongs to that engine.
@@ -63,10 +63,10 @@ describe("assignees", () => {
     expect(paperclipUpdate(onCodex, { engine: "claude" }, c).assigneeAdapterOverrides).toBeNull();
     expect(paperclipUpdate(issue(), { assignee: linus, engine: "openrouter", model: "z-ai/glm-5.3" }, c).assigneeAdapterOverrides).toEqual({ adapterConfig: { engine: "openrouter", model: "openrouter/z-ai/glm-5.3" } });
     // The Writer runs on Codex only; just a model and effort reach its run config.
-    const joan = "00000000-0000-0000-0000-0000000000d4";
-    expect(paperclipUpdate(issue(), { assignee: joan, model: "gpt-6-astra", effort: "high" }, c).assigneeAdapterOverrides).toEqual({ adapterConfig: { model: "gpt-6-astra", modelReasoningEffort: "high" } });
-    expect(paperclipUpdate(issue(), { assignee: joan, effort: "medium" }, c).assigneeAdapterOverrides).toBeNull();
-    expect(() => paperclipUpdate(issue(), { assignee: joan, engine: "claude" }, c)).toThrow(/runs on codex/);
+    const ursula = "00000000-0000-0000-0000-0000000000d4";
+    expect(paperclipUpdate(issue(), { assignee: ursula, model: "gpt-6-astra", effort: "high" }, c).assigneeAdapterOverrides).toEqual({ adapterConfig: { model: "gpt-6-astra", modelReasoningEffort: "high" } });
+    expect(paperclipUpdate(issue(), { assignee: ursula, effort: "medium" }, c).assigneeAdapterOverrides).toBeNull();
+    expect(() => paperclipUpdate(issue(), { assignee: ursula, engine: "claude" }, c)).toThrow(/runs on codex/);
   });
 });
 

@@ -678,7 +678,7 @@ const TOOLS = {
   },
   task_pass_on: {
     description:
-      "Pass one of the user's comments on to another agent on the same task (Ada, Grace, Linus, Whit, Joan, Alfred), when what they ask is that agent's to do: an Engineer's own report or code, work in a repository, a review, a security check, a draft or document for Joan. The board delivers the user's comment word for word to that agent's part of the task (adding them to it if needed), with this conversation as context; you choose which comment and for whom, never the words. Once per comment and agent. Say in one line that you passed it on, and don't do their part yourself.",
+      "Pass one of the user's comments on to another agent on the same task (Ada, Grace, Linus, Whit, Ursula, Alfred), when what they ask is that agent's to do: an Engineer's own report or code, work in a repository, a review, a security check, a draft or document for Ursula. The board delivers the user's comment word for word to that agent's part of the task (adding them to it if needed), with this conversation as context; you choose which comment and for whom, never the words. Once per comment and agent. Say in one line that you passed it on, and don't do their part yourself.",
     inputSchema: {
       type: "object",
       properties: {

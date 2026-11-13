@@ -201,7 +201,7 @@ agents:
   # Codex agent like the Assistant, with the Assistant's reading tools and only its writing ones.
   writer:
     name: Writer
-    persona: { name: Joan, voice: "Plain and exact; writes for the reader in front of her, in your voice.", avatar: joan }
+    persona: { name: Ursula, voice: "Plain and exact; writes for the reader in front of her, in your voice.", avatar: ursula }
     role: "Drafts, Slack drafts, Primer docs and agendas, in your voice and for the right audience."
     title: Drafts, Slack drafts, Primer documents and agendas
     instructions: config/agents/writer.md
