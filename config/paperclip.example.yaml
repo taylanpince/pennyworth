@@ -95,7 +95,7 @@ agents:
     # Only these MCP servers (and tools) are visible to this agent.
     mcp_servers: [ops_mcp, google_workspace, paperclip_tasks]
     enabled_tools:
-      paperclip_tasks: [task_current, task_get, task_comment, task_set_status]
+      paperclip_tasks: [task_current, task_get, task_comment, task_set_status, memory_recall]
 
   chief-of-staff:
     name: Chief of Staff
@@ -108,7 +108,7 @@ agents:
     mcp_servers: [google_workspace, paperclip_tasks]
     enabled_tools:
       google_workspace: [calendar_list_events, calendar_get_event]
-      paperclip_tasks: [task_current, task_get, task_comments, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status]
+      paperclip_tasks: [task_current, task_get, task_comments, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status, memory_recall]
 
   slack-scout:
     name: Slack Scout
@@ -122,7 +122,7 @@ agents:
     enabled_tools:
       # Reads only: drafts stay with the Assistant (D-46).
       slack: [slack_search_public, slack_search_public_and_private, slack_search_channels, slack_search_users, slack_read_channel, slack_read_thread, slack_read_user_profile, slack_list_user_channels]
-      paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status]
+      paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status, memory_recall]
 
   telegram-scout:
     name: Telegram Scout
@@ -134,7 +134,7 @@ agents:
     timeout_sec: 1800
     mcp_servers: [telegram, paperclip_tasks]
     enabled_tools:
-      paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status]
+      paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status, memory_recall]
 
   inbox-agent:
     name: Inbox Agent
@@ -147,7 +147,7 @@ agents:
     mcp_servers: [google_workspace, paperclip_tasks]
     enabled_tools:
       google_workspace: [gmail_search, gmail_read_thread]
-      paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status]
+      paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status, memory_recall]
 
   assistant:
     name: Assistant
@@ -179,7 +179,7 @@ agents:
       clickhouse: [get_organizations, get_services_list, get_service_details, list_databases, list_tables, run_select_query]
       # task_create_engineer_task: Engineer sub-tasks that wait for the user's go-ahead (D-24).
       # task_schedule, task_recurring: board moves on a date and recurring tasks (D-25). task_merge: merging tasks (D-56).
-      paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status, task_create_engineer_task, task_schedule, task_recurring, task_pass_on, task_merge]
+      paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status, task_create_engineer_task, task_schedule, task_recurring, task_pass_on, task_merge, memory_recall, memory_search, memory_remember, memory_propose]
 
   # Executors for coding jobs (D-20). Assignment targets only: Paperclip never wakes them; the
   # host runner does the work. The assignee picks the engine; the task's model override (or the
