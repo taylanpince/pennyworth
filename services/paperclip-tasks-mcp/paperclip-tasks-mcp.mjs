@@ -21,9 +21,11 @@ const CURRENT_TASK = process.env.PAPERCLIP_TASK_ID || "";
 // paths, so agents only get the statuses that always work.
 const STATUSES = ["todo", "in_progress", "done", "cancelled"];
 
-// Engineer sub-tasks (D-24): engines map to the Engineer agents' setup keys.
+// Engineer sub-tasks (D-24): a crew role runs them (D-60), on its own engine unless the user named another.
 const ENGINES = ["codex", "claude", "openrouter"];
-const ADAPTERS = { codex: "codex_local", claude: "claude_local", openrouter: "opencode_local" };
+const ADAPTER_ENGINE = { codex_local: "codex", claude_local: "claude", opencode_local: "openrouter" };
+const isRole = (a) => a?.status !== "terminated" && (a?.metadata?.runnerEngine === true || /^pennyworth:engineer(-|$)/.test(a?.metadata?.setupKey ?? ""));
+const roleEngineOf = (a) => (ENGINES.includes(a?.metadata?.role?.engine) ? a.metadata.role.engine : ADAPTER_ENGINE[a?.adapterType]);
 const MAX_SUBTASKS = 40;
 
 /** An OpenRouter model id (provider/model) for what the user named, or "" (as the runner's intake). */
@@ -313,28 +315,29 @@ const TOOLS = {
   },
   task_create_engineer_task: {
     description:
-      "Assistant only, and only when the user asked for it in their own comment: create an Engineer task as a sub-task of one of the user's tasks. One repository and one self-contained request per task: include everything the engineer needs (repo URL, exact changes, checks, what to skip), because it cannot see the parent. It waits for the user's go-ahead on the parent before it starts. Idempotent per parent and marker.",
+      "Assistant only, and only when the user asked for it in their own comment: create an Engineer task as a sub-task of one of the user's tasks, for one of the crew's Engineers (by name; Ada when the user named none and no one else's role fits better). One repository and one self-contained request per task: include everything the engineer needs (repo URL, exact changes, checks, what to skip), because it cannot see the parent. It runs on that Engineer's own engine unless the user named another. It waits for the user's go-ahead on the parent before it starts. Idempotent per parent and marker.",
     inputSchema: {
       type: "object",
       properties: {
         parent: { type: "string", description: "the user's task to split, e.g. PEN-357" },
         title: { type: "string" },
         description: { type: "string", description: "markdown; the complete request for this one task" },
-        engine: { type: "string", enum: ENGINES, description: "codex (default), claude, or openrouter (GLM, DeepSeek, Kimi… models), as the user asked" },
+        agent: { type: "string", description: "the Engineer's name, e.g. Ada, Grace, Linus or Whit (default Ada)" },
+        engine: { type: "string", enum: ENGINES, description: "only when the user named an engine: codex, claude, or openrouter (GLM, DeepSeek, Kimi… models)" },
         model: { type: "string", description: "optional model the user named, e.g. gpt-6-astra, opus, deepseek, z-ai/glm-5.3-flash" },
         marker: { type: "string", description: "stable key within the parent, e.g. the repo name" },
       },
-      required: ["parent", "title", "description", "engine", "marker"],
+      required: ["parent", "title", "description", "marker"],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    run: async ({ parent, title, description, engine, model, marker }) => {
+    run: async ({ parent, title, description, agent: named, engine, model, marker }) => {
       if (!COMPANY) throw new Error("PAPERCLIP_COMPANY_ID not set");
       // Code work is gated by the user's go-ahead (D-24); only the Assistant may queue it.
       const me = await api("GET", "/api/agents/me");
       if (me?.metadata?.setupKey !== "pennyworth:assistant") throw new Error("only the Assistant can create Engineer tasks");
       if (engine === "glm") engine = "openrouter"; // the OpenRouter Engineer was "Engineer · GLM"
-      if (!ENGINES.includes(engine)) throw new Error(`engine must be one of ${ENGINES.join(", ")}`);
+      if (engine !== undefined && !ENGINES.includes(engine)) throw new Error(`engine must be one of ${ENGINES.join(", ")}`);
       let p = await api("GET", `/api/issues/${issueRef(parent)}`);
       const owner = await ownerUserId();
       // From the Assistant's own sub-task (D-45), the Engineer joins the user's task it belongs to.
@@ -348,15 +351,24 @@ const TOOLS = {
       const siblings = await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/issues?${new URLSearchParams({ parentId: p.id, limit: "200" })}`);
       if (siblings.filter((i) => i.parentId === p.id).length >= MAX_SUBTASKS) throw new Error(`a task can have at most ${MAX_SUBTASKS} Engineer sub-tasks`);
       const agents = await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/agents`);
-      const agent = agents.find((a) => a.adapterType === ADAPTERS[engine] && /^pennyworth:engineer(-|$)/.test(a.metadata?.setupKey ?? "") && a.status !== "terminated");
-      if (!agent) throw new Error(`no Engineer for ${engine}`);
+      const roles = agents.filter(isRole);
+      const who = String(named ?? "").trim().toLowerCase();
+      const agent = who
+        ? roles.find((a) => String(a.metadata?.persona?.name ?? "").toLowerCase() === who || a.name.toLowerCase() === who)
+        : (roles.find((a) => a.metadata?.setupKey === "pennyworth:engineer-claude") ?? roles[0]);
+      if (!agent) throw new Error(who ? `no Engineer is called ${named}: ${roles.map((a) => a.metadata?.persona?.name ?? a.name).join(", ")}` : "no Engineer is set up");
+      const own = roleEngineOf(agent);
+      engine ??= own;
       const m2 = String(model ?? "").trim();
       if (m2 && !/^[A-Za-z0-9._:\/\[\]-]{1,100}$/.test(m2)) throw new Error("invalid model");
       // opencode model ids are openrouter/<provider>/<model>. A name like "deepseek" or "glm-5.3-flash"
       // is matched against the OpenRouter Engineer's listed models; a bare name we can't place is
       // dropped, so the Engineer's default model runs instead.
-      const orModel = engine === "openrouter" && m2 ? openrouterModel(m2, [agent.adapterConfig?.model, ...(Array.isArray(agent.metadata?.models) ? agent.metadata.models : [])]) : "";
+      const listed = roles.flatMap((a) => [...(Array.isArray(a.metadata?.engines?.openrouter) ? a.metadata.engines.openrouter : []), ...(a.adapterType === "opencode_local" ? [a.adapterConfig?.model, ...(Array.isArray(a.metadata?.models) ? a.metadata.models : [])] : [])]);
+      const orModel = engine === "openrouter" && m2 ? openrouterModel(m2, listed) : "";
       const modelId = engine === "openrouter" ? (orModel ? `openrouter/${orModel}` : "") : m2;
+      // The executor override (D-60): only what differs from the role's own engine.
+      const config = { ...(engine !== own ? { engine } : {}), ...(modelId ? { model: modelId } : {}) };
       const body = {
         title: String(title).slice(0, 200),
         description: `${String(description).replace(/<!--|-->/g, "").slice(0, 60_000)}\n\n<!-- source:${m} -->`,
@@ -364,12 +376,12 @@ const TOOLS = {
         priority: PRIORITIES.includes(p.priority) ? p.priority : "medium",
         parentId: p.id,
         assigneeAgentId: agent.id,
-        ...(modelId ? { assigneeAdapterOverrides: { adapterConfig: { model: modelId } } } : {}),
+        ...(Object.keys(config).length ? { assigneeAdapterOverrides: { adapterConfig: config } } : {}),
         idempotencyKey: await idempotencyKey(m),
         allowDuplicate: true,
       };
       const i = await api("POST", `/api/companies/${encodeURIComponent(COMPANY)}/issues`, body);
-      return { ...brief(i), parent: p.identifier, engine, model: modelId || null, deduplicated: Boolean(i.deduplicated) };
+      return { ...brief(i), parent: p.identifier, agent: agent.metadata?.persona?.name ?? agent.name, engine, model: modelId || null, deduplicated: Boolean(i.deduplicated) };
     },
   },
   task_schedule: {
@@ -545,7 +557,7 @@ const TOOLS = {
   },
   task_pass_on: {
     description:
-      "Assistant only: pass one of the user's comments on to another agent on the same task (Ada, Grace, Linus…), when what they ask is that agent's to do: an Engineer's own report or code, a Primer document an Engineer wrote, work in a repository. The board delivers the user's comment word for word to that agent's part of the task (adding them to it if needed), with this conversation as context; you choose which comment and for whom, never the words. Once per comment and agent. Say in one line that you passed it on, and don't do their part yourself.",
+      "Pass one of the user's comments on to another agent on the same task (Ada, Grace, Linus, Whit, Joan, Alfred), when what they ask is that agent's to do: an Engineer's own report or code, work in a repository, a review, a security check, a draft or document for Joan. The board delivers the user's comment word for word to that agent's part of the task (adding them to it if needed), with this conversation as context; you choose which comment and for whom, never the words. Once per comment and agent. Say in one line that you passed it on, and don't do their part yourself.",
     inputSchema: {
       type: "object",
       properties: {
@@ -558,8 +570,9 @@ const TOOLS = {
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     run: async ({ issue, comment, to }) => {
-      await requireAssistant();
+      // The crew passes work on (D-54, D-60): any agent with a persona. The board checks the comment is the user's own.
       const me = await api("GET", "/api/agents/me");
+      if (!me?.metadata?.persona?.name) throw new Error("only the crew can pass work on");
       return boardApi(`/internal/issues/${issueRef(issue)}/pass`, { comment: String(comment), to: String(to), by: me?.metadata?.persona?.name || "Alfred" });
     },
   },

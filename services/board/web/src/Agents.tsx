@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { PairRequired, api } from "./api";
 import { Avatar, Plan } from "./components";
 import type { Agents, Assignee, Finished, Session, TaskRef } from "./types";
-import { ago, elapsed } from "./util";
+import { ago, elapsed, executorLabel, roleLine, roleTitle } from "./util";
 
 const STATUS: Record<string, { text: string; tone: "ok" | "bad" | "meh" }> = {
   succeeded: { text: "Done", tone: "ok" },
@@ -114,12 +114,9 @@ export function CrewView({ query, crew, onPairing }: { query: string; crew: Assi
   );
 }
 
-const ENGINE_NAMES: Record<string, string> = { codex: "Codex", claude: "Claude Code", openrouter: "OpenRouter" };
-
+/** The role and what it runs on by default (D-60): "Reviewer · Claude · claude-opus-5-5". */
 function role(m: Assignee): string {
-  if (m.kind === "assistant") return "Assistant · research and drafts";
-  const model = m.defaultModel?.replace(/^openrouter\//, "");
-  return `Engineer · ${ENGINE_NAMES[m.engine ?? ""] ?? m.name}${model ? ` · ${model}` : ""}`;
+  return [roleTitle(m), m.engine && executorLabel(m, undefined)].filter(Boolean).join(" · ");
 }
 
 /** One crew member: who they are, what they're on now, their queue, and what they finished lately. */
@@ -137,6 +134,7 @@ function CrewTile({ member, sessions, finished, now }: { member: Assignee; sessi
           <div className="muted small">{role(member)}</div>
         </div>
       </header>
+      <p className="crew-role">{roleLine(member)}</p>
       {member.persona?.voice && <p className="crew-voice">{member.persona.voice}</p>}
       <h3>On it now{on.length ? ` · ${on.length}` : ""}</h3>
       {on.map((s) => (

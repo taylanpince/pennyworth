@@ -104,7 +104,7 @@ describe("who is behind a session (D-45)", () => {
     const view = await agentsView({ live, past: [], runner, agents: crew, resolve, now: NOW });
     expect(view.sessions.map((s) => [s.agent, s.agentId])).toEqual([
       ["Assistant", "a-assistant"],
-      ["Engineer · Codex (gpt-5.5, high effort)", "e-codex"],
+      ["Engineer · Codex · Codex (gpt-5.5, high effort)", "e-codex"],
       ["Engineer · Claude", "e-claude"],
     ]);
     // No OpenRouter Engineer here: the job keeps its name, without an agent.

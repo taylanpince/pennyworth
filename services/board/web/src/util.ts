@@ -1,4 +1,4 @@
-import type { Assignee, Card } from "./types";
+import type { Assignee, Card, Executor } from "./types";
 
 export function ago(iso: string, now = Date.now()): string {
   const s = Math.max(0, (now - Date.parse(iso)) / 1000);
@@ -28,6 +28,29 @@ export function when(iso: string): string {
 
 export const PRIORITIES = ["critical", "high", "medium", "low"] as const;
 export const PRIORITY_NAMES: Record<string, string> = { critical: "Urgent", high: "High", medium: "Normal", low: "Low" };
+
+export const ENGINE_NAMES: Record<string, string> = { codex: "Codex", claude: "Claude", openrouter: "OpenRouter" };
+
+/** What a crew member takes on (D-60): its role's line, or what it was before roles. */
+export function roleLine(a: Assignee | undefined): string {
+  if (!a || a.kind === "me") return "";
+  if (a.role) return a.role;
+  return a.kind === "engineer" ? `Code jobs on ${ENGINE_NAMES[a.engine ?? ""] ?? "the runner"}` : "Research and drafts";
+}
+
+/** The role's name ("Reviewer", "SRE"), from its Paperclip name before roles had one ("Engineer · Codex" → "Engineer"). */
+export function roleTitle(a: Assignee | undefined): string {
+  if (!a || a.kind === "me") return "";
+  return a.name.replace(/ · .*$/, "");
+}
+
+/** The engine and model a task runs with, in a few words: "Claude · claude-opus-5-5 · high". */
+export function executorLabel(a: Assignee, x: Executor | undefined): string {
+  const engine = x?.engine ?? a.engine;
+  const model = (x?.model ?? (engine === a.engine ? a.defaultModel : undefined))?.replace(/^openrouter\//, "");
+  const effort = x?.effort ?? (engine === a.engine ? a.defaultEffort : undefined);
+  return [(a.engines?.length ?? 0) > 1 || x?.engine ? ENGINE_NAMES[engine ?? ""] : undefined, model ?? "default model", effort && `${effort} effort`].filter(Boolean).join(" · ");
+}
 
 /** Short names on cards: "Codex" for "Engineer · Codex". */
 export function shortName(a: Assignee | undefined): string {

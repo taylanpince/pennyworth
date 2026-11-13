@@ -43,6 +43,9 @@ export function loadConfig() {
     boardInternalUrl: env.BOARD_INTERNAL_URL ?? cfg.recurring?.board_url ?? "http://127.0.0.1:3122",
     openrouterKeyFile: expand(cfg.engines?.openrouter?.key_file ?? join(secrets, "openrouter_key")),
     claudeTokenFile: expand(cfg.engines?.claude?.token_file ?? join(secrets, "claude_oauth_token")),
+    // A Claude Code session past this much context starts afresh on the next turn, with the
+    // conversation and the workspace (resuming it again re-reads all of it on every call).
+    freshSessionTokens: Number(cfg.engines?.claude?.fresh_session_tokens ?? 300_000),
     claudeConfigDir: expand(cfg.engines?.claude?.config_dir ?? join(cfg.state_dir ?? "~/.local/state/pennyworth-runner", "claude")),
     // Primer for every Engineer job, read-only (D-40): primer-mcp's loopback port.
     primerMcpUrl: env.PRIMER_RUNNER_URL ?? cfg.primer?.url ?? "http://127.0.0.1:3123/mcp/read",

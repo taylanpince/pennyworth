@@ -28,6 +28,9 @@ engines:
     token_file: ~/.config/pennyworth/claude_oauth_token   # from `claude setup-token` (0600)
     # Runner-owned Claude Code home: none of your plugins, hooks, MCP servers or claude.ai connectors.
     config_dir: ~/.local/state/pennyworth-runner/claude
+    # A session past this much context starts afresh on the next turn, with the conversation and the
+    # workspace: resuming it re-reads all of it on every call (D-60). 0 keeps sessions however long.
+    fresh_session_tokens: 300000
 
 # Primer for every engine, read-only (D-40). Token: $PENNYWORTH_SECRETS_DIR/primer_mcp_token.
 # publish_url: where the runner itself publishes a task's Primer document (D-44); never given to jobs.

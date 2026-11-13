@@ -510,6 +510,7 @@ kbd {
 .crew-portrait::before { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid transparent; }
 .crew-tile.busy .crew-portrait::before { border-color: var(--working); border-right-color: transparent; animation: spin 1.4s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .crew-tile.busy .crew-portrait::before { animation: none; border-right-color: var(--working); } }
+.crew-role { margin: 0 0 4px; font-size: 13px; }
 .crew-voice { margin: 0; font-size: 12.5px; color: var(--muted); font-style: italic; }
 .crew-tile h3 { margin: 4px 0 0; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
 .crew-tile .empty { padding: 0; margin: 0; }
@@ -653,3 +654,13 @@ kbd {
 .new-task h2 { margin: 0; font-size: 15px; }
 .new-title { font-size: 16px; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); outline: none; }
 .new-where { margin-right: auto; }
+
+/* The role of whoever you pick, and how it runs (D-60). */
+.role-hint { margin: 8px 2px 0; font-size: 13px; color: var(--muted); }
+.role-hint b { color: var(--text); }
+.executor { display: grid; gap: 6px; margin: 8px 0 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.exec-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.exec-name { width: 52px; font-size: 12px; color: var(--muted); }
+.exec-row input { flex: 1; min-width: 160px; }
+.exec-own { opacity: 0.7; font-size: 10px; }
+.props .executor { margin: 0; border: 0; padding: 0; background: none; grid-column: 1 / -1; }

@@ -19,11 +19,11 @@ import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSo
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CrewView } from "./Agents";
 import { PairRequired, api, type Session } from "./api";
-import { BackupBanner, CardView, ClickHouseBanner, GleanBanner, GoogleBanner, GrafanaBanner, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
+import { BackupBanner, CardView, ClickHouseBanner, ExecutorPicker, GleanBanner, GoogleBanner, GrafanaBanner, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
 import { CrewPicker, Drawer } from "./Drawer";
 import { Markdown, setSlackTeams } from "./markdown";
 import { PairScreen, PhonePanel } from "./Pairing";
-import { BUCKETS, BUCKET_NAMES, type Board, type Bucket, type Card } from "./types";
+import { BUCKETS, BUCKET_NAMES, type Board, type Bucket, type Card, type Executor } from "./types";
 import { matches } from "./util";
 
 type Items = Record<Bucket, Card[]>;
@@ -850,6 +850,7 @@ function Help() {
 function NewTask({ board, onClose, onCreated, toast }: { board: Board; onClose: () => void; onCreated: (identifier: string, agent?: string) => void; toast: (text: string) => void }) {
   const [title, setTitle] = useState("");
   const [pick, setPick] = useState<string | null>(null);
+  const [executor, setExecutor] = useState<Executor>({});
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const crew = board.assignees.filter((a) => a.kind !== "me");
@@ -861,7 +862,7 @@ function NewTask({ board, onClose, onCreated, toast }: { board: Board; onClose: 
     setBusy(true);
     try {
       const task = await api.create(t, "triage");
-      if (agent) await api.addAgent(task.id, agent.key, text.trim() || t);
+      if (agent) await api.addAgent(task.id, agent.key, text.trim() || t, executor);
       onCreated(task.identifier, name);
     } catch (e) {
       toast(`Couldn't add: ${(e as Error).message}`);
@@ -881,7 +882,8 @@ function NewTask({ board, onClose, onCreated, toast }: { board: Board; onClose: 
       >
         <h2>New task</h2>
         <input className="new-title" autoFocus value={title} placeholder="What needs doing?" onChange={(e) => setTitle(e.target.value)} />
-        <CrewPicker crew={crew} pick={pick} setPick={setPick} me />
+        <CrewPicker crew={crew} pick={pick} setPick={(k) => (setPick(k), setExecutor({}))} me />
+        {agent && <ExecutorPicker assignee={agent} value={executor} onChange={setExecutor} />}
         {agent && (
           <textarea
             value={text}

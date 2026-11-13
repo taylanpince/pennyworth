@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { FOR_OTHERS, RUNNER_MARKER, deliveredFrom, isAgentSubtask, isUserPart, ownRequest, findRepos, mentionedRepos, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveShells, stripHidden } from "./commands.mjs";
+import { FOR_OTHERS, RUNNER_MARKER, deliveredFrom, isAgentSubtask, isUserPart, ownRequest, findRepos, mentionedRepos, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, roleEngine, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { observes, runAgent } from "./engines.mjs";
 import { gcpSession } from "./gcp.mjs";
@@ -595,7 +595,7 @@ async function syncPicker(issue, full, task, named) {
   const chosen = task.engine && ((named && (task.engine.kind !== picked.kind || task.engine.model)) || (!state.get(seenKey) && task.engine.kind !== picked.kind));
   let engine = picked;
   if (chosen) {
-    const fields = pickerFor({ ...task.engine, ...(task.engine.kind === picked.kind && picked.effort ? { effort: picked.effort } : {}) }, engineers);
+    const fields = pickerFor({ ...task.engine, ...(task.engine.kind === picked.kind && picked.effort ? { effort: picked.effort } : {}) }, engineers, full.assigneeAgentId);
     if (fields) {
       await pc.setPicker(issue.id, fields);
       engine = pickedEngine({ ...full, ...fields }, engineers, cfg);
@@ -718,7 +718,7 @@ async function agentEngine(ctx, args) {
   const kind = String(args.engine ?? "").trim().toLowerCase();
   if (!["claude", "codex", "openrouter"].includes(kind)) throw new UserError("Name the engine: claude, codex or openrouter, and optionally a model.");
   const engineers = await pc.engineerAgents();
-  if (!pickerFor({ kind }, engineers)) throw new UserError(`There's no ${kind} Engineer set up.`);
+  if (!pickerFor({ kind }, engineers, ctx.issue?.assigneeAgentId)) throw new UserError("There's no Engineer set up.");
   const raw = String(args.model ?? "").trim();
   let model;
   if (raw) {
@@ -966,7 +966,7 @@ async function startJob({ issue, instructions }) {
         }
       : undefined;
     const engineers = await pc.engineerAgents().catch(() => []);
-    const persona = personaFor(engine.kind, engineers);
+    const persona = personaFor(engineers.find((a) => a.id === full.assigneeAgentId)) ?? personaFor(engineers.find((a) => roleEngine(a)?.kind === engine.kind));
     // Comments while it works reach a session that takes them (Claude Code: stage 4 of the design).
     const channel = {};
     Object.assign(running.get(issue.id), { channel, who: persona?.name });
@@ -974,7 +974,8 @@ async function startJob({ issue, instructions }) {
     const { thread, stand, words } = await conversation(issue, workspace, { instructions, resumed, persona });
     const prompt = resumed
       ? followUpPrompt({ user: cfg.selfName, instructions, workspace, repos, branches, files, primer, crew, observe, thread, stand })
-      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, shells: runShells, instructions, files, primer, persona, crew, observe, thread, stand, team: crewNames(engineers) });
+      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, shells: runShells, instructions, files, primer, persona, crew, observe, thread, stand, team: crewNames(await pc.agents().catch(() => engineers)), restarted: Boolean(state.get(`restarted:${issue.id}`)) });
+    if (!resumed) state.set(`restarted:${issue.id}`, "");
     const tipsBefore = await branchTips(workspace);
     tools = { issue, workspace, words, instructions, kind: engine.kind, who: persona?.name, signal: controller.signal };
     const helper = repoHelper.register(tools);
@@ -987,6 +988,11 @@ async function startJob({ issue, instructions }) {
     if (result.sessionId) {
       state.updateTask(issue.id, { session_id: result.sessionId });
       state.set(`session_engine:${issue.id}`, engine.kind);
+    }
+    if (result.context && cfg.freshSessionTokens > 0 && result.context > cfg.freshSessionTokens) {
+      state.updateTask(issue.id, { session_id: null });
+      state.set(`restarted:${issue.id}`, String(result.context));
+      log("session grew too long; the next turn starts afresh", { issue: issue.identifier, context: result.context });
     }
 
     if (result.cancelled) {
@@ -1051,7 +1057,7 @@ async function afterTurn(issue, tools) {
   if (tools.reset || tools.engine) state.updateTask(issue.id, { session_id: null });
   if (tools.engine) {
     const engineers = await pc.engineerAgents();
-    const fields = pickerFor(tools.engine, engineers);
+    const fields = pickerFor(tools.engine, engineers, (await pc.issue(issue.id)).assigneeAgentId);
     if (fields) await pc.setPicker(issue.id, fields);
     state.updateTask(issue.id, { engine: tools.engine });
     state.set(`picker:${issue.id}`, new Date().toISOString());

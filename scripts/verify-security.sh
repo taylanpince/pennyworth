@@ -164,7 +164,8 @@ grep -qF 'export const DRAFT_TOOL = "slack_send_message_draft";' services/slack-
 for a in config/paperclip.yaml config/paperclip.example.yaml; do
   [ -f "$a" ] || continue
   drafters="$(awk '/^  [a-z-]+:$/{agent=$1} /slack_send_message_draft/{print agent}' "$a" | sort -u | tr '\n' ' ')"
-  [ "$drafters" = "assistant: " ] && pass "$a: only the Assistant can save Slack drafts" || fail "$a: Slack drafts allowed for: $drafters"
+  # The Writer drafts too (D-60); never the scouts, which read untrusted messages unattended.
+  [ "$drafters" = "assistant: writer: " ] && pass "$a: only the Assistant and the Writer can save Slack drafts" || fail "$a: Slack drafts allowed for: $drafters"
   # ClickHouse (D-57): production data for the Assistant only, never the scouts that read untrusted messages unattended.
   ch_agents="$(awk '/^  [a-z-]+:$/{agent=$1} /^    mcp_servers:.*[[ ,]clickhouse[],]/{print agent}' "$a" | sort -u | tr '\n' ' ')"
   [ "$ch_agents" = "assistant: " ] && pass "$a: only the Assistant reads ClickHouse" || fail "$a: ClickHouse given to: $ch_agents"

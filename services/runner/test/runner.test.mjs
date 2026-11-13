@@ -408,6 +408,27 @@ describe("executor picker (Engineer agents)", async () => {
     assert.deepEqual(pickedEngine(fields, engineers, cfg), { kind: "codex", model: "gpt-6-astra", effort: "high" });
   });
 
+  it("runs a role on its own engine unless the task names another, and keeps the role when switching (D-60)", () => {
+    const roles = [
+      { id: "linus", adapterType: "opencode_local", adapterConfig: { model: "openrouter/z-ai/glm-5.3-flash" }, metadata: { runnerEngine: true, role: { job: "Reviews.", engine: "claude", model: "claude-opus-5-5" } } },
+      { id: "grace", adapterType: "codex_local", adapterConfig: {}, metadata: { runnerEngine: true, role: { job: "SRE.", engine: "claude", model: "claude-opus-5-5", effort: "high" } } },
+    ];
+    // The adapter is only a label: the role's engine and model run it.
+    assert.deepEqual(pickedEngine({ assigneeAgentId: "linus" }, roles, cfg), { kind: "claude", model: "claude-opus-5-5" });
+    assert.deepEqual(pickedEngine({ assigneeAgentId: "grace" }, roles, cfg), { kind: "claude", model: "claude-opus-5-5", effort: "high" });
+    // The task's override names another engine: that engine's model (or the config's), never the role's Claude model.
+    assert.deepEqual(pickedEngine({ assigneeAgentId: "linus", assigneeAdapterOverrides: { adapterConfig: { engine: "codex" } } }, roles, cfg), { kind: "codex", model: undefined });
+    assert.deepEqual(pickedEngine({ assigneeAgentId: "linus", assigneeAdapterOverrides: { adapterConfig: { engine: "openrouter", model: "openrouter/z-ai/glm-5.3" } } }, roles, cfg), { kind: "openrouter", model: "z-ai/glm-5.3" });
+    assert.deepEqual(pickedEngine({ assigneeAgentId: "grace", assigneeAdapterOverrides: { adapterConfig: { engine: "bogus" } } }, roles, cfg), { kind: "claude", model: "claude-opus-5-5", effort: "high" });
+    // Switching engine keeps the role, and only what differs from the role goes in the override.
+    assert.deepEqual(pickerFor({ kind: "codex", model: "gpt-6-astra" }, roles, "linus"), { assigneeAgentId: "linus", assigneeAdapterOverrides: { adapterConfig: { engine: "codex", model: "gpt-6-astra" } } });
+    assert.deepEqual(pickerFor({ kind: "claude", model: "claude-opus-5-5" }, roles, "linus"), { assigneeAgentId: "linus", assigneeAdapterOverrides: null });
+    assert.deepEqual(pickerFor({ kind: "claude", model: "claude-opus-5-5", effort: "high" }, roles, "grace"), { assigneeAgentId: "grace", assigneeAdapterOverrides: null });
+    assert.deepEqual(pickerFor({ kind: "claude", model: "sonnet" }, roles, "grace"), { assigneeAgentId: "grace", assigneeAdapterOverrides: { adapterConfig: { model: "sonnet" } } });
+    const fields = pickerFor({ kind: "openrouter", model: "deepseek/deepseek-v4-pro" }, roles, "grace");
+    assert.deepEqual(pickedEngine(fields, roles, cfg), { kind: "openrouter", model: "deepseek/deepseek-v4-pro" });
+  });
+
   it("passes the effort to Codex and Claude Code", () => {
     const codex = buildCommand({ cfg: { ...cfg, sandbox: { extra_writable_roots: [] } }, engine: { kind: "codex", model: "gpt-5.6-sol", effort: "high" }, worktree: "/w", lastMessageFile: "/x" }).argv;
     assert.ok(codex.includes('model_reasoning_effort="high"'));
@@ -1113,17 +1134,31 @@ describe("the crew (D-45)", () => {
     { adapterType: "claude_local", metadata: { persona: { name: "Ada", voice: "Careful.", avatar: "ada" } } },
     { adapterType: "opencode_local", metadata: {} },
   ];
-  it("tells the Engineer who its colleagues are, so a name picks an engine", () => {
-    assert.deepEqual(crewNames(engineers), [{ name: "Grace", engine: "codex" }, { name: "Ada", engine: "claude" }]);
-    const base = { user: "Taylan", task: { identifier: "PEN-18", title: "t", description: "" }, workspace: "/w", repos: [], shells: ["llm"], instructions: "let Grace do it" };
-    assert.match(firstPrompt({ ...base, team: crewNames(engineers) }), /The engineering agents, by name: Grace \(codex\), Ada \(claude\)\. Taylan may ask for one of them by name\./);
+  it("tells the Engineer who its colleagues are and what each takes on (D-60)", () => {
+    assert.deepEqual(crewNames(engineers), [
+      { name: "Grace", role: "", engine: undefined },
+      { name: "Ada", role: "", engine: undefined },
+    ]);
+    const roles = [{ ...engineers[1], metadata: { ...engineers[1].metadata, runnerEngine: true, role: { job: "Builds features.", engine: "claude" } } }, { metadata: { persona: { name: "Joan" }, role: { job: "Drafts." } } }];
+    assert.deepEqual(crewNames(roles), [{ name: "Ada", role: "Builds features.", engine: "claude" }, { name: "Joan", role: "Drafts.", engine: undefined }]);
+    const base = { user: "Taylan", task: { identifier: "PEN-18", title: "t", description: "" }, workspace: "/w", repos: [], shells: ["llm"], instructions: "let Joan write it up" };
+    const p = firstPrompt({ ...base, persona: personaFor(roles[0]), team: crewNames(roles) });
+    assert.match(p, /The crew, by name:\n  - Joan: Drafts\.\n  When Taylan wants one of them/);
+    assert.doesNotMatch(p, /  - Ada/);
     assert.doesNotMatch(firstPrompt(base), /by name:/);
+  });
+  it("tells a session restarted for its length that the conversation and workspace hold its work", () => {
+    const base = { user: "Taylan", task: { identifier: "PEN-18", title: "t", description: "" }, workspace: "/w", repos: [], shells: ["llm"], instructions: "go on" };
+    assert.match(firstPrompt({ ...base, restarted: true }), /your earlier session grew too long and was closed\. The conversation below and the workspace/);
+    assert.doesNotMatch(firstPrompt(base), /grew too long/);
   });
   it("gives the Engineer its name and voice", () => {
     const base = { user: "Taylan", task: { identifier: "PEN-18", title: "t", description: "" }, workspace: "/w", repos: [{ slug: "a/b", path: "/w/b", base: "main", writable: true }], mode: "investigate", shells: ["llm"], instructions: "look" };
-    assert.deepEqual(personaFor("claude", engineers), { name: "Ada", voice: "Careful." });
-    assert.equal(personaFor("openrouter", engineers), undefined);
-    assert.match(firstPrompt({ ...base, persona: personaFor("claude", engineers) }), /^You are Ada, one of Pennyworth's engineering agents[\s\S]*Your voice: Careful\. It sets the tone/);
+    assert.deepEqual(personaFor(engineers[1]), { name: "Ada", voice: "Careful." });
+    assert.equal(personaFor(engineers[2]), undefined);
+    assert.match(firstPrompt({ ...base, persona: personaFor(engineers[1]) }), /^You are Ada, one of Pennyworth's engineering agents[\s\S]*Your voice: Careful\. It sets the tone/);
+    const reviewer = { metadata: { persona: { name: "Linus", voice: "Blunt." }, role: { job: "Reviews PRs.", engine: "claude" } } };
+    assert.match(firstPrompt({ ...base, persona: personaFor(reviewer) }), /^You are Linus[^\n]*\n\nYour role: Reviews PRs\. It's what Taylan gave you this task for; do the whole task as asked[^\n]*\n\nYour voice: Blunt\./);
     assert.match(firstPrompt(base), /^You are Pennyworth's engineering agent, working/);
   });
 });

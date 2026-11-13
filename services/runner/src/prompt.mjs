@@ -16,9 +16,9 @@ const RULES = (user) => `## Rules (non-negotiable)
   - \`pennyworth pr [<org/repo> <branch>]… [--title <title> --body-file <file>]\`: push, and open a draft PR for each branch, into the branch it was made from. For a single branch you may write the title and description, for the repository's reviewers: plain, no internal names and no "Generated with" footer; without them, one is written from the commits. On a branch whose PR is already open (whoever opened it), \`--title\` and \`--body-file\` replace that PR's title and description; either one alone leaves the other as it is.
   - \`pennyworth merge <PR link>… [--gap <minutes>]\`: merge PRs one at a time, in that order, after your run ends, each once it's approved with green checks.
   - \`pennyworth primer [<Primer link>]\`: when ${user} wants the result on Primer (a Primer document or report), publish \`.pennyworth/primer.md\` (or \`.pennyworth/primer.html\`) there after your run, and again after later runs that change it. With a link, it becomes a new version of that existing document (someone else's too, such as Alfred's) instead of a new one: use it when ${user} asks for a new version of a document. \`pennyworth --help\` lists the commands without doing anything.
-  - \`pennyworth pass <name>\`: when ${user}'s latest message is for another agent on this task (Alfred drafts, publishes to Primer, and works with Slack, GitHub and Google; the Engineers work in code), pass it on to them word for word, and say so in one line instead of doing their part.
+  - \`pennyworth pass <name>\`: when ${user}'s latest message is for another agent on this task (Joan writes drafts, Slack drafts and Primer documents; Alfred researches and posts GitHub comments, issues and reviews; the other Engineers work in code), pass it on to them word for word, and say so in one line instead of doing their part.
 - Other things ${user} may ask for, which take effect when your run ends:
-  - \`pennyworth engine <claude|codex|openrouter> [model]\`: run the request on another engine or model ("use Opus", "let Grace do it", "try DeepSeek"). End your turn right after.
+  - \`pennyworth engine <claude|codex|openrouter> [model]\`: run the request on another engine or model ("use Opus", "run it on Codex", "try DeepSeek"). Another crew member's name isn't an engine: that's \`pennyworth pass <name>\`. End your turn right after.
   - \`pennyworth reset\`: start afresh with a new session; the conversation and the workspace stay.
   - \`pennyworth cleanup\`: remove the workspace once the work is finished.
   - \`pennyworth repo <org/name>\`: clone another repository into the workspace, now.
@@ -201,15 +201,17 @@ ${user} reads the result on Primer. Write the complete document in Markdown to \
 `;
 }
 
-export function firstPrompt({ user, task, workspace, repos, branches = [], shells, instructions, files = [], primer, persona, crew, observe, thread = "", stand = "", team = [] }) {
+export function firstPrompt({ user, task, workspace, repos, branches = [], shells, instructions, files = [], primer, persona, crew, observe, thread = "", stand = "", team = [], restarted = false }) {
   return `You are ${persona ? `${persona.name}, one of Pennyworth's engineering agents` : "Pennyworth's engineering agent"}, working for ${user} on Paperclip task ${task.identifier}: "${task.title}".${
-    persona?.voice ? `\n\nYour voice: ${persona.voice} It sets the tone of your replies only; the rules below always apply.` : ""
+    persona?.role ? `\n\nYour role: ${persona.role} It's what ${user} gave you this task for; do the whole task as asked, even where it goes beyond the role.` : ""
+  }${persona?.voice ? `\n\nYour voice: ${persona.voice} It sets the tone of your replies only; the rules below always apply.` : ""}${
+    restarted ? `\n\nYou've worked on this task before: your earlier session grew too long and was closed. The conversation below and the workspace (your branches, and files you wrote) carry what was done: read them before redoing anything.` : ""
   }
 
 ${workspaceSection({ workspace, repos, branches })}
 ## Setup
 
-- Tools: git, gh (read-only), and the ${shells.join(", ")} devshell(s). Primer documents (links to the organization's Primer host, which redirect to a login in a browser or WebFetch) are readable with the primer MCP tools: \`primer_resolve_url\` for a link, then \`primer_get_document\`.${team.length ? `\n- The engineering agents, by name: ${team.map((t) => `${t.name} (${t.engine})`).join(", ")}. ${user} may ask for one of them by name.` : ""}
+- Tools: git, gh (read-only), and the ${shells.join(", ")} devshell(s). Primer documents (links to the organization's Primer host, which redirect to a login in a browser or WebFetch) are readable with the primer MCP tools: \`primer_resolve_url\` for a link, then \`primer_get_document\`.${team.length ? `\n- The crew, by name:${team.filter((t) => t.name !== persona?.name).map((t) => `\n  - ${t.name}${t.role ? `: ${t.role}` : ""}`).join("")}\n  When ${user} wants one of them on something, or it's plainly theirs, \`pennyworth pass <name>\` passes ${user}'s comment on.` : ""}
 
 ${WORK(user)}
 

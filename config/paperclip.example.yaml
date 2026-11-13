@@ -83,6 +83,20 @@ codex_args:
   - -c
   - web_search="disabled"
 
+# The engines a runner role can run on (D-20, D-60), offered in the board's picker when you assign
+# work. Codex's models come from Paperclip; any other OpenRouter id still works typed in full.
+engines:
+  claude:
+    models: [claude-opus-5-5, claude-sonnet-5, claude-fable-5-1, claude-haiku-4-5]
+  openrouter:
+    models:
+      - openrouter/z-ai/glm-5.3-flash
+      - openrouter/z-ai/glm-5.3
+      - openrouter/deepseek/deepseek-v4.1-flash
+      - openrouter/deepseek/deepseek-v4-pro
+      - openrouter/moonshotai/kimi-k3
+      - openrouter/qwen/qwen3-coder-next
+
 agents:
   meeting-librarian:
     name: Meeting Librarian
@@ -154,6 +168,8 @@ agents:
     # The crew member's board identity (D-45): name, a one-line voice for tone only, and the
     # avatar bundled with the board (services/board/web/public/crew/<avatar>.svg).
     persona: { name: Alfred, voice: "Measured and dry; leads with the answer, then the sources.", avatar: alfred }
+    # The role in one line (D-60): shown when you assign work, and the agent's own reminder of its job.
+    role: "Research, catch-ups, GitHub tickets and comments, scheduling, and getting work to the right crew member."
     title: Research, drafts and acting on your task replies
     instructions: config/agents/assistant.md
     adapter: codex_local
@@ -181,44 +197,83 @@ agents:
       # task_schedule, task_recurring: board moves on a date and recurring tasks (D-25). task_merge: merging tasks (D-56).
       paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status, task_create_engineer_task, task_schedule, task_recurring, task_pass_on, task_merge]
 
-  # Executors for coding jobs (D-20). Assignment targets only: Paperclip never wakes them; the
-  # host runner does the work. The assignee picks the engine; the task's model override (or the
-  # agent's primary model) picks the model. Empty model = the runner's default (config/runner.yaml).
-  engineer:
-    name: Engineer · Codex
-    persona: { name: Grace, voice: "Fast and terse; ships the change and lists what she checked.", avatar: grace }
-    title: Coding jobs with Codex (pennyworth-runner)
-    instructions: config/agents/engineer.md
+  # The writer (D-60): drafts in the user's voice, Slack drafts, Primer documents and agendas. A woken
+  # Codex agent like the Assistant, with the Assistant's reading tools and only its writing ones.
+  writer:
+    name: Writer
+    persona: { name: Joan, voice: "Plain and exact; writes for the reader in front of her, in your voice.", avatar: joan }
+    role: "Drafts, Slack drafts, Primer docs and agendas, in your voice and for the right audience."
+    title: Drafts, Slack drafts, Primer documents and agendas
+    instructions: config/agents/writer.md
     adapter: codex_local
-    dispatch: runner
-    mcp_servers: []
+    model: ""
+    reasoning_effort: medium
+    timeout_sec: 3600
+    web_search: cached
+    mcp_servers: [slack, telegram, google_workspace, primer, glean, github, paperclip_tasks, ops_mcp]
+    enabled_tools:
+      telegram: [list_allowed_chats, read_chat_history, search_chat_history, get_new_messages]
+      ops_mcp: [obsidian_search, obsidian_read, obsidian_read_document_map, voice_note_read, voice_note_add, knowledge_list, knowledge_index, knowledge_search, knowledge_read]
+      glean: [search, read_document, employee_search, meeting_lookup, code_search, chat]
+      # Reads, plus a Slack draft for the user to send, only when asked (D-46).
+      slack: [slack_search_public, slack_search_public_and_private, slack_search_channels, slack_search_users, slack_read_channel, slack_read_thread, slack_read_user_profile, slack_list_user_channels, slack_send_message_draft]
+      # Reads only: comments, issues and reviews stay with the Assistant.
+      github: [github_whoami, github_issue_read, github_search_issues]
+      google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
+      paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_comment, task_handoff, task_set_status, task_pass_on]
 
+  # The crew's runner roles (D-60): a role is the character (what it takes on, its memory), the engine
+  # is a setting. Paperclip never wakes them; pennyworth-runner does the work. Each role runs on its
+  # `engine` and `model` unless the task's executor override (the board's picker) says otherwise.
+  # `adapter` is only Paperclip's label for the agent: it can't change once created, and no longer
+  # picks the engine. Setup keys are the identity; `previous_keys` keep existing agents and their tasks.
   engineer-claude:
-    name: Engineer · Claude
+    name: Engineer
     persona: { name: Ada, voice: "Careful and thorough; explains trade-offs before touching anything risky.", avatar: ada }
-    title: Coding jobs with Claude Code (pennyworth-runner)
+    role: "Builds features, designs architecture, researches across repos. The default for code work."
+    title: Features, architecture and research across repositories (pennyworth-runner)
     instructions: config/agents/engineer.md
     adapter: claude_local
+    engine: claude
     model: claude-opus-5-5
     dispatch: runner
     mcp_servers: []
 
-  engineer-openrouter:                # was engineer-glm; setup renames the existing agent
-    name: Engineer · OpenRouter
-    persona: { name: Linus, voice: "Scrappy; tries the cheap route first and says plainly when it isn't good enough.", avatar: linus }
-    title: Coding jobs with OpenRouter models via opencode (pennyworth-runner)
+  sre:
+    previous_keys: [engineer]
+    name: SRE
+    persona: { name: Grace, voice: "Steady under pressure; timeline first, then the cause, then the fix.", avatar: grace }
+    role: "Incidents, prod changes, adding and removing networks, merge queues. Reads Grafana, ClickHouse, GCP and AWS."
+    title: Incidents, production changes and rollouts (pennyworth-runner)
+    instructions: config/agents/engineer.md
+    adapter: codex_local
+    engine: claude
+    model: claude-opus-5-5
+    dispatch: runner
+    mcp_servers: []
+
+  reviewer:
+    previous_keys: [engineer-openrouter, engineer-glm]
+    name: Reviewer
+    persona: { name: Linus, voice: "Blunt and brief; findings ranked by severity, nothing padded.", avatar: linus }
+    role: "Reviews colleagues' PRs and specs. Findings here first, then on GitHub when you say."
+    title: Pull request and spec reviews (pennyworth-runner)
     instructions: config/agents/engineer.md
     adapter: opencode_local
-    model: openrouter/z-ai/glm-5.3-flash
-    # Offered in the board's model picker and known to the runner ("use DeepSeek"). Any other
-    # OpenRouter model id still works when typed in full.
-    models:
-      - openrouter/z-ai/glm-5.3-flash
-      - openrouter/z-ai/glm-5.3
-      - openrouter/deepseek/deepseek-v4.1-flash
-      - openrouter/deepseek/deepseek-v4-pro
-      - openrouter/moonshotai/kimi-k3
-      - openrouter/qwen/qwen3-coder-next
+    engine: claude
+    model: claude-opus-5-5
+    dispatch: runner
+    mcp_servers: []
+
+  security:
+    name: Security
+    persona: { name: Whit, voice: "Calm and adversarial; proves the impact before calling something a finding.", avatar: whit }
+    role: "CVE sweeps across your orgs, pentest triage, CI and infrastructure exposure."
+    title: Vulnerability sweeps, pentest triage and exposure checks (pennyworth-runner)
+    instructions: config/agents/engineer.md
+    adapter: claude_local
+    engine: claude
+    model: claude-opus-5-5
     dispatch: runner
     mcp_servers: []
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { checkRequest } from "../src/app.js";
-import { BadRequest, UpdateSchema, assignees, personaOf, buildBoard, commentView, keepMarkers, paperclipUpdate, replyTarget } from "../src/board.js";
+import { BadRequest, UpdateSchema, assignees, personaOf, buildBoard, commentView, executorOf, keepMarkers, paperclipUpdate, replyTarget } from "../src/board.js";
 import type { Agent, Issue, Label } from "../src/paperclip.js";
 import { nextWorkday } from "../src/recurrence.js";
 import { Store, localDate } from "../src/store.js";
@@ -34,9 +34,39 @@ const issue = (over: Partial<Issue> = {}): Issue => ({
 
 describe("assignees", () => {
   it("offers you, the Assistant and the Engineers (Codex, Claude, OpenRouter), nobody else", () => {
-    expect(list.map((a) => a.name)).toEqual(["You", "Assistant", "Engineer · Codex", "Engineer · Claude", "Engineer · OpenRouter"]);
-    expect(list.find((a) => a.key === CLAUDE)).toMatchObject({ engine: "claude", defaultModel: "claude-opus-5-5", efforts: ["low", "medium", "high", "xhigh", "max"] });
-    expect(list.find((a) => a.key === OPENROUTER)).toMatchObject({ efforts: [], models: ["openrouter/deepseek/deepseek-v4.1-flash"] });
+    expect(list.map((a) => a.name)).toEqual(["You", "Assistant", "Engineer · Claude", "Engineer · Codex", "Engineer · OpenRouter"]);
+    expect(list.find((a) => a.key === CLAUDE)).toMatchObject({ engine: "claude", engines: ["claude", "codex", "openrouter"], defaultModel: "claude-opus-5-5", efforts: ["low", "medium", "high", "xhigh", "max"] });
+    expect(list.find((a) => a.key === OPENROUTER)).toMatchObject({ efforts: [], catalog: { openrouter: ["openrouter/z-ai/glm-5.3-flash", "openrouter/deepseek/deepseek-v4.1-flash"] } });
+  });
+
+  it("offers the crew by role, each on its own engine, with the Writer on Codex (D-60)", () => {
+    const role = (id: string, key: string, name: string, adapterType: string, role: Record<string, string>) =>
+      ({ id, name, status: "idle", adapterType, adapterConfig: {}, metadata: { setupKey: `pennyworth:${key}`, runnerEngine: true, role, engines: { claude: ["claude-opus-5-5", "claude-sonnet-5"], openrouter: ["openrouter/z-ai/glm-5.3"] }, persona: { name, voice: "v", avatar: name.toLowerCase() } } }) as unknown as Agent;
+    const crew = assignees([
+      agents[0]!,
+      role("00000000-0000-0000-0000-0000000000d1", "sre", "Grace", "codex_local", { job: "Incidents.", engine: "claude", model: "claude-opus-5-5" }),
+      role("00000000-0000-0000-0000-0000000000d2", "reviewer", "Linus", "opencode_local", { job: "Reviews PRs.", engine: "claude", model: "claude-opus-5-5" }),
+      role("00000000-0000-0000-0000-0000000000d3", "engineer-claude", "Ada", "claude_local", { job: "Builds.", engine: "claude", model: "claude-opus-5-5" }),
+      { id: "00000000-0000-0000-0000-0000000000d4", name: "Writer", status: "idle", adapterType: "codex_local", adapterConfig: { modelReasoningEffort: "medium" }, metadata: { setupKey: "pennyworth:writer", role: { job: "Drafts." }, persona: { name: "Joan", voice: "v", avatar: "joan" } } } as unknown as Agent,
+    ]);
+    expect(crew.map((a) => a.persona?.name ?? a.name)).toEqual(["You", "Assistant", "Joan", "Ada", "Linus", "Grace"]);
+    expect(crew.find((a) => a.persona?.name === "Linus")).toMatchObject({ kind: "engineer", role: "Reviews PRs.", engine: "claude", defaultModel: "claude-opus-5-5", adapterType: "opencode_local" });
+    expect(crew.find((a) => a.persona?.name === "Joan")).toMatchObject({ kind: "agent", role: "Drafts.", engine: "codex", engines: ["codex"], defaultEffort: "medium" });
+    const linus = "00000000-0000-0000-0000-0000000000d2";
+    const c = { me: "user-1", assignees: crew, labels: [] };
+    // Another engine for the role goes in the override; its model belongs to that engine.
+    expect(paperclipUpdate(issue(), { assignee: linus, engine: "codex", model: "gpt-6-astra" }, c).assigneeAdapterOverrides).toEqual({ adapterConfig: { engine: "codex", model: "gpt-6-astra" } });
+    expect(paperclipUpdate(issue(), { assignee: linus, engine: "claude", model: "claude-opus-5-5" }, c).assigneeAdapterOverrides).toBeNull();
+    const onCodex = issue({ assigneeAgentId: linus, assigneeUserId: null, assigneeAdapterOverrides: { adapterConfig: { engine: "codex", model: "gpt-6-astra", modelReasoningEffort: "high" } } });
+    expect(executorOf(onCodex, crew)).toEqual({ engine: "codex", model: "gpt-6-astra", effort: "high" });
+    // Back to the role's engine: its own model, no stale Codex model or effort.
+    expect(paperclipUpdate(onCodex, { engine: "claude" }, c).assigneeAdapterOverrides).toBeNull();
+    expect(paperclipUpdate(issue(), { assignee: linus, engine: "openrouter", model: "z-ai/glm-5.3" }, c).assigneeAdapterOverrides).toEqual({ adapterConfig: { engine: "openrouter", model: "openrouter/z-ai/glm-5.3" } });
+    // The Writer runs on Codex only; just a model and effort reach its run config.
+    const joan = "00000000-0000-0000-0000-0000000000d4";
+    expect(paperclipUpdate(issue(), { assignee: joan, model: "gpt-6-astra", effort: "high" }, c).assigneeAdapterOverrides).toEqual({ adapterConfig: { model: "gpt-6-astra", modelReasoningEffort: "high" } });
+    expect(paperclipUpdate(issue(), { assignee: joan, effort: "medium" }, c).assigneeAdapterOverrides).toBeNull();
+    expect(() => paperclipUpdate(issue(), { assignee: joan, engine: "claude" }, c)).toThrow(/runs on codex/);
   });
 });
 
@@ -190,7 +220,7 @@ describe("edits", () => {
     // The Engineer's primary model is no override.
     expect(paperclipUpdate(issue({ assigneeAgentId: CLAUDE, assigneeUserId: null }), { model: "claude-opus-5-5", effort: "" }, ctx).assigneeAdapterOverrides).toBeNull();
     expect(paperclipUpdate(issue(), { assignee: OPENROUTER, model: "z-ai/glm-5.3" }, ctx).assigneeAdapterOverrides).toEqual({ adapterConfig: { model: "openrouter/z-ai/glm-5.3" } });
-    expect(() => paperclipUpdate(issue(), { model: "gpt-5.6-sol" }, ctx)).toThrow(/Engineer/);
+    expect(() => paperclipUpdate(issue(), { model: "gpt-5.6-sol" }, ctx)).toThrow(/crew/);
     expect(() => paperclipUpdate(onCodex, { effort: "max" }, ctx)).toThrow(/effort/);
     expect(() => paperclipUpdate(issue(), { labelIds: ["00000000-0000-0000-0000-0000000000ff"] }, ctx)).toThrow(/label/);
   });

@@ -10,13 +10,27 @@ export interface Label {
 
 export interface Assignee {
   key: string;
-  kind: "me" | "assistant" | "engineer";
+  kind: "me" | "assistant" | "agent" | "engineer";
   name: string;
-  engine?: "codex" | "claude" | "openrouter";
+  /** What the crew member takes on, in one line (D-60). */
+  role?: string;
+  /** The role's own engine, and the engines the picker offers (D-60). */
+  engine?: Engine;
+  engines?: Engine[];
   defaultModel?: string;
+  defaultEffort?: string;
   efforts?: string[];
   /** The crew member's name, voice and portrait (D-45). */
   persona?: Persona;
+}
+
+export type Engine = "codex" | "claude" | "openrouter";
+
+/** The engine, model and effort a crew member runs a task with, when not its role's own (D-60). */
+export interface Executor {
+  engine?: Engine;
+  model?: string;
+  effort?: string;
 }
 
 export interface Persona {
@@ -33,7 +47,7 @@ export interface Card {
   priority: string;
   labels: { name: string; color: string }[];
   assignee: string | null;
-  executor?: { model?: string; effort?: string };
+  executor?: Executor;
   unread: boolean;
   createdAt: string;
   activityAt: string;
@@ -235,7 +249,9 @@ export interface FileView {
 }
 
 export interface Models {
+  engine: Engine;
   default: string | null;
+  defaultEffort: string | null;
   models: string[];
   efforts: string[];
 }
@@ -246,6 +262,7 @@ export interface Update {
   status?: "todo" | "in_progress" | "done" | "cancelled";
   priority?: "critical" | "high" | "medium" | "low";
   assignee?: string;
+  engine?: Engine;
   model?: string;
   effort?: string;
   labelIds?: string[];

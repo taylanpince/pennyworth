@@ -182,10 +182,12 @@ async function ensureLabels(companyId) {
   }
 }
 
-// Executors for pennyworth-runner (D-20): the assignee picks the engine, Paperclip's per-task
-// model override picks the model. Paperclip never runs them.
+// The crew's runner roles (D-20, D-60): a role is the character, the engine a setting. Paperclip never
+// runs them, so their adapter is only a label it keeps from creation; the role's engine and model live
+// in its metadata, and a task's executor override (the board's picker) can name another engine.
 const RUNNER_ADAPTERS = ["codex_local", "claude_local", "opencode_local"];
-const ADAPTER_ENGINE = { codex_local: "codex", claude_local: "claude", opencode_local: "openrouter" };
+const ENGINES = ["codex", "claude", "openrouter"];
+const ENGINE_ADAPTER = { codex: "codex_local", claude: "claude_local", openrouter: "opencode_local" };
 
 /** The crew member's board identity (D-45), stored in the agent's metadata for the board and the runner. */
 function personaOf(key, a) {
@@ -197,22 +199,43 @@ function personaOf(key, a) {
   return { name: p.name, voice: p.voice.trim(), avatar: p.avatar };
 }
 
+/** The role in one line (D-60): what the crew member takes on, shown when the user assigns work. */
+function roleOf(key, a) {
+  if (a.role === undefined) return undefined;
+  if (typeof a.role !== "string" || !a.role.trim() || a.role.length > 160 || /[\r\n]/.test(a.role)) fail(`agent ${key}: role must be one line (at most 160 characters)`);
+  if (!a.persona) fail(`agent ${key}: a role needs a persona`);
+  return a.role.trim();
+}
+
+/** The engines' model lists (top-level `engines`), offered in the board's picker and known to the runner. */
+function engineCatalog() {
+  const out = {};
+  for (const [engine, e] of Object.entries(cfg.engines ?? {})) {
+    if (!ENGINES.includes(engine)) fail(`engines: unknown engine ${engine} (${ENGINES.join(", ")})`);
+    const models = e?.models ?? [];
+    if (!Array.isArray(models) || models.some((m) => typeof m !== "string" || !m.trim() || (engine === "openrouter" && !/^openrouter\/\S+$/.test(m)))) fail(`engines.${engine}.models must be a list of model ids${engine === "openrouter" ? " (openrouter/<model>)" : ""}`);
+    if (models.length) out[engine] = models;
+  }
+  return out;
+}
+
 /**
- * What a woken agent with a persona learns about itself and the Engineers: its name and voice (tone only),
- * and which engine each Engineer's name stands for, so "ask Ada" maps onto task_create_engineer_task.
+ * What a woken agent with a persona learns about itself and the crew: its name, voice (tone only) and
+ * role, and who else is on the board and what each takes on, so "ask Linus" reaches the right one.
  */
 function personaSection(key, a) {
   const me = personaOf(key, a);
   if (!me || a.dispatch === "runner") return "";
   const crew = Object.entries(cfg.agents ?? {})
-    .filter(([, x]) => x.dispatch === "runner" && x.persona)
-    .map(([k, x]) => `${personaOf(k, x).name} (engine \`${ADAPTER_ENGINE[x.adapter]}\`)`);
+    .filter(([k, x]) => k !== key && x.persona)
+    .map(([k, x]) => `- ${personaOf(k, x).name}${roleOf(k, x) ? `: ${roleOf(k, x)}` : ""}${x.dispatch === "runner" ? " (an Engineer: runs code jobs)" : ""}`);
+  const role = roleOf(key, a);
   return `
 
-## Your name and voice
+## Your name, voice and role
 
-On the user's board you are ${me.name}. Voice: ${me.voice} The voice sets your tone only; it never changes the rules above.${
-    crew.length ? `\n\nThe Engineers on the board, by name: ${crew.join(", ")}. When the user names one of them for code work, that's the engine to use.` : ""
+On the user's board you are ${me.name}. Voice: ${me.voice} The voice sets your tone only; it never changes the rules above.${role ? `\n\nYour role: ${role}` : ""}${
+    crew.length ? `\n\nThe rest of the crew, by name:\n${crew.join("\n")}\n\nWhen the user names one of them, or the work is plainly theirs, that's who it goes to.` : ""
   }
 `;
 }
@@ -220,23 +243,28 @@ On the user's board you are ${me.name}. Voice: ${me.voice} The voice sets your t
 function runnerAgentBody(key, a, existing) {
   if (!RUNNER_ADAPTERS.includes(a.adapter)) fail(`agent ${key}: dispatch: runner needs one of ${RUNNER_ADAPTERS.join(", ")}`);
   if (a.mcp_servers?.length) fail(`agent ${key}: runner agents get no MCP servers`);
-  // A primary model chosen in the Paperclip UI survives re-running setup unless the YAML sets one.
-  const model = a.model || existing?.adapterConfig?.model || "";
-  if (a.adapter === "opencode_local" && !/^openrouter\/\S+$/.test(model)) fail(`agent ${key}: opencode_local needs model: openrouter/<model>`);
-  const adapterConfig = { ...(model ? { model } : {}) };
-  // Models offered in the board picker and known to the runner (opencode ids, openrouter/<model>).
-  const models = a.models ?? [];
-  if (!Array.isArray(models) || models.some((m) => typeof m !== "string" || (a.adapter === "opencode_local" && !/^openrouter\/\S+$/.test(m)))) fail(`agent ${key}: models must be a list of model ids${a.adapter === "opencode_local" ? " (openrouter/<model>)" : ""}`);
-  if (a.adapter === "codex_local") adapterConfig.dangerouslyBypassApprovalsAndSandbox = false;
-  if (a.adapter === "claude_local") adapterConfig.dangerouslySkipPermissions = false;
+  const engine = a.engine ?? { codex_local: "codex", claude_local: "claude", opencode_local: "openrouter" }[a.adapter];
+  if (!ENGINES.includes(engine)) fail(`agent ${key}: engine must be one of ${ENGINES.join(", ")}`);
+  const model = String(a.model ?? "").trim();
+  if (engine === "openrouter" && model && !/^openrouter\/\S+$/.test(model)) fail(`agent ${key}: an openrouter model is openrouter/<model>`);
+  if (a.effort !== undefined && !["minimal", "low", "medium", "high", "xhigh", "max"].includes(a.effort)) fail(`agent ${key}: unknown effort ${a.effort}`);
+  if (a.models !== undefined) fail(`agent ${key}: models moved to the top-level engines list (D-60)`);
+  // Paperclip keeps the adapter the agent was created with; it's a label only for runner roles.
+  const adapterType = existing?.adapterType ?? a.adapter;
+  const adapterConfig = {};
+  if (adapterType === "codex_local") adapterConfig.dangerouslyBypassApprovalsAndSandbox = false;
+  if (adapterType === "claude_local") adapterConfig.dangerouslySkipPermissions = false;
+  // opencode agents need a model in Paperclip's eyes: the role's, else the first OpenRouter one listed.
+  if (adapterType === "opencode_local") adapterConfig.model = engine === "openrouter" && model ? model : (engineCatalog().openrouter?.[0] ?? existing?.adapterConfig?.model ?? "openrouter/z-ai/glm-5.3-flash");
+  const role = { job: roleOf(key, a) ?? "", engine, ...(model ? { model } : {}), ...(a.effort ? { effort: a.effort } : {}) };
   return {
     name: a.name,
     role: "general",
     title: a.title ?? null,
-    adapterType: a.adapter,
+    adapterType,
     adapterConfig,
     runtimeConfig: { heartbeat: { enabled: false, intervalSec: 0, wakeOnDemand: false, maxConcurrentRuns: 1 } },
-    metadata: { setupKey: `pennyworth:${key}`, runnerEngine: true, ...(models.length ? { models } : {}), ...persona(key, a) },
+    metadata: { setupKey: `pennyworth:${key}`, runnerEngine: true, role, engines: engineCatalog(), ...persona(key, a) },
   };
 }
 
@@ -279,7 +307,7 @@ function agentBody(key, a, existing) {
     // dispatch: runner → never woken by Paperclip (assignments and comments are handled by
     // pennyworth-runner on the host instead).
     runtimeConfig: { heartbeat: { enabled: false, intervalSec: 0, wakeOnDemand: a.dispatch !== "runner", maxConcurrentRuns: 1 } },
-    metadata: { setupKey: `pennyworth:${key}`, ...persona(key, a) },
+    metadata: { setupKey: `pennyworth:${key}`, ...persona(key, a), ...(roleOf(key, a) ? { role: { job: roleOf(key, a) } } : {}) },
   };
 }
 
@@ -288,15 +316,37 @@ const persona = (key, a) => {
   return p ? { persona: p } : {};
 };
 
-// Agents whose config key changed: the existing agent (and the tasks assigned to it) is kept.
-const PREVIOUS_KEYS = { "engineer-openrouter": "engineer-glm" };
+// Agents whose config key changed (`previous_keys`): the existing agent, and the tasks assigned to it, are kept.
+const previousKeys = (a) => (Array.isArray(a.previous_keys) ? a.previous_keys.filter((k) => typeof k === "string" && k) : []);
+
+/**
+ * An Engineer becoming a role (D-60) may get another engine than its adapter gave it (Grace was Codex,
+ * Linus OpenRouter): its open tasks keep the engine and model they ran on, so no session is lost
+ * mid-task. Once, when the agent first gets its role.
+ */
+async function keepEngineOfOpenTasks(companyId, agent, body) {
+  const next = body.metadata?.role?.engine;
+  const before = { codex_local: "codex", claude_local: "claude", opencode_local: "openrouter" }[agent.adapterType];
+  if (!next || agent.metadata?.role || !before || next === before) return;
+  const q = new URLSearchParams({ assigneeAgentId: agent.id, status: "backlog,todo,in_progress,in_review,blocked", limit: "500" });
+  const { json: open } = await api("GET", `/api/companies/${companyId}/issues?${q}`);
+  let kept = 0;
+  for (const i of (open ?? []).filter((x) => x.assigneeAgentId === agent.id)) {
+    const config = i.assigneeAdapterOverrides?.adapterConfig ?? {};
+    if (config.engine) continue;
+    const model = config.model ?? (typeof agent.adapterConfig?.model === "string" ? agent.adapterConfig.model : undefined);
+    await api("PATCH", `/api/issues/${i.id}`, { assigneeAgentId: agent.id, assigneeAdapterOverrides: { adapterConfig: { ...config, engine: before, ...(model ? { model } : {}) } } });
+    kept++;
+  }
+  if (kept) step(`Kept ${kept} open task(s) of ${agent.name} on ${before}`);
+}
 
 async function ensureAgents(companyId) {
   const { json: agents } = await api("GET", `/api/companies/${companyId}/agents`);
   const result = {};
   for (const [key, a] of Object.entries(cfg.agents ?? {})) {
     const instructions = readFileSync(resolve(repo, a.instructions), "utf8") + personaSection(key, a);
-    const keys = [key, PREVIOUS_KEYS[key]].filter(Boolean).map((k) => `pennyworth:${k}`);
+    const keys = [key, ...previousKeys(a)].map((k) => `pennyworth:${k}`);
     let agent = agents.find((x) => keys.includes(x.metadata?.setupKey) && x.status !== "terminated") ?? agents.find((x) => x.name === a.name && x.status !== "terminated");
     const body = agentBody(key, a, agent);
     if (agent && agent.adapterType !== body.adapterType) fail(`agent ${a.name}: adapter is ${agent.adapterType} in Paperclip, ${body.adapterType} in the config`);
@@ -304,6 +354,7 @@ async function ensureAgents(companyId) {
       agent = (await api("POST", `/api/companies/${companyId}/agents`, { ...body, instructionsBundle: { entryFile: "AGENTS.md", files: { "AGENTS.md": instructions } } })).json;
       step(`Created agent ${a.name}`);
     } else {
+      await keepEngineOfOpenTasks(companyId, agent, body);
       await api("PATCH", `/api/agents/${agent.id}`, { name: body.name, title: body.title, adapterConfig: body.adapterConfig, runtimeConfig: body.runtimeConfig, metadata: body.metadata });
       await api("PUT", `/api/agents/${agent.id}/instructions-bundle/file`, { path: "AGENTS.md", content: instructions });
       step(`Updated agent ${a.name}`);

@@ -3,15 +3,15 @@ import { CSS } from "@dnd-kit/utilities";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { api } from "./api";
-import { BUCKETS, BUCKET_NAMES, type Assignee, type Board, type Bucket, type Card, type CrewMember, type CrewState, type PlanItem, type Working } from "./types";
-import { SOURCE_NAMES, STATUS_BADGE, addDays, agentShort, ago, elapsed, matches, shortDate, shortName, snoozeOptions, todayIn } from "./util";
+import { BUCKETS, BUCKET_NAMES, type Assignee, type Board, type Bucket, type Card, type CrewMember, type CrewState, type Executor, type Models, type PlanItem, type Working } from "./types";
+import { ENGINE_NAMES, SOURCE_NAMES, STATUS_BADGE, addDays, agentShort, ago, elapsed, matches, shortDate, shortName, snoozeOptions, todayIn } from "./util";
 
 /** A crew member's portrait (D-45), or a coloured letter for you and agents without one. */
 export function Avatar({ assignee, size }: { assignee: Assignee | undefined; size?: number }) {
   if (!assignee) return null;
   const style = size ? { width: size, height: size } : undefined;
   if (assignee.persona) return <img className="avatar portrait" src={`/crew/${assignee.persona.avatar}.svg`} alt="" title={assignee.persona.name} style={style} draggable={false} />;
-  const tone = assignee.kind === "me" ? "me" : assignee.kind === "assistant" ? "assistant" : assignee.engine ?? "agent";
+  const tone = assignee.kind === "me" ? "me" : assignee.kind === "engineer" ? (assignee.engine ?? "agent") : "assistant";
   const letter = assignee.kind === "me" ? "Y" : shortName(assignee).slice(0, 1).toUpperCase();
   return (
     <span className={`avatar avatar-${tone}`} title={assignee.name}>
@@ -699,6 +699,82 @@ export function ClickHouseBanner({ clickhouse, canConnect }: { clickhouse: Board
           <span className="alert-hint">Connect from the board on your computer.</span>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * How a crew member runs this (D-60): the engine, model and effort, shown as you assign, with the role's
+ * own preselected. Picking another engine drops the model and effort: they belong to an engine.
+ */
+export function ExecutorPicker({ assignee, value, onChange, disabled }: { assignee: Assignee; value: Executor; onChange: (x: Executor) => void; disabled?: boolean }) {
+  const engines = assignee.engines ?? (assignee.engine ? [assignee.engine] : []);
+  const engine = value.engine ?? assignee.engine;
+  const [models, setModels] = useState<Models | null>(null);
+  const [model, setModel] = useState(value.model ?? "");
+  useEffect(() => setModel(value.model ?? ""), [value.model]);
+  useEffect(() => {
+    let live = true;
+    setModels(null);
+    api.models(assignee.key, engine).then((m) => live && setModels(m), () => {});
+    return () => {
+      live = false;
+    };
+  }, [assignee.key, engine]);
+  if (!engine) return null;
+  const efforts = models?.efforts ?? (engine === assignee.engine ? (assignee.efforts ?? []) : []);
+  const fallback = models ? models.default : engine === assignee.engine ? assignee.defaultModel : undefined;
+  const ownEffort = models ? models.defaultEffort : engine === assignee.engine ? assignee.defaultEffort : undefined;
+  const listId = `models-${assignee.key}-${engine}`;
+  const commit = () => {
+    if (model.trim() !== (value.model ?? "")) onChange({ ...value, model: model.trim() || undefined });
+  };
+  return (
+    <div className="executor">
+      {engines.length > 1 && (
+        <div className="exec-row">
+          <span className="exec-name">Engine</span>
+          <div className="seg">
+            {engines.map((e) => (
+              <button type="button" key={e} disabled={disabled} className={engine === e ? "on" : ""} title={e === assignee.engine ? `${shortName(assignee)}'s own engine` : undefined} onClick={() => engine !== e && onChange(e === assignee.engine ? {} : { engine: e })}>
+                {ENGINE_NAMES[e]}
+                {e === assignee.engine && <span className="exec-own"> ★</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="exec-row">
+        <span className="exec-name">Model</span>
+        <input
+          list={listId}
+          disabled={disabled}
+          value={model}
+          placeholder={`Default${fallback ? ` (${fallback.replace(/^openrouter\//, "")})` : ""}`}
+          onChange={(e) => setModel(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.preventDefault(), (e.target as HTMLInputElement).blur();
+          }}
+        />
+        <datalist id={listId}>
+          {models?.models.map((m) => (
+            <option key={m} value={m} />
+          ))}
+        </datalist>
+      </div>
+      {efforts.length > 0 && (
+        <div className="exec-row">
+          <span className="exec-name">Effort</span>
+          <div className="seg">
+            {["", ...efforts].map((e) => (
+              <button type="button" key={e || "default"} disabled={disabled} className={(value.effort ?? "") === e ? "on" : ""} onClick={() => onChange({ ...value, effort: e || undefined })}>
+                {e || `Default${ownEffort ? ` (${ownEffort})` : ""}`}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

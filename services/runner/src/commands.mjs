@@ -101,23 +101,41 @@ export function resolveEngine(directives, cfg, previous) {
   throw new Error(`unknown engine "${directives.engine}" (use codex, claude, openrouter, or openrouter:<model>)`);
 }
 
-// The Engineer agents (D-20): Paperclip adapter type ↔ runner engine.
+// The crew's runner roles (D-20, D-60): the role is the assignee, the engine a setting. A role runs on
+// its own engine and model (agent metadata `role`) unless the task's executor override names another
+// (`adapterConfig.engine`, then `model` and effort). Agents from before roles have no `role`: their
+// Paperclip adapter is the engine and their primary model the model.
 const ADAPTER_ENGINE = { codex_local: "codex", claude_local: "claude", opencode_local: "openrouter" };
-const ENGINE_ADAPTER = Object.fromEntries(Object.entries(ADAPTER_ENGINE).map(([a, e]) => [e, a]));
+const KINDS = ["codex", "claude", "openrouter"];
 const EFFORT_KEY = { codex: "modelReasoningEffort", claude: "effort" }; // where Paperclip's picker stores it
 const EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
+/** One of the runner's crew roles (an Engineer): set up as one by setup, or an Engineer from before roles. */
+export function isRole(agent) {
+  return agent?.metadata?.runnerEngine === true || /^pennyworth:engineer(-|$)/.test(agent?.metadata?.setupKey ?? "");
+}
+
+/** A role's own engine, model and effort (D-60), before any override on a task. */
+export function roleEngine(agent) {
+  const role = agent?.metadata?.role;
+  if (role && KINDS.includes(role.engine)) {
+    return { kind: role.engine, model: typeof role.model === "string" ? role.model : "", ...(EFFORTS.has(role.effort) ? { effort: role.effort } : {}) };
+  }
+  const kind = ADAPTER_ENGINE[agent?.adapterType];
+  return kind ? { kind, model: typeof agent.adapterConfig?.model === "string" ? agent.adapterConfig.model : "" } : undefined;
+}
+
 /**
- * The executor picked on the task in Paperclip: the Engineer agent it's assigned to sets the engine;
- * the task's model override, else the agent's primary model, else config/runner.yaml sets the model.
- * Undefined when the task isn't assigned to an Engineer.
+ * The executor picked on the task in Paperclip: its role's engine unless the override names another;
+ * the override's model, else the role's (on its own engine), else config/runner.yaml's. Undefined when
+ * the task isn't assigned to a role.
  */
 export function pickedEngine(issue, engineers, cfg) {
   const agent = engineers.find((a) => a.id === issue?.assigneeAgentId);
-  const kind = ADAPTER_ENGINE[agent?.adapterType];
-  if (!kind) return undefined;
+  const own = roleEngine(agent);
+  if (!own) return undefined;
   const override = issue.assigneeAdapterOverrides?.adapterConfig ?? {};
-  const primary = agent.adapterConfig ?? {};
+  const kind = KINDS.includes(override.engine) ? override.engine : own.kind;
   // opencode ids are provider/model; only OpenRouter models are runnable here.
   const usable = (m) => {
     const v = typeof m === "string" ? m.trim() : "";
@@ -125,43 +143,52 @@ export function pickedEngine(issue, engineers, cfg) {
     return v.startsWith("openrouter/") ? v.slice("openrouter/".length) : "";
   };
   const fallback = kind === "codex" ? cfg.engines.codex.model : kind === "claude" ? cfg.engines.claude?.model : cfg.engines.openrouter.model;
-  const model = usable(override.model) || usable(primary.model) || fallback || undefined;
+  const model = usable(override.model) || (kind === own.kind ? usable(own.model) : "") || fallback || undefined;
   const key = EFFORT_KEY[kind];
-  const effort = key ? String(override[key] ?? primary[key] ?? "").trim().toLowerCase() : "";
+  const effort = key ? String(override[key] ?? (kind === own.kind ? own.effort ?? "" : "")).trim().toLowerCase() : "";
   return { kind, model, ...(EFFORTS.has(effort) ? { effort } : {}) };
 }
 
 /**
- * The Paperclip fields that show `engine` as the task's picker: the matching Engineer as assignee,
- * and a model override unless the model is that Engineer's primary model. Undefined if no Engineer runs it.
+ * The Paperclip fields that show `engine` as the task's picker: the role (the task's own, else the first
+ * whose engine it is) as assignee, and an override for whatever differs from that role's own engine,
+ * model and effort. Undefined if no role can run it.
  */
-export function pickerFor(engine, engineers) {
-  const agent = engineers.find((a) => a.adapterType === ENGINE_ADAPTER[engine.kind]);
-  if (!agent) return undefined;
+export function pickerFor(engine, engineers, agentId) {
+  const agent = engineers.find((a) => a.id === agentId && isRole(a)) ?? engineers.find((a) => roleEngine(a)?.kind === engine.kind) ?? engineers.find(isRole);
+  const own = roleEngine(agent);
+  if (!own) return undefined;
   const model = engine.model && engine.kind === "openrouter" ? `openrouter/${engine.model}` : engine.model;
-  const config = { ...(model && model !== agent.adapterConfig?.model ? { model } : {}), ...(engine.effort && EFFORT_KEY[engine.kind] ? { [EFFORT_KEY[engine.kind]]: engine.effort } : {}) };
+  const config = {
+    ...(engine.kind !== own.kind ? { engine: engine.kind } : {}),
+    ...(model && (engine.kind !== own.kind || model !== own.model) ? { model } : {}),
+    ...(engine.effort && EFFORT_KEY[engine.kind] && (engine.kind !== own.kind || engine.effort !== own.effort) ? { [EFFORT_KEY[engine.kind]]: engine.effort } : {}),
+  };
   return { assigneeAgentId: agent.id, assigneeAdapterOverrides: Object.keys(config).length ? { adapterConfig: config } : null };
 }
 
-/** OpenRouter models offered for the OpenRouter Engineer (config/paperclip.yaml `models`), primary first. */
+/** OpenRouter models offered in the picker (setup's engine catalog, D-60; before it, the OpenRouter Engineer's list). */
 export function openrouterModels(engineers) {
-  const agent = engineers.find((a) => a.adapterType === "opencode_local");
-  const ids = [agent?.adapterConfig?.model, ...(Array.isArray(agent?.metadata?.models) ? agent.metadata.models : [])];
+  const ids = engineers.flatMap((a) => [
+    ...(Array.isArray(a.metadata?.engines?.openrouter) ? a.metadata.engines.openrouter : []),
+    ...(a.adapterType === "opencode_local" && !a.metadata?.role ? [a.adapterConfig?.model, ...(Array.isArray(a.metadata?.models) ? a.metadata.models : [])] : []),
+  ]);
   return [...new Set(ids.filter((m) => typeof m === "string" && m.startsWith("openrouter/")).map((m) => m.slice("openrouter/".length)))];
 }
 
-/** The Engineer's board identity for an engine (D-45): name and voice, when setup gave it one. */
-export function personaFor(kind, engineers) {
-  const p = engineers.find((a) => ADAPTER_ENGINE[a.adapterType] === kind)?.metadata?.persona;
-  return typeof p?.name === "string" && p.name ? { name: p.name, voice: typeof p.voice === "string" ? p.voice : "" } : undefined;
+/** A crew member's board identity (D-45) and role (D-60): name, voice and the job in one line. */
+export function personaFor(agent) {
+  const p = agent?.metadata?.persona;
+  if (typeof p?.name !== "string" || !p.name) return undefined;
+  const job = agent.metadata?.role?.job;
+  return { name: p.name, voice: typeof p.voice === "string" ? p.voice : "", ...(typeof job === "string" && job ? { role: job } : {}) };
 }
 
-/** The Engineers' names and the engines they stand for ("Ada" → claude), for the intake. */
-export function crewNames(engineers) {
-  return engineers.flatMap((a) => {
-    const engine = ADAPTER_ENGINE[a.adapterType];
-    const name = a.metadata?.persona?.name;
-    return engine && typeof name === "string" && name ? [{ name, engine }] : [];
+/** The crew's names and what each takes on, for the prompt: the runner roles and the woken agents with a persona. */
+export function crewNames(agents) {
+  return agents.flatMap((a) => {
+    const p = personaFor(a);
+    return p ? [{ name: p.name, role: p.role ?? "", engine: isRole(a) ? roleEngine(a)?.kind : undefined }] : [];
   });
 }
 

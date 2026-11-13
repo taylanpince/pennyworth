@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><title>Whit</title>
+<rect width="64" height="64" fill="#2b8a3e"/>
+<path d="M10 64c2-13 11-19 22-19s20 6 22 19z" fill="#1f2a24"/>
+<path d="M18 22c0-7 6-11 14-11s14 4 14 11v18c-2-6-3-10-3-14H21c0 4-1 8-3 14z" fill="#d8d4cc"/>
+<rect x="28" y="37" width="8" height="9" rx="3" fill="#e2c7ad"/>
+<ellipse cx="32" cy="27" rx="9.5" ry="11.5" fill="#efd9c3"/>
+<path d="M22.5 22c2-5 6-7 9.5-7s7.5 2 9.5 7c-3-2-6-3-9.5-3s-6.5 1-9.5 3z" fill="#d8d4cc"/>
+<path d="M23 31c1 9 5 15 9 15s8-6 9-15c-2 3-5 4-9 4s-7-1-9-4z" fill="#e6e2da"/>
+<path d="M28.5 33.5c2 1 5 1 7 0" fill="none" stroke="#b5776a" stroke-width="1.1" stroke-linecap="round"/>
+<circle cx="28.5" cy="27" r="1.2" fill="#17201f"/><circle cx="35.5" cy="27" r="1.2" fill="#17201f"/>
+<path d="M26 24.5h4M34 24.5h4" stroke="#bdb8ae" stroke-width="1.2" stroke-linecap="round"/>
+</svg>

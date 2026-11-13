@@ -253,7 +253,7 @@ recurring:
     assert.match(prompt, /<<<PARENT_CONVERSATION\n### Alfred · [^\n]*\n\n## Telos usage — preliminary\n\nTelos is still read by the infra alerts\./, "Alfred's report on the user's task");
     assert.match(prompt, /`pennyworth task PEN-N` prints one in full/);
     assert.match(prompt, /## Instructions from Taylan \(authoritative\)[\s\S]*Ada, go ahead and start this on dev please/);
-    assert.match(prompt, /The engineering agents, by name: Ada \(claude\), Grace \(codex\)/);
+    assert.match(prompt, /The crew, by name:\n  - Grace\n  - Alfred\n/);
     assert.doesNotMatch(prompt, /Mode: \*\*|## Summary/, "no modes, no report template");
     assert.ok(argv.includes("--strict-mcp-config"), "Claude Code keeps away from the user's own setup");
     // Engines run in the devshells, with the gcloud sign-ins hidden (D-48).
