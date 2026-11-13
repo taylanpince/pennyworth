@@ -807,7 +807,7 @@ const MEMORY_TOOLS = {
         target: { type: "string", description: "global (every agent), self (you), or another agent's name, e.g. Ada" },
         kind: { type: "string", enum: MEMORY_KINDS, description: "rule (always/never), fact (teams, names, where things are), lesson (from a correction), playbook (steps)" },
         text: { type: "string" },
-        comment: { type: "string", description: "the id of the user's comment that asked (from task_comments)" },
+        comment: { type: "string", description: "the id of the user's comment that asked (from task_comments); when they asked in the instructions they gave you on your part, your part's id" },
         issue: { type: "string", description: "the task that comment is on, if not this run's task, e.g. PEN-12" },
       },
       required: ["target", "kind", "text", "comment"],

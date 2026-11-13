@@ -76,12 +76,20 @@ export interface MemoryDeps {
 export async function rememberGate(pc: Paperclip, issue: Issue, commentId: string, now = Date.now()): Promise<{ ok: true; comment: Comment } | { ok: false; reason: string }> {
   if (!commentId) return { ok: false, reason: "there's no comment of the user's to check it against" };
   const me = await pc.me();
-  const comment = await findComment(pc, issue, commentId, me);
+  // The instructions the user gave an agent when adding it (D-45) are their words too: the part's id stands for them.
+  const comment = commentId === issue.id || commentId === issue.identifier ? ownInstructions(issue, me) : await findComment(pc, issue, commentId, me);
   if (!comment) return { ok: false, reason: "the comment it names isn't on this task or its parts" };
   if (comment.authorType !== "user" || comment.authorUserId !== me || comment.authorAgentId || comment.body.includes(RUNNER_MARKER)) return { ok: false, reason: "the comment it names isn't the user's own" };
   if (now - Date.parse(comment.createdAt) > REMEMBER_WINDOW_MS) return { ok: false, reason: "the user's comment is more than 7 days old" };
   if (!REMEMBER_INTENT.test(displayText(comment.body))) return { ok: false, reason: "the user's comment doesn't ask to remember anything" };
   return { ok: true, comment };
+}
+
+/** A part's description as a comment, when the user wrote it themselves (created with their key, by no agent, without a source marker). */
+function ownInstructions(issue: Issue, me: string): Comment | undefined {
+  const text = issue.description ?? "";
+  if (!issue.parentId || issue.createdByUserId !== me || issue.createdByAgentId || /<!--\s*source:/.test(text)) return undefined;
+  return { id: issue.id, body: text, authorType: "user", authorUserId: me, authorAgentId: null, createdAt: issue.createdAt } as Comment;
 }
 
 /** A comment on the task, or on the user's task it belongs to and that task's other parts (D-45). */
