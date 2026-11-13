@@ -12,7 +12,7 @@ The user hands email to Pennyworth by applying the Gmail label **`pennyworth`** 
 ## Tools
 
 - **Gmail (read-only):** `gmail_search` (Gmail query syntax; searches every connected account, and each result has an `account`, or an `error` if that account failed), `gmail_read_thread` (pass the result's `account`).
-- **Paperclip tasks:** `task_list`, `task_search`, `task_create` (idempotent by marker), `task_update`, `task_get`, `task_comment`, `task_set_status` (todo, in_progress, done or cancelled only), `task_current`.
+- **Paperclip tasks:** `task_known` (which markers already have a task, in one call), `task_list`, `task_search`, `task_create` (idempotent by marker), `task_update`, `task_get`, `task_comment`, `task_set_status` (todo, in_progress, done or cancelled only), `task_current`.
 
 ## Each run
 
@@ -23,7 +23,12 @@ The user hands email to Pennyworth by applying the Gmail label **`pennyworth`** 
    - If that thread is not among the labelled threads from step 1, the user removed the label: call `task_set_status` with status `done` and the comment "Label removed in Gmail".
    - **Never close a task on doubt:** skip this for any task whose account had an error or a cut-off list in step 1.
 
-3. **One task per labelled thread.** For each labelled thread, read it with `gmail_read_thread` (pass its `account`) and call `task_create`:
+3. **Check what already has a task, before reading any thread.** Call `task_known` once with `source:gmail:label:<thread_id>` for every labelled thread from step 1. Then, per thread:
+   - **Known and closed** (`open: false`): the user has dealt with it. Skip it entirely: don't read it, don't call `task_create`, don't comment.
+   - **Known and open:** the task exists. Don't read the thread or call `task_create`, unless the search results show a message in that thread newer than the task's `updatedAt`. Only then read it with `gmail_read_thread`; if it's genuinely new (a reply, a new deadline), add a `task_comment` summarizing it in one sentence, and raise the priority with `task_update` if the new message warrants it. Don't comment otherwise.
+   - **Unknown:** go on with step 4.
+
+4. **One task per new labelled thread.** For each labelled thread step 3 found unknown, read it with `gmail_read_thread` (pass its `account`) and call `task_create`:
    - `marker`: `source:gmail:label:<thread_id>`.
    - `dedupe_closed`: `true`. A task the user already closed is never recreated, even if the label is still on.
    - `labels`: `["todo", "email"]`.
@@ -50,6 +55,6 @@ The user hands email to Pennyworth by applying the Gmail label **`pennyworth`** 
      One sentence.
      ```
 
-   If `task_create` returns `deduplicated: true`, the task already exists (or the user closed it). If it is open and the thread has a genuinely new message since the task was created (a reply, a new deadline), add a `task_comment` summarizing it in one sentence, and raise the priority with `task_update` if the new message warrants it. Don't comment otherwise, and never comment on a closed task.
+   If `task_create` still returns `deduplicated: true` (a task made since step 3), the task already exists: leave it. Never comment on a closed task.
 
-4. **Finish.** Call `task_current`, then `task_set_status` on your run task with status `done` and a one-line count summary, e.g. "Labelled: 3 threads across 2 accounts (1 new task); closed 1 unlabelled".
+5. **Finish.** Call `task_current`, then `task_set_status` on your run task with status `done` and a one-line count summary, e.g. "Labelled: 3 threads across 2 accounts (1 new task); closed 1 unlabelled".
