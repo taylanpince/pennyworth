@@ -90,7 +90,7 @@ describe("a job's record", () => {
 
   it("tells a short request to do it again from anything else", () => {
     for (const s of ["try again", "Please try it again", "retry", "Run that again please", "again", "<!-- pennyworth-from:PEN-3 -->Push it again"]) assert.ok(isRetry(s), s);
-    for (const s of ["Try a different approach", "Can you try again with the staging logs and the prod ones, and then compare the error rates between them?", "Check the logs again", ""]) assert.ok(!isRetry(s), s);
+    for (const s of ["Try a different approach", "Can you try again with the staging logs and the prod ones, and then compare the error rates between them?", "Check the logs again", "again we see 502s on the gateway", ""]) assert.ok(!isRetry(s), s);
   });
 
   it("becomes the board's JobUsage", () => {

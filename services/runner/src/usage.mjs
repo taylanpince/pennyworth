@@ -216,7 +216,7 @@ export function engineKind(label) {
  * A short request to do the same again ("try again", "please run it again", "retry"): deterministic,
  * on the request's visible text, under 80 characters.
  */
-const RETRY = /^(please\s+)?(try|check|run|publish|push|do)\s+(it\s+|that\s+)?again\b|^retry\b|^again\b/i;
+const RETRY = /^(please\s+)?(try|check|run|publish|push|do)\s+(it\s+|that\s+)?again\b|^retry\b|^again[.!]*$/i;
 export function isRetry(instructions) {
   const text = stripHidden(instructions).trim();
   return text.length > 0 && text.length < 80 && RETRY.test(text);
