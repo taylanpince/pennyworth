@@ -19,6 +19,7 @@ import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSo
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CrewView } from "./Agents";
 import { MemoryView, useMemoryPending } from "./Memory";
+import { StatsView } from "./Stats";
 import { PairRequired, api, type Session } from "./api";
 import { BackupBanner, CardView, ClickHouseBanner, ExecutorPicker, GleanBanner, GoogleBanner, GrafanaBanner, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
 import { CrewPicker, Drawer } from "./Drawer";
@@ -99,12 +100,12 @@ function useMedia(query: string) {
   return on;
 }
 
-type View = "board" | "agents" | "memory";
+type View = "board" | "agents" | "memory" | "stats";
 const VIEW_KEY = "pennyworth.view";
 const savedView = (): View => {
   try {
     const v = localStorage.getItem(VIEW_KEY);
-    return v === "agents" || v === "memory" ? v : "board";
+    return v === "agents" || v === "memory" || v === "stats" ? v : "board";
   } catch {
     return "board";
   }
@@ -519,6 +520,11 @@ export function App() {
             {memoryPending > 0 && <span className="btn-count needs">{memoryPending}</span>}
           </button>
         )}
+        {!mobile && (
+          <button className={`btn${view === "stats" ? " on" : ""}`} onClick={() => setView(view === "stats" ? "board" : "stats")} title="What the agents cost and do, over time">
+            Stats
+          </button>
+        )}
         {waiting.length > 0 && (
           <a className="btn" href={`#/t/${waiting[0]}`} title="Open the next agent waiting on you">
             Needs you <span className="btn-count needs">{waiting.length}</span>
@@ -568,6 +574,9 @@ export function App() {
             Memory
             {memoryPending > 0 && <span className="count">{memoryPending}</span>}
           </button>
+          <button className={view === "stats" ? "on" : ""} onClick={() => setView("stats")}>
+            Stats
+          </button>
           {BUCKETS.map((b) => (
             <button key={b} className={view === "board" && b === tab ? "on" : ""} onClick={() => (setTab(b), setView("board"))}>
               {BUCKET_NAMES[b]}
@@ -579,6 +588,7 @@ export function App() {
 
       {view === "agents" && <CrewView query={query} crew={board.assignees} onPairing={() => setNeedsPairing(true)} />}
       {view === "memory" && <MemoryView query={query} onPairing={() => setNeedsPairing(true)} onChanged={() => setMemoryChanged((n) => n + 1)} />}
+      {view === "stats" && <StatsView onPairing={() => setNeedsPairing(true)} />}
       <main className="columns" hidden={view !== "board"}>
         <DndContext sensors={sensors} collisionDetection={collision} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={() => (setActiveId(null), (dragFrom.current = null), void refresh(true))}>
           {visibleBuckets.map((b) => (

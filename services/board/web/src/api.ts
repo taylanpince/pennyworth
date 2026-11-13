@@ -1,5 +1,5 @@
 import type { Agents, Board, Bucket, Cadence, IssueView, Models, RecurringView, TelegramStep, Update, Engine, Executor } from "./types";
-import type { Episode, Memory, MemoryKind, MemoryList, MemoryPatch } from "./types";
+import type { Episode, Memory, MemoryKind, MemoryList, MemoryPatch, Sparklines, Stats, StatsRange } from "./types";
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -84,4 +84,10 @@ export const memoryApi = {
   accept: (id: number, patch: Pick<MemoryPatch, "text" | "kind" | "scope"> = {}) => call<Memory>("POST", `/api/memory/${id}/accept`, patch),
   reject: (id: number) => call<Memory>("POST", `/api/memory/${id}/reject`, {}),
   remove: (id: number) => call<{ ok: true }>("DELETE", `/api/memory/${id}`),
+};
+
+/** The Stats view (D-62): one precomputed payload per range, and weekly tokens for the Crew tiles. */
+export const statsApi = {
+  get: (range: StatsRange) => call<Stats>("GET", `/api/stats?range=${range}`),
+  sparklines: () => call<Sparklines>("GET", "/api/stats/sparklines"),
 };
