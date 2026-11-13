@@ -177,8 +177,8 @@ export class Paperclip {
     return this.cached(`latest:${id}`, 10_000, async () => (await this.comments(id)).at(-1));
   }
 
-  closedSince(since: string): Promise<Issue[]> {
-    return this.list("done,cancelled", since, "100");
+  closedSince(since: string, limit = "100"): Promise<Issue[]> {
+    return this.list("done,cancelled", since, limit);
   }
 
   private list(status: string, updatedSince?: string, limit = "500"): Promise<Issue[]> {

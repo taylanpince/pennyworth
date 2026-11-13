@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomInt } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { MemoryStore } from "./memory.js";
 import type { Rule } from "./recurrence.js";
 
 /** The board's own columns. Paperclip has no ordering or buckets, so these live here (D-22). */
@@ -87,6 +88,8 @@ const toRun = (r: RunRow): RecurringRun => ({
 /** Bucket and rank per Paperclip issue, read markers, the rollover date, scheduled moves and recurring tasks. */
 export class Store {
   private db: DatabaseSync;
+  /** Memories and past tasks (D-61), in the same database file (so the backup has them). */
+  readonly memory: MemoryStore;
 
   constructor(path: string) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
@@ -105,6 +108,7 @@ export class Store {
     const columns = (this.db.prepare("PRAGMA table_info(placements)").all() as { name: string }[]).map((c) => c.name);
     if (!columns.includes("carried")) this.db.exec("ALTER TABLE placements ADD COLUMN carried INTEGER NOT NULL DEFAULT 0");
     if (!this.meta("installed_at")) this.setMeta("installed_at", new Date().toISOString());
+    this.memory = new MemoryStore(this.db);
   }
 
   meta(key: string): string | undefined {

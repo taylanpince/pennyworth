@@ -11,6 +11,7 @@ import { FOR_OTHERS, crewOf, deliveredFrom, deliveredText, foldedChildren, fromM
 import { inNetworks } from "./config.js";
 import { INLINE_TYPES, MAX_UPLOAD_BODY, UploadSchema, decode, fileType, fileViews, isPdf, pdfText, safeName } from "./files.js";
 import { MergeSchema, mergedDescription } from "./merge.js";
+import { memoryRoutes } from "./memoryapi.js";
 import { McpAuthFailed, type ClickHouseAuth, type GleanAuth, type GrafanaAuth } from "./mcpauth.js";
 import { GoogleAuthFailed, loopbackPort, type GoogleAuth } from "./google.js";
 import { Paperclip, PaperclipError, type Issue } from "./paperclip.js";
@@ -395,6 +396,9 @@ export function createApp(opts: AppOptions): Server {
     return { identifier: issue.identifier, recurring };
   }
 
+  // Memory (D-61): recall, search, remember and propose for the agents; the Memory view; past tasks.
+  const mem = memoryRoutes({ paperclip: pc, memory: store.memory, log, fail: (status, message) => new HttpError(status, message) });
+
   // The tasks bridge (Assistant tools) and the runner (recurring runs), with the internal token (D-25).
   const internal: typeof routes = [
     { method: "POST", path: /^\/internal\/issues\/([^/]+)\/schedule$/, handle: async (m, body) => schedule(decodeURIComponent(m[1]!), body) },
@@ -452,6 +456,7 @@ export function createApp(opts: AppOptions): Server {
         return { ok: true };
       },
     },
+    ...mem.internal,
   ];
 
   const mode = opts.mode ?? "local";
@@ -541,6 +546,7 @@ export function createApp(opts: AppOptions): Server {
         const since = new Date(Date.now() - RECENT_MS).toISOString();
         const [all, closed] = await Promise.all([pc.openIssues().then((l) => mine(l, ctx)), pc.closedSince(since).then((l) => mine(l, ctx))]);
         const open = await closeLeftoverParts(all, closed, ctx);
+        mem.episodes(closed);
         // Agents' sub-tasks are part of their parent's card (D-45): they never get a place of their own.
         const folded = foldedChildren([...open, ...closed], ctx.assignees);
         store.placeNew(open.filter((i) => !folded.has(i.id)).map((i) => ({ id: i.id, createdAt: i.createdAt, status: i.status })));
@@ -741,6 +747,7 @@ export function createApp(opts: AppOptions): Server {
         return { default: a.defaultModel ?? null, models, efforts: a.efforts ?? [] };
       },
     },
+    ...mem.api,
   ];
 
   // Referenced tasks change rarely; a short cache keeps the brief cheap to render.
