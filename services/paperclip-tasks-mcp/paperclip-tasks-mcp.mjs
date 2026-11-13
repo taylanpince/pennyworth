@@ -45,7 +45,10 @@ async function api(method, path, body) {
   const res = await fetch(`${API}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(20_000) });
   const text = await res.text();
   if (!res.ok) throw new Error(`Paperclip ${method} ${path} → ${res.status}: ${text.slice(0, 300)}`);
-  return text ? JSON.parse(text) : {};
+  const data = text ? JSON.parse(text) : {};
+  // A task this run created or changed keeps the marker index current (see noteIssue).
+  if (method !== "GET" && /\/issues(\/[^/?]+)?$/.test(path)) noteIssue(data);
+  return data;
 }
 
 async function apiBytes(path) {
@@ -144,14 +147,100 @@ async function isOwnPart(issue) {
   return (await api("GET", "/api/agents/me")).id === issue.assigneeAgentId && (await isUsersTask(issue.parentId));
 }
 
+const MARKER = /^[A-Za-z0-9:._\/-]{3,200}$/;
+const ALL_STATUSES = `${OPEN_STATUSES},done,cancelled`;
+const isOpen = (status) => OPEN_STATUSES.split(",").includes(status);
+
+/** Other markers for the same item: a pinned Slack message is the same item as the needs-response or todo task for it. */
+function twinMarkers(m) {
+  if (m.startsWith("source:slack:pin:")) return [m.replace(/^source:slack:pin:/, "source:slack:")];
+  // ...and the other way round, for a needs-response or todo task (source:slack:<channel>:<ts>).
+  if (/^source:slack:[^:]+:[0-9]+(?:\.[0-9]+)?$/.test(m)) return [m.replace(/^source:slack:/, "source:slack:pin:")];
+  return [];
+}
+
+// The marker index: every task carrying a marker of one source (`source:slack`, `source:gmail`…), all
+// statuses, from one Paperclip request per source, kept for this bridge process (one agent run). Scouts
+// check hundreds of markers a run; one search per marker made thousands of requests and 429s. A source
+// whose list can't be read whole (an error, or more pages than we read) falls back to one search per marker.
+const INDEX_PAGE = 1000; // Paperclip's own cap on limit
+const INDEX_PAGES = 5;
+const indexLoads = new Map(); // prefix → Promise<boolean> (true: the index is complete for that prefix)
+const indexed = new Map(); // issue id → { issue, markers: Map<marker, "source" | "merged-source"> }
+const byMarker = new Map(); // marker → Set<issue id>
+
+const markerPrefix = (marker) => marker.split(":").slice(0, 2).join(":");
+
+/** Record what an issue Paperclip returned says: its status, and its markers when it has a description. */
+function noteIssue(i) {
+  if (!i?.id) return;
+  const known = indexed.get(i.id);
+  if (typeof i.description !== "string") {
+    if (known) known.issue = { ...known.issue, ...i };
+    return;
+  }
+  const markers = new Map();
+  for (const [, merged, m] of i.description.matchAll(/<!-- (merged-)?source:([A-Za-z0-9:._\/-]{3,200}) -->/g)) {
+    if (!markers.has(m) || !merged) markers.set(m, merged ? "merged-source" : "source");
+  }
+  for (const m of known?.markers.keys() ?? []) byMarker.get(m)?.delete(i.id);
+  if (!markers.size) return void indexed.delete(i.id);
+  const { description: _d, ...rest } = i;
+  indexed.set(i.id, { issue: rest, markers });
+  for (const m of markers.keys()) {
+    if (!byMarker.has(m)) byMarker.set(m, new Set());
+    byMarker.get(m).add(i.id);
+  }
+}
+
+function loadIndex(prefix) {
+  if (!indexLoads.has(prefix)) {
+    indexLoads.set(
+      prefix,
+      (async () => {
+        for (let page = 0; page < INDEX_PAGES; page++) {
+          const q = new URLSearchParams({ q: prefix.slice(0, 200), status: ALL_STATUSES, limit: String(INDEX_PAGE), offset: String(page * INDEX_PAGE), excludeRoutineExecutions: "true" });
+          const list = await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/issues?${q}`);
+          if (!Array.isArray(list)) return false;
+          list.forEach(noteIssue);
+          if (list.length < INDEX_PAGE) return true;
+        }
+        return false;
+      })().catch(() => false),
+    );
+  }
+  return indexLoads.get(prefix);
+}
+
+/** The issues carrying this marker, best first (open, then the marker's own source, then the latest), or undefined when the index can't say. */
+async function indexedByMarker(marker) {
+  // Only the sources' markers come in bulk; a brief or sub-task marker is one search either way.
+  if (!COMPANY || !marker.startsWith("source:") || !(await loadIndex(markerPrefix(marker)))) return undefined;
+  const rank = (e) => (isOpen(e.issue.status) ? 0 : 2) + (e.markers.get(marker) === "source" ? 0 : 1);
+  return [...(byMarker.get(marker) ?? [])]
+    .map((id) => indexed.get(id))
+    .map((e) => ({ ...e.issue, via: e.markers.get(marker), rank: rank(e) }))
+    .sort((a, b) => a.rank - b.rank || String(b.updatedAt).localeCompare(String(a.updatedAt)));
+}
+
 async function findByMarker(marker, statuses = OPEN_STATUSES) {
   if (!COMPANY) return undefined;
+  const hits = await indexedByMarker(marker);
+  if (hits) {
+    const wanted = statuses.split(",");
+    return hits.find((i) => wanted.includes(i.status));
+  }
+  return searchByMarker(marker, statuses);
+}
+
+async function searchByMarker(marker, statuses) {
   const token = marker.split(":").pop();
   const q = new URLSearchParams({ q: token.slice(0, 200), status: statuses, limit: "50", excludeRoutineExecutions: "true" });
   const list = await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/issues?${q}`);
   // A task merged into another (the board's merge) left its source there as merged-source.
   const needles = [`<!-- source:${marker} -->`, `<!-- merged-source:${marker} -->`];
-  return list.find((i) => needles.some((n) => String(i.description ?? "").includes(n)));
+  const i = list.find((i) => needles.some((n) => String(i.description ?? "").includes(n)));
+  return i && { ...i, via: String(i.description).includes(needles[0]) ? "source" : "merged-source" };
 }
 
 // Marker → idempotency key, mirroring ops-mcp, so re-runs never duplicate tasks.
@@ -276,22 +365,19 @@ const TOOLS = {
     run: async ({ title, description, marker, labels, priority, dedupe_closed, related_markers }) => {
       if (!COMPANY) throw new Error("PAPERCLIP_COMPANY_ID not set");
       const m = String(marker).trim();
-      if (!/^[A-Za-z0-9:._\/-]{3,200}$/.test(m)) throw new Error("invalid marker");
+      if (!MARKER.test(m)) throw new Error("invalid marker");
       // A pinned Slack message is the same item as the needs-response or todo task for it:
       // closing either must not bring it back under the other marker.
-      const markers = [m, ...(related_markers ?? []).map((r) => String(r).trim())];
-      if (m.startsWith("source:slack:pin:")) markers.push(m.replace(/^source:slack:pin:/, "source:slack:"));
-      // ...and the other way round, for a needs-response or todo task (source:slack:<channel>:<ts>).
+      const markers = [m, ...(related_markers ?? []).map((r) => String(r).trim()), ...twinMarkers(m)];
       const slackAsk = /^source:slack:[^:]+:([0-9]+)(?:\.[0-9]+)?$/.exec(m);
-      if (slackAsk) markers.push(m.replace(/^source:slack:/, "source:slack:pin:"));
-      if (markers.some((k) => !/^[A-Za-z0-9:._\/-]{3,200}$/.test(k))) throw new Error("invalid related marker");
+      if (markers.some((k) => !MARKER.test(k))) throw new Error("invalid related marker");
       // A Slack ask gets an hour for the user to answer or pin it before it becomes a task.
       if (slackAsk && Date.now() / 1000 - Number(slackAsk[1]) < SLACK_GRACE_SECONDS) {
         return { created: false, deferred: true, reason: "the Slack message is less than an hour old; a later scan decides" };
       }
       // Idempotency keys expire after 7 days in Paperclip, so also look for an open task
       // (or, with dedupe_closed, a closed one) that already carries one of these markers.
-      const statuses = dedupe_closed ? `${OPEN_STATUSES},done,cancelled` : OPEN_STATUSES;
+      const statuses = dedupe_closed ? ALL_STATUSES : OPEN_STATUSES;
       for (const k of new Set(markers)) {
         const existing = await findByMarker(k, statuses);
         if (existing) return { ...brief(existing), deduplicated: true };
@@ -308,7 +394,42 @@ const TOOLS = {
       const owner = await ownerUserId();
       if (owner) body.assigneeUserId = owner;
       const i = await api("POST", `/api/companies/${encodeURIComponent(COMPANY)}/issues`, body);
+      if (typeof i.description !== "string" && !i.deduplicated) noteIssue({ ...i, description: body.description });
       return { ...brief(i), deduplicated: Boolean(i.deduplicated) };
+    },
+  },
+  task_known: {
+    description:
+      "Which of these markers already have a task, open or closed, in one call: check every candidate before reading its thread or calling task_create. Each answer is { marker, known: false } or { marker, known: true, issue, status, open, updatedAt, via }; via is \"source\" (the task's own marker), \"merged-source\" (a task the user merged into it) or \"related\" (the same Slack message as a pin or as an ask).",
+    inputSchema: {
+      type: "object",
+      properties: { markers: { type: "array", items: { type: "string" }, description: "up to 300 markers, e.g. source:slack:<channel>:<ts>, source:slack:pin:<channel>:<ts>, source:gmail:label:<thread_id>" } },
+      required: ["markers"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+    run: async ({ markers }) => {
+      if (!COMPANY) throw new Error("PAPERCLIP_COMPANY_ID not set");
+      if (!Array.isArray(markers)) throw new Error("markers must be a list");
+      const list = [...new Set(markers.map((m) => String(m).trim()))];
+      if (list.length > 300) throw new Error("at most 300 markers per call");
+      const bad = list.find((m) => !MARKER.test(m));
+      if (bad !== undefined) throw new Error(`invalid marker: ${bad.slice(0, 80)}`);
+      const results = [];
+      for (const marker of list) {
+        let hit;
+        for (const k of [marker, ...twinMarkers(marker)]) {
+          const i = await findByMarker(k, ALL_STATUSES);
+          if (i && (!hit || (isOpen(i.status) && !isOpen(hit.i.status)))) hit = { i, via: k === marker ? (i.via ?? "source") : "related" };
+          if (hit && isOpen(hit.i.status)) break;
+        }
+        results.push(
+          hit
+            ? { marker, known: true, issue: hit.i.identifier, status: hit.i.status, open: isOpen(hit.i.status), updatedAt: hit.i.updatedAt, via: hit.via }
+            : { marker, known: false },
+        );
+      }
+      return { results };
     },
   },
   task_create_engineer_task: {

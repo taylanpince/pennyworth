@@ -122,7 +122,7 @@ agents:
     enabled_tools:
       # Reads only: drafts stay with the Assistant (D-46).
       slack: [slack_search_public, slack_search_public_and_private, slack_search_channels, slack_search_users, slack_read_channel, slack_read_thread, slack_read_user_profile, slack_list_user_channels]
-      paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status]
+      paperclip_tasks: [task_current, task_get, task_search, task_known, task_list, task_create, task_update, task_comment, task_set_status]
 
   telegram-scout:
     name: Telegram Scout
@@ -134,7 +134,7 @@ agents:
     timeout_sec: 1800
     mcp_servers: [telegram, paperclip_tasks]
     enabled_tools:
-      paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status]
+      paperclip_tasks: [task_current, task_get, task_search, task_known, task_list, task_create, task_update, task_comment, task_set_status]
 
   inbox-agent:
     name: Inbox Agent
@@ -147,7 +147,7 @@ agents:
     mcp_servers: [google_workspace, paperclip_tasks]
     enabled_tools:
       google_workspace: [gmail_search, gmail_read_thread]
-      paperclip_tasks: [task_current, task_get, task_search, task_list, task_create, task_update, task_comment, task_set_status]
+      paperclip_tasks: [task_current, task_get, task_search, task_known, task_list, task_create, task_update, task_comment, task_set_status]
 
   assistant:
     name: Assistant
