@@ -31,6 +31,7 @@ function fakePaperclip({ parent, part, engineers, parentComments = [], others = 
   const attached = [];
   const unknown = [];
   const memory = [];
+  const usage = [];
   let fake;
   let n = 0;
   const addComment = (issueId, body) => comments.get(issueId).push({ id: `comment-${++n}`, authorType: "user", authorUserId: USER, body, createdAt: new Date(Date.now() + n).toISOString() });
@@ -86,6 +87,8 @@ function fakePaperclip({ parent, part, engineers, parentComments = [], others = 
     // The board's internal API: the runner's activity for the Crew view, and messages passed on (D-54).
     if (path.startsWith("/internal/")) {
       if (path.endsWith("/runner/activity")) activity.push(JSON.parse(body));
+      // What each finished job used, for the Stats view (D-62).
+      if (path.endsWith("/runner/usage")) usage.push(...JSON.parse(body).jobs);
       // Memory (D-61): recall for the prompt, search, and what the agent keeps.
       if (path.startsWith("/internal/memory/")) {
         memory.push({ path, ...JSON.parse(body) });
@@ -102,7 +105,7 @@ function fakePaperclip({ parent, part, engineers, parentComments = [], others = 
     unknown.push(`${req.method} ${path}`);
     send({ error: "not found" }, 404);
   });
-  fake = { server, comments, patches, activity, passed, attached, unknown, addComment, memory, memoryText: "### For every agent\n\n- [1] I always review on Primer directly." };
+  fake = { server, comments, patches, activity, usage, passed, attached, unknown, addComment, memory, memoryText: "### For every agent\n\n- [1] I always review on Primer directly." };
   return fake;
 }
 
@@ -280,6 +283,17 @@ recurring:
     assert.match(reply, /^<!-- pennyworth-reply -->Checked every repository/);
     assert.match(reply, /fix\/remove-telos/, "the branch it committed, in the footer");
     assert.ok(starts().length && !starts()[0].comment, "the board shows the work; no \"On it\" comment");
+  });
+
+  it("sends the board what the job used, with who ran it (D-62)", async () => {
+    await waitFor("the job's usage", () => paperclip.usage.some((j) => j.identifier === "PEN-2"));
+    const job = paperclip.usage.find((j) => j.identifier === "PEN-2");
+    assert.deepEqual(Object.keys(job).sort(), ["agentId", "cacheReadTokens", "cacheWriteTokens", "contextTokens", "costUsd", "effort", "engine", "engineLabel", "finishedAt", "id", "identifier", "inputTokens", "issueId", "mcp", "model", "outputTokens", "reasoningTokens", "restarted", "resumed", "retry", "startedAt", "status", "subagents", "tools", "turns"]);
+    assert.deepEqual(
+      { ...job, startedAt: typeof job.startedAt, finishedAt: typeof job.finishedAt, id: typeof job.id },
+      { id: "number", issueId: "part", identifier: "PEN-2", agentId: "engineer-claude", engine: "claude", engineLabel: job.engineLabel, model: job.model, effort: job.effort, status: "done", startedAt: "string", finishedAt: "string", resumed: false, restarted: false, retry: false, inputTokens: 10, cacheReadTokens: 1000, cacheWriteTokens: 100, outputTokens: 50, reasoningTokens: 5, costUsd: 0.25, contextTokens: 1002, turns: 3, subagents: 0, tools: { Bash: 1, mcp__grafana__query_loki_logs: 1 }, mcp: { grafana: 1 } },
+    );
+    assert.match(job.engineLabel, /^Claude Code/);
   });
 
   it("keeps the exact word pr as a shortcut, shown on the board while it publishes", async () => {
@@ -545,6 +559,20 @@ recurring:
     step("none");
     await turn("And the review?");
     assert.match(claudeRuns().at(-1).prompt, /## What you've learned[\s\S]*- \[8\] Post findings in the task first, then on the PR\./);
+  });
+
+  it("counts a resumed session's job by what it added, not the session's running totals, and sends each job once (D-62)", async () => {
+    step("none");
+    await turn("Try it again");
+    await waitFor("the retry's usage", () => paperclip.usage.some((j) => j.retry));
+    const retry = paperclip.usage.find((j) => j.retry);
+    assert.equal(retry.resumed, true);
+    assert.equal(retry.costUsd, 0.25, "this run's result only, though the session's total is far higher");
+    assert.equal(retry.cacheReadTokens, 1000);
+    const resumed = paperclip.usage.filter((j) => j.engine === "claude" && j.resumed);
+    assert.ok(resumed.length >= 3 && resumed.every((j) => j.costUsd <= 0.5), JSON.stringify(resumed.map((j) => j.costUsd)));
+    const ids = paperclip.usage.map((j) => j.id);
+    assert.equal(new Set(ids).size, ids.length, "no job sent twice");
   });
 
   it("never errors or asks for a repository along the way", () => {

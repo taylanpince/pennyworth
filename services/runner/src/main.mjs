@@ -30,6 +30,7 @@ import { REPLY_MARKER, fence, prSnapshot, stateSection, threadEntries, threadSec
 import { authorize } from "./authorize.mjs";
 import { readBusy } from "./busy.mjs";
 import { boardMessage, formatSearch, memoryHash, memoryScope, recallMemory } from "./memory.mjs";
+import { engineKind, isRetry, jobUsage, usageFromEvents, usageFromLog } from "./usage.mjs";
 
 const execFileP = promisify(execFile);
 const cfg = loadConfig();
@@ -120,6 +121,51 @@ function reportActivity() {
       activityError = msg;
     },
   );
+}
+
+// ------------------------------------------------------------------ usage for the board's Stats view (D-62)
+
+/**
+ * Record what a finished job used, from its log. Claude Code and Codex report the session's running
+ * totals, so the job's share is measured from where the session's previous job left them
+ * (`session_cost:<session>` in the state). Never fails a job.
+ */
+async function recordUsage(jobId) {
+  try {
+    const job = state.job(jobId);
+    if (!job || job.usage_json) return;
+    const engine = engineKind(job.engine);
+    const previousSession = (id) => {
+      const saved = state.get(`session_cost:${id}`);
+      return saved ? JSON.parse(saved) : undefined;
+    };
+    const usage = (job.log_path ? (await usageFromLog(job.log_path, { engine, previousSession }))?.usage : undefined) ?? usageFromEvents([], { engine });
+    if (usage.sessionId && usage.sessionAfter) state.set(`session_cost:${usage.sessionId}`, JSON.stringify(usage.sessionAfter));
+    state.updateJob(jobId, { usage_json: JSON.stringify(usage) });
+  } catch (err) {
+    log("usage not recorded", { job: jobId, err: String(err.message ?? err).slice(0, 200) });
+  }
+}
+
+let usageSending = false;
+let usageError = "";
+/** Send the board every finished job it hasn't had, in batches of 200: at each job's end and every 5 minutes. */
+async function reportUsage() {
+  if (!boardApi || usageSending) return;
+  usageSending = true;
+  try {
+    for (let rows = state.unsentUsage(200); rows.length; rows = rows.length < 200 ? [] : state.unsentUsage(200)) {
+      await boardApi.post("/internal/runner/usage", { jobs: rows.map(jobUsage) });
+      state.markSent(rows.map((r) => r.id));
+    }
+    usageError = "";
+  } catch (err) {
+    const msg = String(err.message ?? err).slice(0, 200);
+    if (msg !== usageError) log("usage report failed", { err: msg });
+    usageError = msg;
+  } finally {
+    usageSending = false;
+  }
 }
 
 let progressReport;
@@ -943,6 +989,7 @@ async function startJob({ issue, instructions }) {
   reportActivity();
   let jobId;
   let tools; // the run's `pennyworth` context: what it asked for after the run (merges, engine, reset, cleanup)
+  const retry = isRetry(instructions); // "try again" and the like, for the Stats view (D-62)
   try {
     const full = await pc.issue(issue.id);
     // Every repository the request, the task and the task it is part of (D-45) name joins the workspace
@@ -984,6 +1031,8 @@ async function startJob({ issue, instructions }) {
     // whole conversation on the task and the work already on its branches as context.
     const sessionEngine = state.get(`session_engine:${issue.id}`) || (String(task.session_id).startsWith("ses_") ? "openrouter" : "codex");
     const resumed = Boolean(state.task(issue.id).session_id && sessionEngine === engine.kind);
+    // Who ran it and how, for the Stats view (D-62): the role it was assigned to (D-60) and the picked engine.
+    state.updateJob(jobId, { agent_id: full.assigneeAgentId ?? null, model: engine.model ?? null, effort: engine.effort ?? null, resumed, restarted: !resumed && Boolean(state.get(`restarted:${issue.id}`)), retry });
     remember(issue.id, instructions);
     // The board shows the Engineer at work (D-45); the reply is the next comment.
     await pc.startWork(issue.id, "");
@@ -1091,9 +1140,11 @@ async function startJob({ issue, instructions }) {
     gcp?.done();
     aws?.done();
     running.delete(issue.id);
+    if (jobId) await recordUsage(jobId);
     await afterTurn(issue, tools).catch((err) => reportError(issue, err));
     drainQueue();
     reportActivity();
+    void reportUsage();
     void reportToParent(issue).catch((err) => log("parent summary failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }));
   }
 }
@@ -1778,7 +1829,9 @@ async function reportError(issue, err) {
 // ------------------------------------------------------------------ main
 
 const interrupted = state.interruptStale();
-if (interrupted) log("marked interrupted jobs from a previous run", { interrupted });
+if (interrupted.length) log("marked interrupted jobs from a previous run", { interrupted: interrupted.length });
+// Their logs still say what they used (D-62).
+for (const job of interrupted) await recordUsage(job.id);
 log("runner started", { config: cfg.file, label: cfg.label, orgs: cfg.allowed_orgs, poll_seconds: cfg.poll_seconds });
 
 let stopping = false;
@@ -1803,3 +1856,6 @@ void loop();
 // The board's Agents view: on a timer, because a poll can take minutes (intake, GitHub checks).
 reportActivity();
 setInterval(reportActivity, 30_000);
+// The Stats view (D-62): anything the board hasn't had yet, including what failed to send before.
+void reportUsage();
+setInterval(reportUsage, 5 * 60_000);

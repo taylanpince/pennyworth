@@ -2,6 +2,8 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+const JOB_COLUMNS = [["usage_json", "TEXT"], ["agent_id", "TEXT"], ["model", "TEXT"], ["effort", "TEXT"], ["resumed", "INTEGER"], ["restarted", "INTEGER"], ["retry", "INTEGER"], ["sent_at", "TEXT"]];
+
 /** Durable runner state: per-task workspace/session and processed comment IDs. */
 export class State {
   constructor(dir) {
@@ -57,6 +59,8 @@ export class State {
     `);
     // The task's workspace directory (D-41); tasks from before it have only a worktree.
     if (!this.db.prepare("SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'workspace'").get()) this.db.exec("ALTER TABLE tasks ADD COLUMN workspace TEXT");
+    // What each job used and who ran it, for the board's Stats view (D-62); sent_at once the board has it.
+    for (const [col, type] of JOB_COLUMNS) if (!this.db.prepare("SELECT 1 FROM pragma_table_info('jobs') WHERE name = ?").get(col)) this.db.exec(`ALTER TABLE jobs ADD COLUMN ${col} ${type}`);
   }
 
   branches(issueId) {
@@ -118,6 +122,29 @@ export class State {
     this.db.prepare("UPDATE jobs SET status = ?, finished_at = ?, detail = ? WHERE id = ?").run(status, new Date().toISOString(), detail ?? null, id);
   }
 
+  /** Set a job's fields (agent_id, model, effort, resumed, restarted, retry, usage_json, sent_at). */
+  updateJob(id, fields) {
+    const keys = Object.keys(fields);
+    if (!keys.length) return;
+    this.db.prepare(`UPDATE jobs SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...keys.map((k) => (typeof fields[k] === "boolean" ? Number(fields[k]) : fields[k] ?? null)), id);
+  }
+
+  job(id) {
+    return this.db.prepare("SELECT * FROM jobs WHERE id = ?").get(id);
+  }
+
+  /** Finished jobs with usage the board hasn't had yet, oldest first, with their task's identifier. */
+  unsentUsage(limit) {
+    return this.db
+      .prepare("SELECT jobs.*, tasks.identifier FROM jobs JOIN tasks USING (issue_id) WHERE jobs.finished_at IS NOT NULL AND jobs.usage_json IS NOT NULL AND jobs.sent_at IS NULL ORDER BY jobs.id LIMIT ?")
+      .all(limit);
+  }
+
+  markSent(ids, at = new Date().toISOString()) {
+    const stmt = this.db.prepare("UPDATE jobs SET sent_at = ? WHERE id = ? AND sent_at IS NULL");
+    for (const id of ids) stmt.run(at, id);
+  }
+
   lastJob(issueId) {
     return this.db.prepare("SELECT * FROM jobs WHERE issue_id = ? ORDER BY id DESC LIMIT 1").get(issueId);
   }
@@ -138,7 +165,9 @@ export class State {
 
   /** Jobs left 'running' by a crash or restart are marked interrupted at startup. */
   interruptStale() {
-    return this.db.prepare("UPDATE jobs SET status = 'interrupted', finished_at = ? WHERE status = 'running'").run(new Date().toISOString()).changes;
+    const stale = this.db.prepare("SELECT * FROM jobs WHERE status = 'running'").all();
+    this.db.prepare("UPDATE jobs SET status = 'interrupted', finished_at = ? WHERE status = 'running'").run(new Date().toISOString());
+    return stale;
   }
 
   get(key) {
