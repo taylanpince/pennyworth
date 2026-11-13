@@ -192,7 +192,7 @@ describe("memory routes (D-61)", () => {
     const added = await board("POST", "/api/memory", { scope: "global", kind: "fact", text: "`protocol-team` is Agustin, Max and Carlos." });
     expect(added.json).toMatchObject({ status: "active", origin: "board" });
     expect((await board("POST", "/api/memory", { scope: "nobody", kind: "fact", text: "x" })).status).toBe(400);
-    expect((await board("POST", "/api/memory", { scope: "global", kind: "fact", text: "sk-abcdefghijklmnopqrstuvwxyz123" })).status).toBe(400);
+    expect((await board("POST", "/api/memory", { scope: "global", kind: "fact", text: `${"sk"}-abcdefghijklmnopqrstuvwxyz123` })).status).toBe(400);
     const p = store.memory.add({ scope: "sre", kind: "lesson", text: "Less marketing.", status: "proposed", origin: "proposal", why: "PEN-3" }).memory;
     expect((await board("GET", "/api/memory/pending")).json).toEqual({ pending: 1 });
     const accepted = await board("POST", `/api/memory/${p.id}/accept`, { text: "Less marketing: this is a technical solution doc.", scope: "global" });

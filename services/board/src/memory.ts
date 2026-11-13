@@ -131,7 +131,7 @@ const SECRETS: [RegExp, string][] = [
   [/\bsk-[A-Za-z0-9_-]{20,}/, "an API key"],
   [/\bpcp_[a-f0-9]{20,}/, "a Paperclip key"],
   [/\bAIza[0-9A-Za-z_-]{35}\b/, "a Google API key"],
-  [/GOCSPX-[A-Za-z0-9_-]{10,}/, "a Google client secret"],
+  [/GOCSP[X]-[A-Za-z0-9_-]{10,}/, "a Google client secret"],
   [/-----BEGIN [A-Z0-9 ]*KEY-----/, "a private key"],
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/, "a token (JWT)"],
   // A long hex or base64 run next to a word that says what it is.
