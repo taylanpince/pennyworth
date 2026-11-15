@@ -81,7 +81,7 @@ export function outputs(workspace, primer) {
       if (statSync(path).isFile() && !name.startsWith(".")) out.push({ name: diskName(name), path });
     }
   }
-  return out.slice(0, MAX_SHARED_FILES).map((f) => ({ ...f, type: TYPES[extname(f.name).slice(1).toLowerCase()] ?? "application/octet-stream" }));
+  return out.map((f) => ({ ...f, type: TYPES[extname(f.name).slice(1).toLowerCase()] ?? "application/octet-stream" }));
 }
 
 /**
@@ -97,6 +97,7 @@ export async function shareOutputs(pc, issue, files, shared = {}, log = () => {}
     if (!data.length || data.length > MAX_SHARED) continue;
     const hash = createHash("sha256").update(data).digest("hex");
     if (shared[f.name]?.hash === hash) continue;
+    if (attached.length >= MAX_SHARED_FILES) break;
     try {
       const a = await pc.addAttachment(issue.id, f.name, f.type, data);
       if (shared[f.name]?.id) await pc.deleteAttachment(shared[f.name].id).catch((err) => log("couldn't remove an earlier version", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 200) }));

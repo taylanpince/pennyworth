@@ -44,6 +44,8 @@ export function loadConfig() {
     file,
     companyId,
     selfName,
+    cad: { python: resolve(REPO_ROOT, expand(cfg.cad?.python ?? "scripts/cad/python")) },
+    primerEnabled: cfg.primer?.enabled !== false,
     paperclipUrl: env.PAPERCLIP_URL ?? cfg.paperclip_url ?? "http://localhost:3100",
     boardKeyFile: join(secrets, "paperclip_board_key"),
     boardTokenFile: join(secrets, "board_internal_token"),

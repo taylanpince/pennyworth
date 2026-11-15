@@ -241,6 +241,7 @@ On the user's board you are ${me.name}. Voice: ${me.voice} The voice sets your t
 }
 
 function runnerAgentBody(key, a, existing) {
+  if (a.workflow !== undefined && a.workflow !== "cad") fail(`agent ${key}: unknown runner workflow ${a.workflow}`);
   if (!RUNNER_ADAPTERS.includes(a.adapter)) fail(`agent ${key}: dispatch: runner needs one of ${RUNNER_ADAPTERS.join(", ")}`);
   if (a.mcp_servers?.length) fail(`agent ${key}: runner agents get no MCP servers`);
   const engine = a.engine ?? { codex_local: "codex", claude_local: "claude", opencode_local: "openrouter" }[a.adapter];
@@ -261,7 +262,7 @@ function runnerAgentBody(key, a, existing) {
   if (adapterType === "claude_local") adapterConfig.dangerouslySkipPermissions = false;
   // opencode agents need a model in Paperclip's eyes: the role's, else the first OpenRouter one listed.
   if (adapterType === "opencode_local") adapterConfig.model = engine === "openrouter" && model ? model : (engineCatalog().openrouter?.[0] ?? existing?.adapterConfig?.model ?? "openrouter/z-ai/glm-5.3-flash");
-  const role = { job: roleOf(key, a) ?? "", engine, ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
+  const role = { job: roleOf(key, a) ?? "", engine, ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(a.workflow ? { workflow: a.workflow } : {}) };
   return {
     name: a.name,
     role: "general",

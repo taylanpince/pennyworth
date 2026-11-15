@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cad_root="$repo/data/cad"
+if [ ! -x "$cad_root/venv/bin/python" ]; then
+  echo "CAD Python is not installed. Run scripts/cad/setup.sh on the host." >&2
+  exit 1
+fi
+if [ -d "$cad_root/system-libs/usr/lib/x86_64-linux-gnu" ]; then
+  export LD_LIBRARY_PATH="$cad_root/system-libs/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+# Jobs may read this interpreter but only write within their own workspace.
+export PYTHONDONTWRITEBYTECODE=1
+exec "$cad_root/venv/bin/python" "$@"

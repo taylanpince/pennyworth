@@ -700,3 +700,41 @@ Ubuntu's `bwrap-userns-restrict` AppArmor profile strips capabilities from Bubbl
   - Everything is in `board.sqlite`, so the hourly backup covers it, and computed in code (`statsmath.ts`, unit-tested).
 - **Checked against the analysis** for Oct 12 – Nov 12: Claude list-price cost $439.55 (session deltas), PEN-3348 $70.21, PEN-3327 $51.65, PEN-4035 $44.61; Paperclip runs 3,274 and 1,360M input tokens (the analysis ran part-way through Nov 12: 3,263 and 1,351M), Slack Scout 54.9%; 987 non-routine tasks created. The analysis's 145 failed runs can't be reproduced from Paperclip's run statuses (125); it likely counted failures from logs.
 - **Trade-offs:** Codex jobs and Paperclip runs have no price (shown as unpriced, not $0). Job rows are keyed by the runner's local job id: a reset runner database would overwrite old rows. Crew parts are agent work, so they're left out of tasks created and closed and shown under the roles.
+
+## D-63: Local CAD design with build123d
+
+- **Problem:** the user wants to describe hobbyist 3D parts, inspect real models,
+  revise them in conversation, and download the final design. The enclosure trial
+  proved local Python generation, browser previews and CAD downloads.
+- **Decision:** Charles is a CAD Designer runner role, with `workflow: cad` in its
+  role metadata and Codex/high as its default. Engine overrides remain available;
+  the role, not the selected engine or persona name, selects the CAD workflow.
+  Alfred routes CAD work to Charles, and the normal assignment and mention UI works.
+- **Runtime:** `cad.python` selects a host interpreter, defaulting to the isolated
+  `scripts/cad/python` wrapper and pinned environment under `data/cad`. The role's
+  trusted instructions reach both initial and resumed turns. Jobs receive the
+  interpreter and shared exporter paths as `CAD_PYTHON` and `CAD_EXPORT`.
+- **Outputs:** a self-contained build123d script defines `result`. The exporter
+  checks valid solids, finite positive bounds/volume, and STEP re-import validity,
+  count, bounds and volume. Each revision gets immutable numbered GLB, STEP, STL,
+  source and JSON report attachments, within the 10 MB file limit. The per-run cap
+  of 20 attachments counts changed files, so earlier revisions cannot hide newer
+  ones. Source stays editable; STEP does not preserve its parametric feature logic.
+- **Preview:** the board lazily loads a bundled Three.js viewer for untextured,
+  self-contained GLB files. Orbit, zoom, reset and PNG download work on desktop and
+  phone-sized layouts. External resources, compressed meshes and extensions are
+  refused; the board's existing CSP and authenticated download routes stay intact.
+- **Scope:** no automatic repository discovery, runner-provided private MCP or cloud
+  sessions for CAD jobs. The per-job helper refuses clone/push/PR/merge/Primer/AWS
+  commands. This retains the host runner's existing sandbox, not a separate
+  container. Geometry checks do not establish physical fit, strength or printability.
+  Approval identifies an existing revision; no printer commands are issued.
+- **Verified:** actual Python generation inside the runner's sandbox, exporter
+  tests for revisions/assemblies/failed exports, and the real runner against fake
+  engines from assignment through attachments and a resumed revision.
+- **Personal instance boundary:** Manor disables Primer for all roles with
+  `primer.enabled: false`, removes its guidance from personal agent instructions,
+  and exposes no Primer tools to Paperclip agents. The runner suppresses connection
+  injection and publication, including saved publication requests. A real Codex
+  config-parser check guards against incomplete disabled MCP server entries, which
+  initially prevented Charles's first user task from starting.

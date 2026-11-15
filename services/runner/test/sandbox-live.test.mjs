@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { test } from "node:test";
 import { buildCommand, checkCodexPermissions, runAgent } from "../src/engines.mjs";
 import { runAws } from "../src/aws.mjs";
+
+test("real Codex parses the CAD configuration with no incomplete MCP entries", { skip: process.env.PENNYWORTH_TEST_CODEX_CONFIG !== "1" }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "cad-codex-config-"));
+  try {
+    const { argv } = buildCommand({ cfg: { localCad: true, primerEnabled: false, sandbox: { credential_isolation: "permissions" } }, engine: { kind: "codex" }, worktree: dir, lastMessageFile: join(dir, "reply") });
+    const flags = [];
+    for (let i = 0; i < argv.length; i++) if (argv[i] === "-c") flags.push("-c", argv[++i]);
+    const servers = JSON.parse(execFileSync("codex", [...flags, "mcp", "list", "--json"], { cwd: dir, env: { ...process.env, CODEX_HOME: dir }, encoding: "utf8" }));
+    assert.deepEqual(servers, []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("Codex permission preflight fails closed and cleans up without exposing command output", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pw-permission-check-"));

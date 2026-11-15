@@ -94,6 +94,7 @@ const CLAUDE_TOOLS = "Bash,Read,Edit,Write,NotebookEdit,Task,TaskStop,TaskCreate
  * Primer is set up.
  */
 function primer(cfg) {
+  if (cfg.localCad || cfg.primerEnabled === false) return undefined;
   if (!cfg.primerMcpUrl || !cfg.primerTokenFile || !existsSync(cfg.primerTokenFile)) return undefined;
   return { url: cfg.primerMcpUrl, token: readFileSync(cfg.primerTokenFile, "utf8").trim() };
 }
@@ -118,6 +119,7 @@ const PRIVATE_READS = [
   { name: "clickhouse", url: "clickhouseMcpUrl", tokenFile: "clickhouseTokenFile", env: "CLICKHOUSE_MCP_TOKEN", toolTimeout: 180 },
 ];
 export function privateReads(cfg) {
+  if (cfg.localCad) return [];
   return PRIVATE_READS.filter((s) => cfg[s.url] && cfg[s.tokenFile] && existsSync(cfg[s.tokenFile])).map((s) => ({
     name: s.name,
     url: cfg[s.url],
@@ -144,7 +146,7 @@ function hiding(cfg, argv) {
  * for engines that observe.
  */
 export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp, aws }) {
-  const built = engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp: observes(engine.kind) ? gcp : undefined, aws: observes(engine.kind) ? aws : undefined });
+  const built = engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp: observes(engine.kind) && !cfg.localCad ? gcp : undefined, aws: observes(engine.kind) && !cfg.localCad ? aws : undefined });
   return { ...built, argv: hiding(cfg, built.argv) };
 }
 
@@ -278,6 +280,11 @@ export async function runAgent({ cfg, engine, shells, worktree, prompt, sessionI
     ...jobEnv,
   };
   delete agentEnv.SSH_AUTH_SOCK;
+  if (cfg.primerEnabled === false) delete agentEnv.PRIMER_MCP_TOKEN;
+  if (cfg.localCad) {
+    for (const key of ["PRIMER_MCP_TOKEN", ...PRIVATE_READS.map((r) => r.env)]) delete agentEnv[key];
+    for (const key of Object.keys(agentEnv)) if (/^(AWS_|CLOUDSDK_)/.test(key) || key === "GOOGLE_APPLICATION_CREDENTIALS") delete agentEnv[key];
+  }
   // Never a prompt on the user's desktop: without credentials, git over https and ssh would fall back
   // to the session's askpass dialog (seahorse) and pop it up for every private Go module or repo.
   delete agentEnv.SSH_ASKPASS;

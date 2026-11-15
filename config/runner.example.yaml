@@ -36,6 +36,7 @@ engines:
 # Primer for every engine, read-only (D-40). Token: $PENNYWORTH_SECRETS_DIR/primer_mcp_token.
 # publish_url: where the runner itself publishes a task's Primer document (D-44); never given to jobs.
 primer:
+  enabled: true                     # false for personal instances: no reads, publishing, or prompt guidance
   url: http://127.0.0.1:3123/mcp/read
   publish_url: http://127.0.0.1:3123/mcp
 
@@ -80,6 +81,10 @@ intake:
   model: ""                           # empty = your Codex default
   reasoning_effort: low
   timeout_seconds: 180
+
+# Local build123d interpreter for CAD roles (scripts/cad/setup.sh installs it).
+cad:
+  python: scripts/cad/python
 
 devshells:
   flake: ~/config/nixos               # nix develop <flake>#<shell>

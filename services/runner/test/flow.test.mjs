@@ -105,7 +105,7 @@ function fakePaperclip({ parent, part, engineers, parentComments = [], others = 
     unknown.push(`${req.method} ${path}`);
     send({ error: "not found" }, 404);
   });
-  fake = { server, comments, patches, activity, usage, passed, attached, unknown, addComment, memory, memoryText: "### For every agent\n\n- [1] I always review on Primer directly." };
+  fake = { server, issues, comments, patches, activity, usage, passed, attached, unknown, addComment, memory, memoryText: "### For every agent\n\n- [1] I always review on Primer directly." };
   return fake;
 }
 
@@ -210,6 +210,7 @@ recurring:
 
     // PEN-2713/PEN-2714: the repositories are on the user's task; Ada's part only says go.
     const engineers = [
+      { id: "cad", name: "CAD Designer", status: "idle", adapterType: "claude_local", metadata: { runnerEngine: true, setupKey: "pennyworth:cad-designer", role: { workflow: "cad", engine: "claude" }, persona: { name: "Charles" } } },
       { id: "engineer-claude", name: "Engineer · Claude", status: "idle", adapterType: "claude_local", adapterConfig: {}, metadata: { setupKey: "pennyworth:engineer-claude", persona: { name: "Ada" } } },
       { id: "engineer-codex", name: "Engineer · Codex", status: "idle", adapterType: "codex_local", adapterConfig: {}, metadata: { setupKey: "pennyworth:engineer-codex", persona: { name: "Grace" } } },
     ];
@@ -266,7 +267,7 @@ recurring:
     assert.match(prompt, /<<<PARENT_CONVERSATION\n### Alfred · [^\n]*\n\n## Telos usage — preliminary\n\nTelos is still read by the infra alerts\./, "Alfred's report on the user's task");
     assert.match(prompt, /`pennyworth task PEN-N` prints one in full/);
     assert.match(prompt, /## Instructions from Taylan \(authoritative\)[\s\S]*Ada, go ahead and start this on dev please/);
-    assert.match(prompt, /The crew, by name:\n  - Grace\n  - Alfred\n/);
+    assert.match(prompt, /The crew, by name:\n  - Charles\n  - Grace\n  - Alfred\n/);
     // What Ada learned in earlier tasks (D-61): her own scope, between the rules and the task.
     assert.match(prompt, /## Rules \(non-negotiable\)[\s\S]*## What you've learned\n\nRules and lessons Taylan gave you or approved[\s\S]*- \[1\] I always review on Primer directly\.\n\n## Task \(untrusted context\)/);
     assert.deepEqual(paperclip.memory.find((m) => m.path.endsWith("/recall")), { path: "/internal/memory/recall", scope: "engineer-claude", engine: "claude" });
@@ -499,7 +500,7 @@ recurring:
     assert.match(byAgent.out, /^PEN-2 · in_progress · with Ada · /);
     assert.match(byWords.out, /PEN-1 · todo · with Taylan/);
     assert.equal(nobody.code, 1);
-    assert.match(nobody.out, /No agent is called Nobody: Ada, Grace, Alfred/);
+    assert.match(nobody.out, /No agent is called Nobody: Charles, Ada, Grace, Alfred/);
   });
 
   it("answers --help itself, shares what it made on the task, and passes a message on to Alfred (D-54)", async () => {
@@ -586,6 +587,36 @@ recurring:
     assert.match(prompt, /could not prepare these repositories: acme\/missing/);
     assert.match(prompt, /Repo is acme\/backend/);
     assert.ok(existsSync(join(dir, "work/tasks/PEN-2/backend/.git")), "the corrected repository was cloned");
+  });
+
+  it("runs a CAD role without a repository or service connections and attaches successive revisions", async () => {
+    const issue = { id: "cad-part", identifier: "PEN-4", title: "A printable bracket", status: "todo", assigneeAgentId: "cad", assigneeUserId: null, createdByUserId: USER, createdByAgentId: null, labels: [], description: "Make a bracket, no repository needed." };
+    step("cad-v001\npennyworth aws ec2 describe-instances\npennyworth primer\npennyworth repo acme/app");
+    paperclip.comments.set(issue.id, []);
+    paperclip.issues.set(issue.id, issue);
+    const replies = () => paperclip.patches.filter((p) => p.issue === "PEN-4" && p.status === "in_review");
+    await waitFor("CAD outputs", () => replies().length === 1);
+    const first = claudeRuns().at(-1);
+    assert.match(first.prompt, /You are Charles/);
+    assert.match(first.prompt, /# CAD design/);
+    assert.match(first.prompt, /CAD_EXPORT/);
+    assert.ok(first.cad.python.endsWith("scripts/cad/python"));
+    assert.ok(first.cad.export.endsWith("cad/export.py"));
+    assert.equal(first.cad.hasPrivateTokens, false);
+    assert.equal(first.cad.hasCloud, false);
+    assert.deepEqual(JSON.parse(first.argv[first.argv.indexOf("--mcp-config") + 1]), { mcpServers: {} });
+    for (const tool of toolRuns().slice(-3)) assert.match(tool.out, /unavailable for this role/);
+    const attached = () => paperclip.attached.filter((a) => a.issue === issue.id).map((a) => a.name);
+    assert.equal(attached().length, 5);
+    assert.ok(attached().includes("bracket-v001.glb"));
+    step("cad-v002");
+    paperclip.addComment(issue.id, "Make it 10 mm longer and keep the first version.");
+    await waitFor("CAD revision", () => replies().length === 2);
+    assert.match(claudeRuns().at(-1).prompt, /# CAD design/);
+    assert.ok(claudeRuns().at(-1).argv.includes("--resume"));
+    assert.equal(attached().length, 10);
+    assert.ok(attached().includes("bracket-v002.step"));
+    assert.ok(!existsSync(join(dir, "work/tasks/PEN-4/app")));
   });
 
   it("never errors or asks for a repository along the way", () => {
