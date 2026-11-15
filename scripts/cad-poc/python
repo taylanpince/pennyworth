@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Isolated local interpreter for the trial; no changes to the runner or system Python.
+set -euo pipefail
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cad_root="$repo/data/cad-poc"
+if [ -d "$cad_root/system-libs/usr/lib/x86_64-linux-gnu" ]; then
+  export LD_LIBRARY_PATH="$cad_root/system-libs/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+exec "$cad_root/venv/bin/python" "$@"

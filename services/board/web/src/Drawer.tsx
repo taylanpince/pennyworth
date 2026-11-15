@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { api } from "./api";
 import { Avatar, Chips, CloseIcon, CrewAvatar, ExecutorPicker, MergeMenu, MoveMenu, Plan, SnoozeMenu, memberIssue } from "./components";
 import { Markdown } from "./markdown";
+import { CadPreview } from "./CadPreview";
 import { BUCKETS, BUCKET_NAMES, WEEKDAYS, type Assignee, type Board, type Bucket, type Cadence, type CommentView, type CrewState, type Executor, type IssueView, type Label, type Update, type Weekday } from "./types";
 import { PRIORITIES, PRIORITY_NAMES, ago, elapsed, executorLabel, roleLine, roleTitle, runTime, shortName, todayIn, when } from "./util";
 
@@ -857,6 +858,7 @@ function Files({ issue }: { issue: IssueView }) {
             <span className="muted small" title={new Date(f.createdAt).toLocaleString()}>
               {size(f.size)} · {f.by === "me" ? "you" : "agent"} · {ago(f.createdAt)}
             </span>
+            {/\.glb$/i.test(f.name) && <CadPreview key={f.id} url={`/api/issues/${encodeURIComponent(issue.id)}/files/${f.id}`} name={f.name} />}
           </li>
         ))}
       </ul>

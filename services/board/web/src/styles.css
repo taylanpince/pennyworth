@@ -361,6 +361,10 @@ kbd {
 .files ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .files li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .files a { color: var(--accent); overflow-wrap: anywhere; }
+.cad-preview { flex-basis: 100%; }
+.cad-preview-body { margin: 8px 0 12px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.cad-canvas, .cad-canvas canvas { display: block; width: 100%; height: 320px; }
+.cad-preview-body p { margin: 8px 0; }
 
 /* Markdown */
 .md { overflow-wrap: anywhere; }
