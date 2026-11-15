@@ -221,6 +221,13 @@ grep -q '"bwrap", "--dev-bind", "/", "/"' services/runner/src/engines.mjs && gre
 grep -q 'join(homedir(), ".aws"), awsHome' services/runner/src/config.mjs && grep -q 'cfg.aws?.hidden' services/runner/src/engines.mjs \
   && pass "runner: jobs can't read the AWS sign-ins, the user's or Pennyworth's (bwrap tmpfs)" || fail "runner: the AWS sign-ins aren't hidden from jobs"
 aws_session="$(awk '/^export async function awsSession/,/^}/' services/runner/src/aws.mjs)"
+profile_sandbox="$(awk '/^function permissionProfile/,/^}/' services/runner/src/engines.mjs)"
+echo "$profile_sandbox" | grep -Fq '":root": "read"' \
+  && echo "$profile_sandbox" | grep -Fq 'filesystem[dir] = "deny"' \
+  && echo "$profile_sandbox" | grep -Fq 'cfg.aws?.hidden' \
+  && echo "$profile_sandbox" | grep -Fq 'cfg.gcp?.hidden' \
+  && grep -Fq 'cfg.sandbox?.credential_isolation ?? "bwrap"' services/runner/src/config.mjs \
+  && pass "runner: optional single sandbox denies cloud credential reads and confines writes; bwrap remains the default" || fail "runner: single sandbox lost credential denial or the default isolation mode"
 echo "$aws_session" | grep -q 'kind: "read"' && ! echo "$aws_session" | grep -q '"write"' && ! grep -qE 'writeRole|kind: "write"' services/runner/src/engines.mjs \
   && [ "$(grep -c 'kind: "write"' services/runner/src/aws.mjs)" = 1 ] && grep -q 'roleCredentials({ aws: cfg.aws, account, kind: "write", exec })' services/runner/src/aws.mjs \
   && pass "runner: AWS jobs get read-role credentials only; the write role is used by runAwsWrite alone (services/runner/src/aws.mjs)" || fail "runner: a job may get AWS write credentials"

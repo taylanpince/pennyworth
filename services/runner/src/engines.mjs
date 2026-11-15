@@ -6,6 +6,21 @@ import { progressTracker } from "./progress.mjs";
 
 const expand = (p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
 
+// One sandbox for both credential read denial and workspace write confinement.
+// Ubuntu's AppArmor policy prevents nesting Bubblewrap sandboxes.
+function permissionProfile(cfg, worktree, stateRoots, network) {
+  const filesystem = { ":root": "read", ":slash_tmp": "write", ":tmpdir": "write" };
+  const roots = [worktree, ...stateRoots, ...(cfg.sandbox?.extra_writable_roots ?? []).map(expand)];
+  const hidden = [...(cfg.gcp?.hidden ?? []), ...(cfg.aws?.hidden ?? [])];
+  for (const root of roots) {
+    if (hidden.some((d) => root === d || root.startsWith(`${d}/`))) throw new Error("A sandbox writable root overlaps a hidden credential directory");
+    filesystem[root] = "write";
+  }
+  for (const dir of hidden) filesystem[dir] = "deny";
+  const table = Object.entries(filesystem).map(([path, access]) => `${JSON.stringify(path)}=${JSON.stringify(access)}`).join(",");
+  return ["-P", "pennyworth-job", "-c", `permissions.pennyworth-job={filesystem={${table}},network={enabled=${network}}}`];
+}
+
 /** Wrap a command in the requested devshells: nix develop A --command nix develop B --command … */
 export function inDevshells(flake, shells, argv) {
   return shells.reduceRight((inner, shell) => ["nix", "develop", `${flake}#${shell}`, "--command", ...inner], argv);
@@ -23,6 +38,7 @@ function sandboxConfig(cfg, worktree, stateRoots = []) {
 
 /** `codex sandbox` around a whole process: writes only in the worktree, the given state dirs and the build caches. */
 function codexSandbox(cfg, worktree, stateRoots, argv) {
+  if (cfg.sandbox?.credential_isolation === "permissions") return ["codex", "sandbox", ...permissionProfile(cfg, worktree, stateRoots, true), "--", ...argv];
   return [
     "codex", "sandbox",
     "-c", 'sandbox_mode="workspace-write"',
@@ -83,6 +99,7 @@ export function privateReads(cfg) {
  * user's own credentials, or Pennyworth's sign-in that can reach the write roles (D-59).
  */
 function hiding(cfg, argv) {
+  if (cfg.sandbox?.credential_isolation === "permissions" && argv[0] === "codex" && argv[1] === "sandbox") return argv;
   const dirs = [...(cfg.gcp?.hidden ?? []), ...(cfg.aws?.hidden ?? [])].filter((d) => existsSync(d));
   return dirs.length ? ["bwrap", "--dev-bind", "/", "/", ...dirs.flatMap((d) => ["--tmpfs", d]), "--die-with-parent", "--", ...argv] : argv;
 }

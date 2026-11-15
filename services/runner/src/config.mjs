@@ -32,6 +32,7 @@ export function loadConfig() {
   const secrets = expand(env.PENNYWORTH_SECRETS_DIR ?? "~/.config/pennyworth");
   const gcpCredentials = expand(cfg.gcp?.credentials ?? join(secrets, "gcloud/application_default_credentials.json"));
   const awsHome = expand(cfg.aws?.home ?? join(secrets, "aws"));
+  if (!["bwrap", "permissions"].includes(cfg.sandbox?.credential_isolation ?? "bwrap")) throw new Error("sandbox.credential_isolation must be bwrap or permissions");
   const awsAuth = cfg.aws?.auth ?? "sso";
   if (!["sso", "iam"].includes(awsAuth)) throw new Error("aws.auth must be sso or iam");
   if (awsAuth === "iam" && cfg.aws?.accounts?.some((a) => a.write_role)) throw new Error("AWS IAM authentication is read-only; remove write_role");

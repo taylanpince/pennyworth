@@ -278,6 +278,8 @@ Repositories outside your orgs are read-only (D-35): their branches are listed b
 
 Agents can't push or write to GitHub themselves: `gh` is wrapped read-only, pushes are disabled in the runner's clones, and a pre-push hook and an ssh wrapper both refuse them. Only *your* comments are instructions.
 
+**Ubuntu sandbox compatibility:** if a job fails with a Bubblewrap namespace error after adding cloud credentials, test for nested sandbox restrictions. Ubuntu's AppArmor policy can allow the outer credential-hiding sandbox but reject the inner Codex sandbox. For Claude Code and OpenRouter, set `sandbox.credential_isolation: permissions` in `config/runner.yaml` to combine credential read denial and workspace write confinement in a single recent Codex permissions sandbox. The default remains `bwrap`; Codex engine jobs keep their existing path. No host security policy change is needed. Verify on the runner host with `PENNYWORTH_TEST_SANDBOX=1 node --test services/runner/test/sandbox-live.test.mjs`, then restart the runner service. Unsupported Codex versions fail closed; do not disable sandboxing as a fallback.
+
 Engine credentials live in `~/.config/pennyworth/` (0600): `openrouter_key` for OpenRouter, and `claude_oauth_token` from `claude setup-token` for Claude Code. Claude Code runs in a runner-owned home with no settings, plugins or connectors, no MCP servers but the read-only ones (Primer, Grafana, Slack, Glean, ClickHouse), a fixed tool allowlist, and `codex sandbox` around the whole process.
 
 ## Slack

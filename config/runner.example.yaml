@@ -98,6 +98,7 @@ devshells:
     "gcloud|cloud logging|stackdriver|gke|bigquery|log explorer": pulumi
 
 sandbox:
+  credential_isolation: bwrap         # default; permissions combines Claude/OpenRouter confinement in one recent Codex sandbox
   network: true                       # gh, gcloud, Grafana and package registries need it
   # Writable besides the task worktree (build caches); everything else is read-only to the agent.
   extra_writable_roots:
