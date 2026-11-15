@@ -1,14 +1,15 @@
-import { spawn } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFile, spawn } from "node:child_process";
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import { progressTracker } from "./progress.mjs";
 
 const expand = (p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
 
 // One sandbox for both credential read denial and workspace write confinement.
 // Ubuntu's AppArmor policy prevents nesting Bubblewrap sandboxes.
-function permissionProfile(cfg, worktree, stateRoots, network) {
+function permissionProfile(cfg, worktree, stateRoots, network, native = false) {
   const filesystem = { ":root": "read", ":slash_tmp": "write", ":tmpdir": "write" };
   const roots = [worktree, ...stateRoots, ...(cfg.sandbox?.extra_writable_roots ?? []).map(expand)];
   const hidden = [...(cfg.gcp?.hidden ?? []), ...(cfg.aws?.hidden ?? [])];
@@ -18,7 +19,38 @@ function permissionProfile(cfg, worktree, stateRoots, network) {
   }
   for (const dir of hidden) filesystem[dir] = "deny";
   const table = Object.entries(filesystem).map(([path, access]) => `${JSON.stringify(path)}=${JSON.stringify(access)}`).join(",");
-  return ["-P", "pennyworth-job", "-c", `permissions.pennyworth-job={filesystem={${table}},network={enabled=${network}}}`];
+  return [...(native ? ["-c", 'default_permissions="pennyworth-job"'] : ["-P", "pennyworth-job"]), "-c", `permissions.pennyworth-job={filesystem={${table}},network={enabled=${network}}}`];
+}
+
+// Codex exec selects profiles through default_permissions, unlike `sandbox -P`.
+// Legacy user/project sandbox settings can override that selection. Prove read
+// denial with the same config resolution before a model can run any tool.
+export async function checkCodexPermissions({ cfg, worktree, stateRoots = [], shells = [], env = process.env, exec = promisify(execFile) }) {
+  // `codex sandbox` and `exec` don't resolve conflicting legacy settings the
+  // same way. Reject them explicitly rather than treating the probe as proof.
+  const configs = ["/etc/codex/config.toml", "/etc/codex/managed_config.toml", join(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"), "config.toml")];
+  for (let dir = worktree; ; dir = dirname(dir)) {
+    configs.push(join(dir, ".codex/config.toml"));
+    if (dirname(dir) === dir) break;
+  }
+  if (configs.some((file) => existsSync(file) && /\bsandbox_mode\b/.test(readFileSync(file, "utf8")))) {
+    throw new Error("Codex credential isolation preflight failed: remove legacy sandbox_mode settings before using permission profiles. No agent was started.");
+  }
+  const dir = mkdtempSync(join(worktree, ".pennyworth-sandbox-check-"));
+  try {
+    const hidden = join(dir, "hidden");
+    mkdirSync(hidden);
+    writeFileSync(join(hidden, "marker"), "sandbox fixture");
+    const probeCfg = { ...cfg, aws: { ...cfg.aws, hidden: [...(cfg.aws?.hidden ?? []), hidden] } };
+    const probe = `const fs=require('node:fs'); let denied=false; try {fs.readFileSync(${JSON.stringify(join(hidden, "marker"))})} catch {denied=true} if(!denied)process.exit(1); fs.writeFileSync(${JSON.stringify(join(dir, "allowed"))},'ok'); process.stdout.write('pennyworth-permissions-ok');`;
+    const argv = inDevshells(cfg.devshells.flake, shells, ["codex", "sandbox", ...permissionProfile(probeCfg, worktree, stateRoots, cfg.sandbox?.network !== false, true), "--", "node", "-e", probe]);
+    const { stdout } = await exec(argv[0], argv.slice(1), { cwd: worktree, env, timeout: 30_000 });
+    if (stdout.trim() !== "pennyworth-permissions-ok") throw new Error("Missing sandbox probe result");
+  } catch {
+    throw new Error("Codex credential isolation preflight failed. Use a Codex version with permission profiles and remove legacy sandbox_mode settings that override default_permissions. No agent was started.");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** Wrap a command in the requested devshells: nix develop A --command nix develop B --command … */
@@ -28,6 +60,7 @@ export function inDevshells(flake, shells, argv) {
 }
 
 function sandboxConfig(cfg, worktree, stateRoots = []) {
+  if (cfg.sandbox?.credential_isolation === "permissions") return [...permissionProfile(cfg, worktree, stateRoots, cfg.sandbox?.network !== false, true), "-c", 'approval_policy="never"'];
   const roots = [worktree, ...stateRoots, ...(cfg.sandbox?.extra_writable_roots ?? []).map(expand)].filter((p) => existsSync(p) || p === worktree);
   return [
     "-c", 'sandbox_mode="workspace-write"',
@@ -100,7 +133,7 @@ export function privateReads(cfg) {
  * user's own credentials, or Pennyworth's sign-in that can reach the write roles (D-59).
  */
 function hiding(cfg, argv) {
-  if (cfg.sandbox?.credential_isolation === "permissions" && argv[0] === "codex" && argv[1] === "sandbox") return argv;
+  if (cfg.sandbox?.credential_isolation === "permissions") return argv;
   const dirs = [...(cfg.gcp?.hidden ?? []), ...(cfg.aws?.hidden ?? [])].filter((d) => existsSync(d));
   return dirs.length ? ["bwrap", "--dev-bind", "/", "/", ...dirs.flatMap((d) => ["--tmpfs", d]), "--die-with-parent", "--", ...argv] : argv;
 }
@@ -221,7 +254,7 @@ const userMessage = (text) => `${JSON.stringify({ type: "user", message: { role:
  * The agent's environment: no SSH agent (fetch only via the runner), read-only gh first on PATH,
  * and a git ssh wrapper that refuses pushes.
  */
-export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, logPath, signal, env: jobEnv = {}, gcp, aws, channel, onProgress }) {
+export async function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, logPath, signal, env: jobEnv = {}, gcp, aws, channel, onProgress }) {
   const lastMessageFile = `${logPath}.last.md`;
   const { argv, env, promptAsArg, streamInput } = buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp, aws });
   const full = inDevshells(cfg.devshells.flake, shells, promptAsArg ? [...argv, prompt] : argv);
@@ -249,6 +282,11 @@ export function runAgent({ cfg, engine, shells, worktree, prompt, sessionId, log
   agentEnv.GIT_ASKPASS = "false";
   if (engine.kind === "claude" && cfg.claudeAuth === "login") delete agentEnv.CLAUDE_CODE_OAUTH_TOKEN;
   if (engine.kind === "claude") delete agentEnv.ANTHROPIC_API_KEY; // the subscription token, never an API key
+
+  if (engine.kind === "codex" && cfg.sandbox?.credential_isolation === "permissions") {
+    await checkCodexPermissions({ cfg, worktree, stateRoots: gcp ? [gcp.root] : [], shells, env: agentEnv });
+  }
+  if (signal?.aborted) return { code: null, sessionId, lastMessage: "", timedOut: false, cancelled: true };
 
   return new Promise((resolve) => {
     const log = createWriteStream(logPath, { flags: "a" });
