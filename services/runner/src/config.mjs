@@ -32,6 +32,12 @@ export function loadConfig() {
   const secrets = expand(env.PENNYWORTH_SECRETS_DIR ?? "~/.config/pennyworth");
   const gcpCredentials = expand(cfg.gcp?.credentials ?? join(secrets, "gcloud/application_default_credentials.json"));
   const awsHome = expand(cfg.aws?.home ?? join(secrets, "aws"));
+  const awsAuth = cfg.aws?.auth ?? "sso";
+  if (!["sso", "iam"].includes(awsAuth)) throw new Error("aws.auth must be sso or iam");
+  if (awsAuth === "iam" && cfg.aws?.accounts?.some((a) => a.write_role)) throw new Error("AWS IAM authentication is read-only; remove write_role");
+  if (awsAuth === "iam" && cfg.aws?.accounts?.some((a) => !/^[\w-]+$/.test(a?.name ?? "") || !/^\d{12}$/.test(a?.id ?? "") || !a?.read_role || !/^[a-z0-9-]+$/.test(a?.region ?? cfg.aws.region ?? ""))) {
+    throw new Error("AWS IAM accounts require name, a quoted 12-digit id, region and read_role");
+  }
   return {
     ...cfg,
     file,
@@ -74,9 +80,10 @@ export function loadConfig() {
     // AWS for Claude Code and Codex jobs (D-59): Pennyworth's own Identity Center sign-in, in a home of
     // its own; read roles for jobs, write roles only for the `pennyworth aws` commands the user asks for.
     aws: {
+      auth: awsAuth,
       home: awsHome,
       sso: { startUrl: cfg.aws?.sso_start_url, region: cfg.aws?.sso_region },
-      accounts: (cfg.aws?.sso_start_url ? cfg.aws?.accounts ?? [] : [])
+      accounts: (awsAuth === "iam" || cfg.aws?.sso_start_url ? cfg.aws?.accounts ?? [] : [])
         .filter((a) => a?.name && a?.id)
         .map((a) => ({ name: String(a.name), id: String(a.id), region: a.region ?? cfg.aws.region ?? cfg.aws.sso_region, readRole: a.read_role, writeRole: a.write_role })),
       // Hidden from every job, like the gcloud sign-ins: the user's own AWS sign-in, and Pennyworth's.

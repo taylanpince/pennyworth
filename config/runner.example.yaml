@@ -55,8 +55,9 @@ gcp:
 # in to IAM Identity Center (again when its session ends) and lists the accounts and roles it reaches.
 # Each job gets one-hour credentials for every account's read_role (AWS refuses its writes); the
 # write_role is used only by the runner, for a `pennyworth aws` command the user's words ask for.
-# Leave sso_start_url empty to give jobs no AWS.
+# In the default SSO mode, leave sso_start_url empty to give jobs no AWS.
 aws:
+  auth: sso                         # default; optional iam for a dedicated read-only IAM user's keys
   sso_start_url: ""                   # e.g. https://d-0123456789.awsapps.com/start
   sso_region: ""                      # the Identity Center region, e.g. ca-central-1
   # home: ~/.config/pennyworth/aws    # Pennyworth's own AWS home (default), hidden from jobs
@@ -66,6 +67,10 @@ aws:
   #    region: ca-central-1           # default: sso_region
   #    read_role: ReadOnlyAccess      # an Identity Center permission set that can't change anything
   #    write_role: AdministratorAccess # optional: for `pennyworth aws` changes, on the user's word
+  # IAM mode needs no SSO settings. Set an account's region and read_role: ReadOnlyAccess,
+  # then run scripts/aws-auth.sh to enter its keys into Pennyworth's hidden AWS home.
+  # read_role documents the IAM user's policy; it does not assume a role or restrict its permissions.
+  # IAM mode does not support write_role. Jobs receive one-hour STS credentials, never the saved keys.
 
 # Reads plain-language requests (target repo, reference repos, mode, model) with a short Codex call.
 intake:

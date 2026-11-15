@@ -210,6 +210,12 @@ echo "$aws_session" | grep -q 'kind: "read"' && ! echo "$aws_session" | grep -q 
   && [ "$(grep -c 'kind: "write"' services/runner/src/aws.mjs)" = 1 ] && grep -q 'roleCredentials({ aws: cfg.aws, account, kind: "write", exec })' services/runner/src/aws.mjs \
   && pass "runner: AWS jobs get read-role credentials only; the write role is used by runAwsWrite alone (services/runner/src/aws.mjs)" || fail "runner: a job may get AWS write credentials"
 aws_tool="$(awk '/^async function agentAws/,/^}/' services/runner/src/main.mjs)"
+iam_auth="$(awk '/^async function iamCredentials/,/^}/' services/runner/src/aws.mjs)"
+echo "$iam_auth" | grep -q 'kind !== "read" || account.writeRole' \
+  && echo "$iam_auth" | grep -Fq 'identity?.Account !== account.id' \
+  && echo "$iam_auth" | grep -q '"get-session-token", "--duration-seconds", "3600"' \
+  && grep -q 'cfg.aws?.auth ?? "sso"' services/runner/src/config.mjs \
+  && pass "runner: IAM is opt-in, read-only, account-checked, and gives jobs one-hour session credentials" || fail "runner: optional IAM authentication lost a boundary"
 line_of() { echo "$aws_tool" | grep -n "$1" | head -1 | cut -d: -f1; }
 [ -n "$(line_of 'checkAwsCommand(argv)')" ] && [ "$(line_of 'checkAwsCommand(argv)')" -lt "$(line_of 'await allowWrite(ctx, "aws"')" ] && [ "$(line_of 'await allowWrite(ctx, "aws"')" -lt "$(line_of 'await runAwsWrite(')" ] \
   && echo "$aws_tool" | grep -q 'if (!observes(ctx.kind))' \

@@ -25,6 +25,7 @@ const profile = (account, kind) => `${account.name}.${kind}`;
 
 /** Pennyworth's ~/.aws/config: its SSO session, and a read and a write profile per account. */
 export function profilesConfig(aws) {
+  if (aws.auth === "iam") return aws.accounts.map((a) => configBlock(`[profile ${profile(a, "read")}]`, a).join("\n")).join("\n");
   const lines = ["# Written by Pennyworth's runner from config/runner.yaml (aws:); edits here are replaced.", `[sso-session ${SSO_SESSION}]`, `sso_start_url = ${aws.sso.startUrl}`, `sso_region = ${aws.sso.region}`, "sso_registration_scopes = sso:account:access", ""];
   for (const a of aws.accounts) {
     for (const kind of ["read", "write"]) {
@@ -56,6 +57,7 @@ const signedIn = (home) => existsSync(join(home, ".aws/sso/cache")) && readdirSy
  * { accessKeyId, secretAccessKey, sessionToken, expiresAt }.
  */
 export async function roleCredentials({ aws, account, kind, exec = runAws }) {
+  if (aws.auth === "iam") return iamCredentials({ aws, account, kind, exec });
   const role = kind === "read" ? account.readRole : account.writeRole;
   if (!role) throw new AwsAuthError(`${account.name} has no ${kind} role set in config/runner.yaml`, "refused");
   if (!signedIn(aws.home)) throw new AwsAuthError("AWS isn't signed in for Pennyworth (run scripts/aws-auth.sh)", "missing");
@@ -71,6 +73,31 @@ export async function roleCredentials({ aws, account, kind, exec = runAws }) {
   if (/ForbiddenException|No access|not authorized|AccessDenied/i.test(err)) throw new AwsAuthError(`AWS refused ${role} in ${account.name} (${account.id}): is that role assigned in Identity Center?`, "refused");
   if (/Could not connect|EndpointConnectionError|timed out|ENOTFOUND|ETIMEDOUT/i.test(err)) throw new AwsAuthError(`AWS couldn't be reached (${err})`, "unavailable");
   throw new AwsAuthError(`AWS refused the sign-in for ${account.name} (${err || `exit ${res.code}`}): run scripts/aws-auth.sh`);
+}
+
+// The long-lived read-only IAM key stays in the hidden AWS home. Jobs receive only
+// one-hour STS credentials. GetSessionToken preserves the IAM user's permissions;
+// read_role documents the required read-only policy, it does not assume a role.
+async function iamCredentials({ aws, account, kind, exec }) {
+  if (kind !== "read" || account.writeRole || !account.readRole) throw new AwsAuthError("AWS IAM authentication supports read-only accounts only", "refused");
+  const credentials = join(aws.home, ".aws/credentials");
+  if (!existsSync(credentials)) throw new AwsAuthError("AWS IAM keys are missing: run scripts/aws-auth.sh", "missing");
+  writeProfiles(aws);
+  const env = { PATH: process.env.PATH, HOME: aws.home, AWS_CONFIG_FILE: join(aws.home, ".aws/config"), AWS_SHARED_CREDENTIALS_FILE: credentials, AWS_EC2_METADATA_DISABLED: "true", AWS_PAGER: "" };
+  const call = async (args) => {
+    const res = await exec(["aws", "sts", ...args, "--profile", profile(account, "read"), "--region", account.region, "--output", "json"], { env, timeout: 30_000 });
+    // Do not echo CLI output: errors and malformed responses may contain credentials.
+    if (res.code !== 0) throw new AwsAuthError(`AWS IAM authentication failed for ${account.name}: check its keys with scripts/aws-auth.sh`, "unavailable");
+    try { return JSON.parse(res.stdout); } catch { throw new AwsAuthError("AWS IAM returned an invalid response", "unavailable"); }
+  };
+  const identity = await call(["get-caller-identity"]);
+  if (identity?.Account !== account.id || !new RegExp(`^arn:[^:]+:iam::${account.id}:user/`).test(identity?.Arn ?? "")) {
+    throw new AwsAuthError(`AWS IAM credentials must belong to an IAM user in account ${account.id}`, "refused");
+  }
+  const c = (await call(["get-session-token", "--duration-seconds", "3600"]))?.Credentials;
+  const expiresAt = Date.parse(c?.Expiration);
+  if (!c?.AccessKeyId || !c.SecretAccessKey || !c.SessionToken || !(expiresAt > Date.now())) throw new AwsAuthError("AWS IAM returned invalid temporary credentials", "unavailable");
+  return { accessKeyId: c.AccessKeyId, secretAccessKey: c.SecretAccessKey, sessionToken: c.SessionToken, expiresAt };
 }
 
 const credentialsBlock = (name, c) => [`[${name}]`, `aws_access_key_id = ${c.accessKeyId}`, `aws_secret_access_key = ${c.secretAccessKey}`, `aws_session_token = ${c.sessionToken}`, ""];
@@ -121,7 +148,7 @@ export async function awsSession({ aws, dir, log = () => {}, exec = runAws, refr
   return {
     state,
     detail: ok.length ? undefined : failed[0]?.err.message,
-    accounts: ok.map((r) => ({ name: r.a.name, id: r.a.id, region: r.a.region, writable: Boolean(r.a.writeRole) })),
+    accounts: ok.map((r) => ({ name: r.a.name, id: r.a.id, region: r.a.region, writable: Boolean(r.a.writeRole), ...(aws.auth === "iam" ? { iam: true } : {}) })),
     unavailable: ok.length ? failed.map((r) => ({ name: r.a.name, detail: r.err.message })) : [],
     writeRoles: [...new Set(ok.filter((r) => r.a.writeRole).map((r) => r.a.writeRole))],
     env: ok.length ? { AWS_CONFIG_FILE: config, AWS_SHARED_CREDENTIALS_FILE: credentials, AWS_EC2_METADATA_DISABLED: "true", AWS_PAGER: "" } : {},

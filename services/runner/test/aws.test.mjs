@@ -7,6 +7,7 @@ import { awsSession, checkAwsCommand, profilesConfig, roleCredentials, runAwsWri
 import { describeAction } from "../src/authorize.mjs";
 import { buildCommand } from "../src/engines.mjs";
 import { observeSection } from "../src/prompt.mjs";
+import { loadConfig } from "../src/config.mjs";
 
 const accounts = [
   { name: "prod-api", id: "111111111111", region: "ca-central-1", readRole: "ReadOnlyAccess", writeRole: "AdministratorAccess" },
@@ -41,6 +42,70 @@ function fakeAws(answers = {}) {
 }
 
 describe("AWS for Engineer jobs (D-59)", () => {
+  it("defaults to SSO and requires explicit IAM opt-in without write roles", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pw-aws-config-"));
+    writeFileSync(join(dir, "system.yaml"), 'paperclip:\n  company_id: "00000000-0000-4000-8000-000000000001"\n');
+    const old = process.env.PENNYWORTH_CONFIG_DIR;
+    process.env.PENNYWORTH_CONFIG_DIR = dir;
+    const configure = (aws) => {
+      writeFileSync(join(dir, "runner.yaml"), JSON.stringify({ aws, devshells: {} }));
+      return loadConfig().aws;
+    };
+    try {
+      const account = { name: "test", id: "123456789012", region: "ca-central-1", read_role: "ReadOnlyAccess" };
+      assert.equal(configure({}).auth, "sso");
+      assert.equal(configure({ accounts: [account] }).accounts.length, 0);
+      assert.equal(configure({ sso_start_url: "https://example.com", accounts: [account] }).accounts.length, 1);
+      const iam = configure({ auth: "iam", accounts: [account] });
+      assert.equal(iam.accounts[0].id, account.id);
+      assert.ok(iam.hidden.includes(iam.home));
+      assert.throws(() => configure({ auth: "typo" }), /aws.auth/);
+      assert.throws(() => configure({ auth: "iam", accounts: [{ ...account, region: "" }] }), /require name/);
+      assert.throws(() => configure({ auth: "iam", accounts: [{ ...account, write_role: "AdministratorAccess" }] }), /read-only/);
+    } finally {
+      if (old === undefined) delete process.env.PENNYWORTH_CONFIG_DIR;
+      else process.env.PENNYWORTH_CONFIG_DIR = old;
+    }
+  });
+
+  it("keeps IAM keys hidden, checks the user and account, and gives jobs temporary read credentials only", async () => {
+    const { dir, aws } = setup({ signedIn: false });
+    aws.auth = "iam";
+    aws.accounts = [{ ...accounts[1] }];
+    const account = aws.accounts[0];
+    await assert.rejects(roleCredentials({ aws, account, kind: "read" }), (e) => e.state === "missing");
+    mkdirSync(join(aws.home, ".aws"), { recursive: true });
+    writeFileSync(join(aws.home, ".aws/credentials"), "[prod-kms.read]\naws_access_key_id = long-lived\naws_secret_access_key = private\n");
+    const calls = [];
+    let identity = { Account: account.id, Arn: `arn:aws:iam::${account.id}:user/reader` };
+    const exec = async (argv, { env }) => {
+      calls.push(argv);
+      assert.equal(env.AWS_SHARED_CREDENTIALS_FILE, join(aws.home, ".aws/credentials"));
+      assert.equal(env.AWS_ACCESS_KEY_ID, undefined);
+      return { code: 0, stdout: JSON.stringify(argv.includes("get-caller-identity") ? identity : { Credentials: { AccessKeyId: "temporary", SecretAccessKey: "temporary-secret", SessionToken: "temporary-token", Expiration: new Date(Date.now() + 3600_000).toISOString() } }) };
+    };
+    const session = await awsSession({ aws, dir: join(dir, "job"), exec });
+    try {
+      assert.equal(session.state, "ok");
+      assert.equal(session.accounts[0].writable, false);
+      assert.deepEqual(session.writeRoles, []);
+      assert.match(observeSection("Taylan", { aws: session }), /dedicated read-only IAM user/);
+      const saved = readFileSync(session.env.AWS_SHARED_CREDENTIALS_FILE, "utf8");
+      assert.match(saved, /aws_access_key_id = temporary/);
+      assert.doesNotMatch(saved, /long-lived|private/);
+      assert.equal(statSync(session.env.AWS_SHARED_CREDENTIALS_FILE).mode & 0o777, 0o600);
+      assert.deepEqual(calls[1].slice(0, 5), ["aws", "sts", "get-session-token", "--duration-seconds", "3600"]);
+      assert.doesNotMatch(readFileSync(join(aws.home, ".aws/config"), "utf8"), /sso|undefined/);
+      await assert.rejects(roleCredentials({ aws, account, kind: "write", exec }), (e) => e.state === "refused");
+      for (identity of [{ Account: "wrong", Arn: "arn:aws:iam::wrong:user/reader" }, { Account: account.id, Arn: `arn:aws:iam::${account.id}:root` }]) {
+        await assert.rejects(roleCredentials({ aws, account, kind: "read", exec }), (e) => e.state === "refused");
+      }
+      await assert.rejects(roleCredentials({ aws, account, kind: "read", exec: async () => ({ code: 1, stderr: "private-key" }) }), (e) => e.state === "unavailable" && !e.message.includes("private-key"));
+      await assert.rejects(roleCredentials({ aws, account, kind: "read", exec: async () => ({ code: 0, stdout: "private-key" }) }), /invalid response/);
+    } finally { session.done(); }
+    assert.ok(!existsSync(join(dir, "job")));
+  });
+
   it("writes Pennyworth's profiles: one SSO session, a read and a write profile per account", () => {
     const { aws } = setup();
     const text = profilesConfig(aws);
