@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { FOR_OTHERS, RUNNER_MARKER, deliveredFrom, isAgentSubtask, isUserPart, ownRequest, findRepos, mentionedRepos, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveShells, stripHidden } from "./commands.mjs";
+import { FOR_OTHERS, RUNNER_MARKER, deliveredFrom, isAgentSubtask, isUserPart, ownRequest, findRepos, mentionedRepos, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, roleEngine, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { observes, runAgent } from "./engines.mjs";
 import { gcpSession } from "./gcp.mjs";
@@ -29,6 +29,8 @@ import { State } from "./state.mjs";
 import { REPLY_MARKER, fence, prSnapshot, stateSection, threadEntries, threadSection, transcript, wordsAround } from "./thread.mjs";
 import { authorize } from "./authorize.mjs";
 import { readBusy } from "./busy.mjs";
+import { boardMessage, formatSearch, memoryHash, memoryScope, recallMemory } from "./memory.mjs";
+import { engineKind, isRetry, jobUsage, usageFromEvents, usageFromLog } from "./usage.mjs";
 
 const execFileP = promisify(execFile);
 const cfg = loadConfig();
@@ -119,6 +121,51 @@ function reportActivity() {
       activityError = msg;
     },
   );
+}
+
+// ------------------------------------------------------------------ usage for the board's Stats view (D-62)
+
+/**
+ * Record what a finished job used, from its log. Claude Code and Codex report the session's running
+ * totals, so the job's share is measured from where the session's previous job left them
+ * (`session_cost:<session>` in the state). Never fails a job.
+ */
+async function recordUsage(jobId) {
+  try {
+    const job = state.job(jobId);
+    if (!job || job.usage_json) return;
+    const engine = engineKind(job.engine);
+    const previousSession = (id) => {
+      const saved = state.get(`session_cost:${id}`);
+      return saved ? JSON.parse(saved) : undefined;
+    };
+    const usage = (job.log_path ? (await usageFromLog(job.log_path, { engine, previousSession }))?.usage : undefined) ?? usageFromEvents([], { engine });
+    if (usage.sessionId && usage.sessionAfter) state.set(`session_cost:${usage.sessionId}`, JSON.stringify(usage.sessionAfter));
+    state.updateJob(jobId, { usage_json: JSON.stringify(usage) });
+  } catch (err) {
+    log("usage not recorded", { job: jobId, err: String(err.message ?? err).slice(0, 200) });
+  }
+}
+
+let usageSending = false;
+let usageError = "";
+/** Send the board every finished job it hasn't had, in batches of 200: at each job's end and every 5 minutes. */
+async function reportUsage() {
+  if (!boardApi || usageSending) return;
+  usageSending = true;
+  try {
+    for (let rows = state.unsentUsage(200); rows.length; rows = rows.length < 200 ? [] : state.unsentUsage(200)) {
+      await boardApi.post("/internal/runner/usage", { jobs: rows.map(jobUsage) });
+      state.markSent(rows.map((r) => r.id));
+    }
+    usageError = "";
+  } catch (err) {
+    const msg = String(err.message ?? err).slice(0, 200);
+    if (msg !== usageError) log("usage report failed", { err: msg });
+    usageError = msg;
+  } finally {
+    usageSending = false;
+  }
 }
 
 let progressReport;
@@ -595,7 +642,7 @@ async function syncPicker(issue, full, task, named) {
   const chosen = task.engine && ((named && (task.engine.kind !== picked.kind || task.engine.model)) || (!state.get(seenKey) && task.engine.kind !== picked.kind));
   let engine = picked;
   if (chosen) {
-    const fields = pickerFor({ ...task.engine, ...(task.engine.kind === picked.kind && picked.effort ? { effort: picked.effort } : {}) }, engineers);
+    const fields = pickerFor({ ...task.engine, ...(task.engine.kind === picked.kind && picked.effort ? { effort: picked.effort } : {}) }, engineers, full.assigneeAgentId);
     if (fields) {
       await pc.setPicker(issue.id, fields);
       engine = pickedEngine({ ...full, ...fields }, engineers, cfg);
@@ -718,7 +765,7 @@ async function agentEngine(ctx, args) {
   const kind = String(args.engine ?? "").trim().toLowerCase();
   if (!["claude", "codex", "openrouter"].includes(kind)) throw new UserError("Name the engine: claude, codex or openrouter, and optionally a model.");
   const engineers = await pc.engineerAgents();
-  if (!pickerFor({ kind }, engineers)) throw new UserError(`There's no ${kind} Engineer set up.`);
+  if (!pickerFor({ kind }, engineers, ctx.issue?.assigneeAgentId)) throw new UserError("There's no Engineer set up.");
   const raw = String(args.model ?? "").trim();
   let model;
   if (raw) {
@@ -762,6 +809,50 @@ async function agentPass(ctx, args) {
   log("message passed on", { issue: ctx.issue.identifier, to: res.to, part: res.part, passed: res.passed });
   if (!res.passed) return `Not passed on again: ${res.reason}.`;
   return `Passed on to ${res.to} (${res.part}), with ${cfg.selfName}'s words and this conversation for context. Say so in one line in your reply; don't do their part yourself.`;
+}
+
+// ------------------------------------------------------------------ memory (D-61)
+
+/** The user's latest comment on the task, which this run answers (a remember is checked against it). */
+const latestAsk = async (ctx) => (await pc.comments(ctx.issue.id)).filter((c) => Paperclip.isUserInstruction(c) && !parseCommand(c.body)).at(-1);
+
+/** Memory writes are the board's, for crew agents (with a persona); the scope is the assignee's, in code. */
+async function memoryWrite(ctx, path, body) {
+  if (!ctx.memoryScope) throw new UserError("Memory is only for crew agents with a name; this one has none.");
+  if (!boardApi) throw new UserError("Memory needs the board, which isn't set up here.");
+  const res = await boardApi.post(path, { scope: ctx.memoryScope, issue: ctx.issue.identifier, ...body }).catch((err) => {
+    throw new UserError(`Not kept: ${boardMessage(err)}`);
+  });
+  log("memory written", { issue: ctx.issue.identifier, action: path.split("/").pop(), memory: res.id, status: res.status, scope: res.scope });
+  return String(res.message ?? `#${res.id}: ${res.status}`);
+}
+
+/**
+ * `pennyworth remember <global|self|Name> <kind> <text>`: what the user asked to remember. The board
+ * checks the user's latest comment here asks for it; otherwise it waits as a proposal for them.
+ */
+async function agentRemember(ctx, args) {
+  // The user's latest comment; before any, the instructions they gave when adding the agent (its part's own id).
+  const asked = await latestAsk(ctx);
+  return memoryWrite(ctx, "/internal/memory/remember", { target: String(args.target ?? "self"), kind: String(args.kind ?? ""), text: String(args.text ?? ""), comment: asked?.id ?? ctx.issue.id });
+}
+
+/** `pennyworth propose <global|self|Name> <kind> <text> --why <reason>`: a memory for the user to accept on the board. */
+async function agentPropose(ctx, args) {
+  const asked = await latestAsk(ctx);
+  return memoryWrite(ctx, "/internal/memory/propose", { target: String(args.target ?? "self"), kind: String(args.kind ?? ""), text: String(args.text ?? ""), why: String(args.why ?? ""), ...(asked ? { comment: asked.id } : {}) });
+}
+
+/** `pennyworth memory <words>`: memories (the agent's and everyone's) and past tasks; private ones never for OpenRouter. */
+async function agentMemory(ctx, args) {
+  const query = String(args.query ?? "").trim().slice(0, 300);
+  if (!query) throw new UserError("Say what to look for: `pennyworth memory <words>`, or `pennyworth memory #<id>`.");
+  if (!boardApi) throw new UserError("Memory needs the board, which isn't set up here.");
+  const res = await boardApi.post("/internal/memory/search", { scope: ctx.memoryScope ?? null, query, engine: ctx.kind }).catch((err) => {
+    throw new UserError(`Memory isn't available: ${boardMessage(err)}`);
+  });
+  log("memory searched", { issue: ctx.issue.identifier, memories: res.memories?.length ?? 0, episodes: res.episodes?.length ?? 0 });
+  return formatSearch(res, cfg.selfName);
 }
 
 /** `pennyworth reset`: the next turn starts a fresh session (the conversation and the workspace stay). */
@@ -898,6 +989,7 @@ async function startJob({ issue, instructions }) {
   reportActivity();
   let jobId;
   let tools; // the run's `pennyworth` context: what it asked for after the run (merges, engine, reset, cleanup)
+  const retry = isRetry(instructions); // "try again" and the like, for the Stats view (D-62)
   try {
     const full = await pc.issue(issue.id);
     // Every repository the request, the task and the task it is part of (D-45) name joins the workspace
@@ -941,6 +1033,8 @@ async function startJob({ issue, instructions }) {
     // whole conversation on the task and the work already on its branches as context.
     const sessionEngine = state.get(`session_engine:${issue.id}`) || (String(task.session_id).startsWith("ses_") ? "openrouter" : "codex");
     const resumed = Boolean(state.task(issue.id).session_id && sessionEngine === engine.kind);
+    // Who ran it and how, for the Stats view (D-62): the role it was assigned to (D-60) and the picked engine.
+    state.updateJob(jobId, { agent_id: full.assigneeAgentId ?? null, model: engine.model ?? null, effort: engine.effort ?? null, resumed, restarted: !resumed && Boolean(state.get(`restarted:${issue.id}`)), retry });
     remember(issue.id, instructions);
     // The board shows the Engineer at work (D-45); the reply is the next comment.
     await pc.startWork(issue.id, "");
@@ -955,6 +1049,11 @@ async function startJob({ issue, instructions }) {
     const crewHash = crewCtx ? createHash("sha256").update(JSON.stringify(crewCtx)).digest("hex") : "";
     const crew = crewCtx && (!resumed || state.get(crewKey) !== crewHash) ? crewCtx : undefined;
     if (crewHash) state.set(crewKey, crewHash);
+    // What the agent learned in earlier tasks (D-61), for its own scope: on the first run, then again when it changed.
+    const memoryOf = memoryScope(await pc.agents().catch(() => []), full.assigneeAgentId);
+    const memoryText = await recallMemory(boardApi, { scope: memoryOf, engine: engine.kind, log: (m, f) => log(m, { issue: issue.identifier, ...f }) });
+    const memory = memoryText && (!resumed || state.get(`memory:${issue.id}`) !== memoryHash(memoryText)) ? memoryText : "";
+    if (memoryText) state.set(`memory:${issue.id}`, memoryHash(memoryText));
     // Private reads for Claude Code and Codex (D-48, D-51, D-57), and the Slack messages the task came from.
     const observe = observes(engine.kind)
       ? {
@@ -968,17 +1067,18 @@ async function startJob({ issue, instructions }) {
         }
       : undefined;
     const engineers = await pc.engineerAgents().catch(() => []);
-    const persona = personaFor(engine.kind, engineers);
+    const persona = personaFor(engineers.find((a) => a.id === full.assigneeAgentId)) ?? personaFor(engineers.find((a) => roleEngine(a)?.kind === engine.kind));
     // Comments while it works reach a session that takes them (Claude Code: stage 4 of the design).
     const channel = {};
     Object.assign(running.get(issue.id), { channel, who: persona?.name });
     // The conversation (all of it for a new session, what's new for a resumed one) and where the work stands.
     const { thread, stand, words } = await conversation(issue, workspace, { instructions, resumed, persona });
     const prompt = resumed
-      ? followUpPrompt({ user: cfg.selfName, instructions, workspace, repos, branches, files, primer, crew, observe, thread, stand })
-      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, shells: runShells, instructions, files, primer, persona, crew, observe, thread, stand, team: crewNames(engineers) });
+      ? followUpPrompt({ user: cfg.selfName, instructions, workspace, repos, branches, files, primer, crew, observe, thread, stand, memory })
+      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, shells: runShells, instructions, files, primer, persona, crew, observe, thread, stand, team: crewNames(await pc.agents().catch(() => engineers)), memory, restarted: Boolean(state.get(`restarted:${issue.id}`)) });
+    if (!resumed) state.set(`restarted:${issue.id}`, "");
     const tipsBefore = await branchTips(workspace);
-    tools = { issue, workspace, words, instructions, kind: engine.kind, who: persona?.name, signal: controller.signal };
+    tools = { issue, workspace, words, instructions, kind: engine.kind, who: persona?.name, memoryScope: memoryOf, signal: controller.signal };
     const helper = repoHelper.register(tools);
     let result;
     try {
@@ -989,6 +1089,11 @@ async function startJob({ issue, instructions }) {
     if (result.sessionId) {
       state.updateTask(issue.id, { session_id: result.sessionId });
       state.set(`session_engine:${issue.id}`, engine.kind);
+    }
+    if (result.context && cfg.freshSessionTokens > 0 && result.context > cfg.freshSessionTokens) {
+      state.updateTask(issue.id, { session_id: null });
+      state.set(`restarted:${issue.id}`, String(result.context));
+      log("session grew too long; the next turn starts afresh", { issue: issue.identifier, context: result.context });
     }
 
     if (result.cancelled) {
@@ -1037,9 +1142,11 @@ async function startJob({ issue, instructions }) {
     gcp?.done();
     aws?.done();
     running.delete(issue.id);
+    if (jobId) await recordUsage(jobId);
     await afterTurn(issue, tools).catch((err) => reportError(issue, err));
     drainQueue();
     reportActivity();
+    void reportUsage();
     void reportToParent(issue).catch((err) => log("parent summary failed", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 300) }));
   }
 }
@@ -1053,7 +1160,7 @@ async function afterTurn(issue, tools) {
   if (tools.reset || tools.engine) state.updateTask(issue.id, { session_id: null });
   if (tools.engine) {
     const engineers = await pc.engineerAgents();
-    const fields = pickerFor(tools.engine, engineers);
+    const fields = pickerFor(tools.engine, engineers, (await pc.issue(issue.id)).assigneeAgentId);
     if (fields) await pc.setPicker(issue.id, fields);
     state.updateTask(issue.id, { engine: tools.engine });
     state.set(`picker:${issue.id}`, new Date().toISOString());
@@ -1512,6 +1619,9 @@ const repoHelper = startRepoHelper(async ({ issue, workspace }, raw) => {
   cleanup: agentCleanup,
   task: agentTask,
   tasks: agentTasks,
+  remember: agentRemember,
+  propose: agentPropose,
+  memory: agentMemory,
 });
 
 /** Each repository in the workspace for the prompt; with `naming`, its branch naming rules and examples. */
@@ -1723,7 +1833,9 @@ async function reportError(issue, err) {
 // ------------------------------------------------------------------ main
 
 const interrupted = state.interruptStale();
-if (interrupted) log("marked interrupted jobs from a previous run", { interrupted });
+if (interrupted.length) log("marked interrupted jobs from a previous run", { interrupted: interrupted.length });
+// Their logs still say what they used (D-62).
+for (const job of interrupted) await recordUsage(job.id);
 log("runner started", { config: cfg.file, label: cfg.label, orgs: cfg.allowed_orgs, poll_seconds: cfg.poll_seconds });
 
 let stopping = false;
@@ -1748,3 +1860,6 @@ void loop();
 // The board's Agents view: on a timer, because a poll can take minutes (intake, GitHub checks).
 reportActivity();
 setInterval(reportActivity, 30_000);
+// The Stats view (D-62): anything the board hasn't had yet, including what failed to send before.
+void reportUsage();
+setInterval(reportUsage, 5 * 60_000);

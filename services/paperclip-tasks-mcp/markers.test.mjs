@@ -33,13 +33,14 @@ test("WhatsApp source markers create user tasks and deduplicate closed tasks", a
   const lines = createInterface({ input: child.stdout });
   t.after(() => { lines.close(); child.kill(); server.close(); server.closeAllConnections(); });
   let id = 0;
-  async function create(marker, related_markers = []) {
+  async function call(name, args) {
     const response = once(lines, "line");
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: ++id, method: "tools/call", params: {
-      name: "task_create", arguments: { title: "Pinned message", description: "Follow up", marker, related_markers, dedupe_closed: true },
+      name, arguments: args,
     } }) + "\n");
     return JSON.parse((await response)[0]).result;
   }
+  const create = (marker, related_markers = []) => call("task_create", { title: "Pinned message", description: "Follow up", marker, related_markers, dedupe_closed: true });
   for (const chat of ["123@g.us", "456@s.whatsapp.net", "789@lid"]) {
     const marker = `source:whatsapp:${chat}:ABC123`;
     const result = await create(marker, [marker]);
@@ -47,6 +48,9 @@ test("WhatsApp source markers create user tasks and deduplicate closed tasks", a
     const task = tasks.at(-1);
     assert.equal(task.assigneeUserId, "owner");
     assert.ok(task.description.includes(`<!-- source:${marker} -->`));
+    const known = await call("task_known", { markers: [marker] });
+    assert.equal(known.isError, undefined);
+    assert.equal(JSON.parse(known.content[0].text).results[0].known, true);
     task.status = "done";
     const replay = await create(marker);
     assert.equal(JSON.parse(replay.content[0].text).deduplicated, true);

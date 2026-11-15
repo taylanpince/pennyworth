@@ -10,13 +10,27 @@ export interface Label {
 
 export interface Assignee {
   key: string;
-  kind: "me" | "assistant" | "engineer";
+  kind: "me" | "assistant" | "agent" | "engineer";
   name: string;
-  engine?: "codex" | "claude" | "openrouter";
+  /** What the crew member takes on, in one line (D-60). */
+  role?: string;
+  /** The role's own engine, and the engines the picker offers (D-60). */
+  engine?: Engine;
+  engines?: Engine[];
   defaultModel?: string;
+  defaultEffort?: string;
   efforts?: string[];
   /** The crew member's name, voice and portrait (D-45). */
   persona?: Persona;
+}
+
+export type Engine = "codex" | "claude" | "openrouter";
+
+/** The engine, model and effort a crew member runs a task with, when not its role's own (D-60). */
+export interface Executor {
+  engine?: Engine;
+  model?: string;
+  effort?: string;
 }
 
 export interface Persona {
@@ -33,7 +47,7 @@ export interface Card {
   priority: string;
   labels: { name: string; color: string }[];
   assignee: string | null;
-  executor?: { model?: string; effort?: string };
+  executor?: Executor;
   unread: boolean;
   createdAt: string;
   activityAt: string;
@@ -235,7 +249,9 @@ export interface FileView {
 }
 
 export interface Models {
+  engine: Engine;
   default: string | null;
+  defaultEffort: string | null;
   models: string[];
   efforts: string[];
 }
@@ -246,7 +262,168 @@ export interface Update {
   status?: "todo" | "in_progress" | "done" | "cancelled";
   priority?: "critical" | "high" | "medium" | "low";
   assignee?: string;
+  engine?: Engine;
   model?: string;
   effort?: string;
   labelIds?: string[];
+}
+
+// ---------------------------------------------------------------- memory (D-61)
+
+export type MemoryKind = "rule" | "fact" | "lesson" | "playbook";
+export type MemoryStatus = "active" | "proposed" | "rejected" | "archived";
+
+export interface Memory {
+  id: number;
+  scope: string;
+  kind: MemoryKind;
+  text: string;
+  status: MemoryStatus;
+  pinned: boolean;
+  sensitive: boolean;
+  origin: "remember" | "proposal" | "board";
+  createdBy: string | null;
+  why: string | null;
+  sourceIssue: string | null;
+  sourceComment: string | null;
+  createdAt: string;
+  updatedAt: string;
+  decidedAt: string | null;
+  lastUsedAt: string | null;
+  uses: number;
+}
+
+/** "global" (everyone) or a crew member's scope, with its portrait. */
+export interface MemoryScope {
+  scope: string;
+  name: string;
+  avatar: string | null;
+  agentId: string | null;
+}
+
+export interface MemoryBudget {
+  used: number;
+  budget: number;
+  included: number[];
+  omitted: number[];
+}
+
+export interface MemoryList {
+  memories: Memory[];
+  scopes: MemoryScope[];
+  budgets: Record<string, MemoryBudget>;
+  pending: number;
+}
+
+export interface Episode {
+  issueId: string;
+  identifier: string;
+  title: string;
+  scope: string;
+  summary: string;
+  links: string[];
+  closedAt: string;
+}
+
+export interface MemoryPatch {
+  text?: string;
+  kind?: MemoryKind;
+  scope?: string;
+  pinned?: boolean;
+  sensitive?: boolean;
+  status?: MemoryStatus;
+}
+
+// ------------------------------------------------------------- stats (D-62)
+
+export type StatsRange = "7d" | "30d" | "90d";
+export interface StatsDelta {
+  cur: number;
+  prev: number;
+}
+export interface TokenSeries {
+  key: string;
+  name: string;
+  uncached: number[];
+  cached: number[];
+  output: number[];
+  total: number;
+}
+
+/** GET /api/stats: everything the Stats view shows, computed on the board (statsmath.ts). */
+export interface Stats {
+  range: StatsRange;
+  granularity: "day" | "week";
+  generatedAt: string;
+  period: { from: string; to: string; prevFrom: string; prevTo: string };
+  coverage: { runsSyncedAt: string | null; tasksSyncedAt: string | null; jobsReportedAt: string | null; runsSince: string | null; jobsSince: string | null; hasJobs: boolean };
+  headline: {
+    tokens: StatsDelta;
+    cachedShare: StatsDelta;
+    costUsd: StatsDelta;
+    unpricedJobs: number;
+    runs: StatsDelta;
+    jobs: StatsDelta;
+    tasksCreated: StatsDelta;
+    tasksClosed: StatsDelta;
+    proposalsWaiting: number;
+  };
+  tokensDaily: {
+    days: string[];
+    groups: TokenSeries[];
+    agents: { agentId: string | null; name: string; group: string; uncached: number; cached: number; output: number; runs: number; jobs: number; total: number }[];
+  };
+  modelPreference: {
+    executors: string[];
+    buckets: string[];
+    shares: { bucket: string; counts: Record<string, number> }[];
+    roles: { agentId: string | null; name: string; avatar: string | null; defaultExecutor: string | null; jobs: number; executors: { key: string; jobs: number }[]; tasks: number; nonDefaultJobs: number; nonDefaultTasks: number }[];
+  };
+  roles: {
+    agentId: string;
+    name: string;
+    avatar: string | null;
+    kind: "runner" | "paperclip";
+    tasks: number;
+    jobs: number;
+    jobsPerTask: number | null;
+    medianMinutes: number | null;
+    costUsd: number | null;
+    costPerTask: number | null;
+    medianContext: number | null;
+    maxContext: number | null;
+    restarted: number | null;
+    retries: number | null;
+    tokens: number;
+  }[];
+  topTasks: { identifier: string; parent: string | null; title: string | null; costUsd: number; jobs: number; peakContext: number; agent: string | null; avatar: string | null }[];
+  taskFlow: {
+    buckets: string[];
+    sources: string[];
+    created: { bucket: string; bySource: Record<string, number | undefined> }[];
+    closed: number[];
+    timeToClose: { source: string; created: number; done: number; medianHours: number | null; p90Hours: number | null }[];
+    scoutYield: { agentId: string; name: string; runs: number; tasks: number; perHundredRuns: number | null }[];
+  };
+  reliability: {
+    agents: { agentId: string; name: string; avatar: string | null; runs: number; failed: number; cancelled: number; rate: number; errors: { label: string; count: number }[] }[];
+    runs: { total: number; failed: number; cancelled: number; retried: number };
+    topErrors: { label: string; count: number }[];
+    runner: { jobs: number; finished: number; failed: number; cancelled: number; rate: number; byStatus: Record<string, number>; retries: number; retryShare: number };
+  };
+  tools: { buckets: string[]; mcp: { server: string; total: number; jobs: number; counts: number[] }[]; builtin: { tool: string; count: number }[] };
+  memory: {
+    proposed: StatsDelta;
+    accepted: StatsDelta;
+    rejected: StatsDelta;
+    remembered: StatsDelta;
+    waiting: number;
+    stale: number;
+    scopes: { scope: string; name: string; avatar: string | null; active: number; proposals: number; used: number; budget: number; omitted: number }[];
+  };
+}
+
+export interface Sparklines {
+  weeks: string[];
+  agents: Record<string, number[]>;
 }

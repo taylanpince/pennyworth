@@ -2,6 +2,7 @@
 // reports to the internal API (the runner works outside Paperclip, on the host).
 import { z } from "zod";
 import type { Agent, Issue, LiveRun, PastRun } from "./paperclip.js";
+import { isRole } from "./board.js";
 
 const UUID = /^[0-9a-f-]{36}$/;
 const IDENT = /^[A-Z][A-Z0-9]{1,9}-\d{1,7}$/;
@@ -140,8 +141,14 @@ export async function agentsView(input: {
   const runner = input.runner;
   const fresh = runner && now - Date.parse(runner.at) < RUNNER_STALE_MS ? runner : undefined;
   const ref = (j: { identifier: string }) => ({ run: { identifier: j.identifier }, tasks: [{ identifier: j.identifier }] });
+  // A job is its task's role's (D-60): the assignee, else (a task since reassigned) the Engineer for its engine.
+  const jobAgent = async (j: RunnerJob) => {
+    const agentId = (await input.resolve(j.issueId).catch(() => undefined))?.assigneeAgentId ?? engineerOf(j.engine, input.agents);
+    const who = agentId ? input.agents.find((a) => a.id === agentId)?.name : undefined;
+    return { agentId, agent: who ? (j.engine ? `${who} · ${j.engine}` : who) : engineerName(j) };
+  };
   for (const j of fresh?.running ?? []) {
-    sessions.push({ id: `runner:${j.issueId}`, source: "runner", agent: engineerName(j), agentId: engineerOf(j.engine, input.agents), state: "working", startedAt: j.startedAt, doing: jobDoing(j), said: j.said, saidAt: j.saidAt, plan: j.plan, ...ref(j) });
+    sessions.push({ id: `runner:${j.issueId}`, source: "runner", ...(await jobAgent(j)), state: "working", startedAt: j.startedAt, doing: jobDoing(j), said: j.said, saidAt: j.saidAt, plan: j.plan, ...ref(j) });
   }
   for (const j of fresh?.queued ?? []) {
     const agentId = (await input.resolve(j.issueId)).assigneeAgentId ?? null;
@@ -156,7 +163,7 @@ export async function agentsView(input: {
   }
   for (const j of runner?.recent ?? []) {
     if (!j.finishedAt || now - Date.parse(j.finishedAt) > FINISHED_WINDOW_MS) continue;
-    finished.push({ id: `runner:${j.issueId}:${j.startedAt}`, source: "runner", agent: engineerName(j), agentId: engineerOf(j.engine, input.agents), status: j.status ?? "finished", startedAt: j.startedAt, finishedAt: j.finishedAt, detail: jobDoing(j), ...ref(j) });
+    finished.push({ id: `runner:${j.issueId}:${j.startedAt}`, source: "runner", ...(await jobAgent(j)), status: j.status ?? "finished", startedAt: j.startedAt, finishedAt: j.finishedAt, detail: jobDoing(j), ...ref(j) });
   }
   finished.sort((a, b) => String(b.finishedAt).localeCompare(String(a.finishedAt)));
   return { sessions, finished: finished.slice(0, 25), runner: { reportedAt: runner?.at ?? null, stale: !fresh } };
@@ -187,7 +194,7 @@ export function workingOn(sessions: Session[]): Map<string, Working> {
 const LABEL_ADAPTER: [RegExp, string][] = [[/^Codex\b/, "codex_local"], [/^Claude Code\b/, "claude_local"], [/^OpenRouter\b/, "opencode_local"]];
 function engineerOf(label: string | undefined, agents: Agent[]): string | null {
   const adapter = LABEL_ADAPTER.find(([re]) => re.test(label ?? ""))?.[1];
-  const agent = adapter && agents.find((a) => a.adapterType === adapter && /^pennyworth:engineer(-|$)/.test(a.metadata?.setupKey ?? "") && a.status !== "terminated");
+  const agent = adapter && agents.find((a) => a.adapterType === adapter && isRole(a) && a.status !== "terminated");
   return agent ? agent.id : null;
 }
 

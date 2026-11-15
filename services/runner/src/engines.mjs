@@ -157,6 +157,9 @@ function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp,
     const base = sessionId ? ["codex", "exec", "resume", sessionId] : ["codex", "exec"];
     // The workspace holds several clones and isn't a git repository itself (D-41).
     const args = [...base, "--json", "--skip-git-repo-check", "-o", lastMessageFile, ...sandboxConfig(cfg, worktree, gcpRoots)];
+    // A login shell (`bash -lc`) reruns NixOS's /etc/profile, which resets PATH: `pennyworth` and the
+    // devshell's tools were "command not found" in every Codex job (PEN-4506).
+    args.push("-c", "allow_login_shell=false");
     if (p) {
       args.push(
         "-c", `mcp_servers.primer.url=${JSON.stringify(p.url)}`,
@@ -294,6 +297,9 @@ export async function runAgent({ cfg, engine, shells, worktree, prompt, sessionI
     const child = spawn(full[0], full.slice(1), { cwd: worktree, env: agentEnv, detached: true, stdio: ["pipe", "pipe", "pipe"] });
     let found = sessionId;
     let finalText = "";
+    // How much context the session carries now (Claude Code: the last request's input), so a session
+    // that has grown too long can start afresh next turn.
+    let context = 0;
     // Streamed input: the session ends once every message sent has been taken in and answered. A
     // message that arrives as a turn ends gets a turn of its own; its answer joins the reply.
     let sent = 0;
@@ -315,6 +321,10 @@ export async function runAgent({ cfg, engine, shells, worktree, prompt, sessionI
         if (e.type === "text" && e.part?.text) finalText = e.part.text; // opencode: keep last text part
         if (e.type === "system" && e.subtype === "init" && e.session_id && !found) found = e.session_id; // claude
         if (streamInput && e.type === "user" && e.isReplay) taken++;
+        if (e.type === "result" && e.usage) {
+          const last = Array.isArray(e.usage.iterations) && e.usage.iterations.length ? e.usage.iterations.at(-1) : undefined;
+          if (last) context = (last.input_tokens ?? 0) + (last.cache_read_input_tokens ?? 0) + (last.cache_creation_input_tokens ?? 0);
+        }
         if (e.type === "result" && typeof e.result === "string") {
           // claude: the answer of a turn
           answers.push(e.result);
@@ -383,7 +393,7 @@ export async function runAgent({ cfg, engine, shells, worktree, prompt, sessionI
       let lastMessage = existsSync(lastMessageFile) ? readFileSync(lastMessageFile, "utf8").trim() : finalText.trim();
       if (!lastMessage && engine.kind !== "codex") lastMessage = finalText.trim();
       if (lastMessage) writeFileSync(lastMessageFile, lastMessage);
-      resolve({ code, sessionId: found, lastMessage, timedOut, cancelled });
+      resolve({ code, sessionId: found, lastMessage, timedOut, cancelled, context });
     });
   });
 }

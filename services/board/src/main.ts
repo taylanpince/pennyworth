@@ -6,6 +6,7 @@ import { loadConfig } from "./config.js";
 import { ClickHouseAuth, GleanAuth, GrafanaAuth } from "./mcpauth.js";
 import { GoogleAuth } from "./google.js";
 import { Paperclip } from "./paperclip.js";
+import { startStatsSync } from "./statssync.js";
 import { TelegramAuth } from "./telegram.js";
 import { weekdayOf } from "./recurrence.js";
 import { Store, localDate } from "./store.js";
@@ -30,6 +31,9 @@ function rollover() {
 rollover();
 setInterval(rollover, 60_000).unref();
 
+// Stats (D-62): Paperclip's agent runs every 5 minutes and task facts hourly, into board.sqlite.
+const stopStats = process.env.BOARD_STATS_SYNC === "off" ? () => {} : startStatsSync({ pc: paperclip, stats: store.stats, log });
+
 const google = cfg.google && new GoogleAuth(cfg.google.url, cfg.google.token, log);
 const slackAuth = cfg.slackAuth && new SlackAuth(cfg.slackAuth.url, cfg.slackAuth.token);
 const whatsapp = cfg.whatsapp && new WhatsAppAuth(cfg.whatsapp.url, cfg.whatsapp.token);
@@ -50,6 +54,7 @@ if (internal && cfg.internal) internal.listen(cfg.internal.port, "0.0.0.0", () =
 
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.on(sig, () => {
+    stopStats();
     server.close();
     lan?.close();
     internal?.close();

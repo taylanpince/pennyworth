@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { RUNNER_MARKER } from "./commands.mjs";
+import { RUNNER_MARKER, isRole } from "./commands.mjs";
 
 /** Paperclip REST client acting as the user (board API key). */
 export class Paperclip {
@@ -41,7 +41,7 @@ export class Paperclip {
    */
   async engineerAgents() {
     const agents = await this.agents();
-    const list = agents.filter((x) => /^pennyworth:engineer(-|$)/.test(x.metadata?.setupKey ?? ""));
+    const list = agents.filter(isRole);
     return list.length ? list : agents.filter((x) => x.name === "Engineer");
   }
 

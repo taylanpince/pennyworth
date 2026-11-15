@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { Avatar, Chips, CloseIcon, CrewAvatar, MergeMenu, MoveMenu, Plan, SnoozeMenu, memberIssue } from "./components";
+import { Avatar, Chips, CloseIcon, CrewAvatar, ExecutorPicker, MergeMenu, MoveMenu, Plan, SnoozeMenu, memberIssue } from "./components";
 import { Markdown } from "./markdown";
-import { BUCKETS, BUCKET_NAMES, WEEKDAYS, type Assignee, type Board, type Bucket, type Cadence, type CommentView, type CrewState, type IssueView, type Label, type Models, type Update, type Weekday } from "./types";
-import { PRIORITIES, PRIORITY_NAMES, ago, elapsed, runTime, shortName, todayIn, when } from "./util";
+import { BUCKETS, BUCKET_NAMES, WEEKDAYS, type Assignee, type Board, type Bucket, type Cadence, type CommentView, type CrewState, type Executor, type IssueView, type Label, type Update, type Weekday } from "./types";
+import { PRIORITIES, PRIORITY_NAMES, ago, elapsed, executorLabel, roleLine, roleTitle, runTime, shortName, todayIn, when } from "./util";
 
 interface Props {
   refId: string;
@@ -364,7 +364,6 @@ function Overview({ issue, board, editable, update, reload, toast, pick, onAdd, 
 }
 
 const STATE_PILLS: Record<CrewState, string> = { needs: "needs you", failed: "stuck", proposed: "proposed", working: "working", queued: "queued", done: "done" };
-const ENGINE_NAMES: Record<string, string> = { codex: "Codex", claude: "Claude Code", openrouter: "OpenRouter" };
 
 /** One agent's part of the task: who they are, where they stand, and a direct chat with them. */
 function AgentPane({ task, member, focus, board, reload, onChanged, toast, moved }: { task: IssueView; member: Member; focus?: string; board: Board; reload: () => Promise<void>; onChanged: () => void; toast: Props["toast"]; moved: (identifier: string) => void }) {
@@ -404,7 +403,7 @@ function AgentPane({ task, member, focus, board, reload, onChanged, toast, moved
   const fan = member.issues.length > 1;
   // "Hand to Ada": the careful one, unless it's Ada who got stuck.
   const engineers = board.assignees.filter((a) => a.kind === "engineer" && a.key !== member.agent);
-  const next = engineers.find((a) => a.engine === "claude") ?? engineers[0];
+  const next = engineers[0];
 
   async function act(run: () => Promise<unknown>, note: string) {
     setBusy(true);
@@ -429,7 +428,9 @@ function AgentPane({ task, member, focus, board, reload, onChanged, toast, moved
             <div className="agent-name">
               {name} <span className={`pill pill-${state}`}>{STATE_PILLS[state]}</span>
             </div>
-            <div className="muted small">{agent?.kind === "assistant" ? "Assistant · research and drafts" : `Engineer · ${ENGINE_NAMES[agent?.engine ?? ""] ?? agent?.name}`}</div>
+            <div className="muted small">
+              <b>{roleTitle(agent)}</b> · {roleLine(agent)}
+            </div>
             {agent?.persona?.voice && <div className="agent-voice">{agent.persona.voice}</div>}
           </div>
         </div>
@@ -482,7 +483,7 @@ function AgentPane({ task, member, focus, board, reload, onChanged, toast, moved
             )}
           </div>
         )}
-        {part && agent?.kind === "engineer" && <ModelLine part={part} agent={agent} toast={toast} reload={self ? reload : load} />}
+        {part && agent?.engine && <ModelLine part={part} agent={agent} toast={toast} reload={self ? reload : load} />}
         {part && !self && part.description && (
           <details className="instructions" open={!part.comments.length}>
             <summary>Instructions</summary>
@@ -515,10 +516,10 @@ function AgentPane({ task, member, focus, board, reload, onChanged, toast, moved
   );
 }
 
-/** An Engineer's model and effort for this part, out of the way until needed (D-20). */
+/** The engine, model and effort this part runs with, out of the way until needed (D-20, D-60). */
 function ModelLine({ part, agent, toast, reload }: { part: IssueView; agent: Assignee; toast: Props["toast"]; reload: () => Promise<void> }) {
   const [open, setOpen] = useState(false);
-  const label = [part.executor?.model ?? agent.defaultModel?.replace(/^openrouter\//, "") ?? "default model", part.executor?.effort && `${part.executor.effort} effort`].filter(Boolean).join(" · ");
+  const label = executorLabel(agent, part.executor);
   const update = async (u: Update) => {
     try {
       await api.update(part.id, u);
@@ -547,13 +548,15 @@ function AddAgent({ issue, board, onCancel, onAdded, toast }: { issue: IssueView
   const crew = board.assignees.filter((a) => a.kind !== "me");
   const present = new Set(issue.crew.map((m) => m.agent));
   const [pick, setPick] = useState<string | null>(null);
+  const [executor, setExecutor] = useState<Executor>({});
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const chosen = crew.find((a) => a.key === pick);
   async function assign() {
     if (!pick || !text.trim()) return;
     setBusy(true);
     try {
-      onAdded(await api.addAgent(issue.id, pick, text.trim()), pick);
+      onAdded(await api.addAgent(issue.id, pick, text.trim(), executor), pick);
     } catch (e) {
       toast(`Couldn't add: ${(e as Error).message}`);
     } finally {
@@ -563,7 +566,8 @@ function AddAgent({ issue, board, onCancel, onAdded, toast }: { issue: IssueView
   return (
     <div className="add-agent">
       <h3>Add someone to this task</h3>
-      <CrewPicker crew={crew} present={present} pick={pick} setPick={setPick} />
+      <CrewPicker crew={crew} present={present} pick={pick} setPick={(k) => (setPick(k), setExecutor({}))} />
+      {chosen && <ExecutorPicker assignee={chosen} value={executor} onChange={setExecutor} />}
       <textarea
         autoFocus
         value={text}
@@ -586,9 +590,11 @@ function AddAgent({ issue, board, onCancel, onAdded, toast }: { issue: IssueView
   );
 }
 
-/** The crew as big portraits to pick from; someone already on the task can't be picked twice. */
+/** The crew as big portraits to pick from, by role (D-60); someone already on the task can't be picked twice. */
 export function CrewPicker({ crew, present, pick, setPick, me }: { crew: Assignee[]; present?: Set<string>; pick: string | null; setPick: (k: string | null) => void; me?: boolean }) {
+  const picked = crew.find((a) => a.key === pick);
   return (
+    <>
     <div className="crew-picker">
       {me && (
         <button type="button" className={`pick${!pick ? " on" : ""}`} onClick={() => setPick(null)}>
@@ -598,13 +604,19 @@ export function CrewPicker({ crew, present, pick, setPick, me }: { crew: Assigne
         </button>
       )}
       {crew.map((a) => (
-        <button key={a.key} type="button" className={`pick${pick === a.key ? " on" : ""}`} disabled={present?.has(a.key)} onClick={() => setPick(a.key)}>
+        <button key={a.key} type="button" className={`pick${pick === a.key ? " on" : ""}`} disabled={present?.has(a.key)} title={roleLine(a)} onClick={() => setPick(a.key)}>
           <Avatar assignee={a} size={40} />
           <b>{shortName(a)}</b>
-          <span>{present?.has(a.key) ? "already on it" : a.kind === "assistant" ? "Assistant" : `Engineer · ${ENGINE_NAMES[a.engine ?? ""] ?? ""}`}</span>
+          <span>{present?.has(a.key) ? "already on it" : roleTitle(a)}</span>
         </button>
       ))}
     </div>
+    {picked && (
+      <p className="role-hint">
+        <b>{shortName(picked)}</b> · {roleLine(picked)}
+      </p>
+    )}
+    </>
   );
 }
 
@@ -699,7 +711,7 @@ function preview(md: string): string {
 }
 
 function assigneeNote(a: Assignee | undefined): string | undefined {
-  if (a?.kind === "assistant") return "Assigned to the Assistant: it starts on this now.";
+  if (a?.kind === "assistant" || a?.kind === "agent") return `Assigned to ${shortName(a)}: ${a.persona?.name ? "they start" : "it starts"} on this now.`;
   if (a?.kind === "engineer") return `Assigned to ${a.name}. The runner starts if you wrote this task; otherwise tell it what to do.`;
   return undefined;
 }
@@ -750,54 +762,14 @@ function Title({ issue, editable, save }: { issue: IssueView; editable: boolean;
 }
 
 function Executor({ issue, assignee, disabled, update }: { issue: IssueView; assignee: Assignee; disabled: boolean; update: (u: Update) => Promise<void> }) {
-  const [models, setModels] = useState<Models | null>(null);
-  const [model, setModel] = useState(issue.executor?.model ?? "");
-  useEffect(() => setModel(issue.executor?.model ?? ""), [issue.executor?.model]);
-  useEffect(() => {
-    let live = true;
-    api.models(assignee.key).then((m) => live && setModels(m), () => {});
-    return () => {
-      live = false;
-    };
-  }, [assignee.key]);
-  const listId = `models-${assignee.key}`;
-  const commit = () => {
-    if (model.trim() !== (issue.executor?.model ?? "")) void update({ model: model.trim() });
-  };
+  const value = issue.executor ?? {};
   return (
-    <>
-      <div className="prop-name">Model</div>
-      <div className="prop-value">
-        <input
-          list={listId}
-          disabled={disabled}
-          value={model}
-          placeholder={`Default${assignee.defaultModel ? ` (${assignee.defaultModel.replace(/^openrouter\//, "")})` : ""}`}
-          onChange={(e) => setModel(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-        />
-        <datalist id={listId}>
-          {models?.models.map((m) => (
-            <option key={m} value={m} />
-          ))}
-        </datalist>
-      </div>
-      {(assignee.efforts?.length ?? 0) > 0 && (
-        <>
-          <div className="prop-name">Effort</div>
-          <div className="prop-value">
-            <div className="seg">
-              {["", ...(assignee.efforts ?? [])].map((e) => (
-                <button key={e || "default"} disabled={disabled} className={(issue.executor?.effort ?? "") === e ? "on" : ""} onClick={() => void update({ effort: e })}>
-                  {e || "Default"}
-                </button>
-              ))}
-            </div>
-          </div>
-        </>
-      )}
-    </>
+    <ExecutorPicker
+      assignee={assignee}
+      value={value}
+      disabled={disabled}
+      onChange={(x) => void update({ engine: x.engine ?? assignee.engine, model: x.model ?? "", effort: x.effort ?? "" })}
+    />
   );
 }
 

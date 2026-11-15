@@ -24,6 +24,11 @@ ops-mcp decides matches, routing and all Obsidian writes; there is no tool for a
 
 type Json = Record<string, unknown> | unknown[];
 
+// Agents ask for more results than a search returns (obsidian_search failed 67 times on limit > 50):
+// a larger limit is read as the most there is, not refused.
+const MAX_SEARCH_LIMIT = 50;
+const searchLimit = z.number().int().min(1).describe(`at most ${MAX_SEARCH_LIMIT}; a larger number is read as ${MAX_SEARCH_LIMIT}`);
+
 function ok(data: Json) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
@@ -187,10 +192,10 @@ export function buildServer(deps: ToolDeps): McpServer {
     {
       title: "Search notes",
       description: "Literal, case-insensitive search over note names and contents in the allowed vault folders.",
-      inputSchema: { query: z.string().min(2).max(200), limit: z.number().int().min(1).max(50).default(20) },
+      inputSchema: { query: z.string().min(2).max(200), limit: searchLimit.default(20) },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    wrap("obsidian_search", (a: { query: string; limit: number }) => vault.search(a.query, a.limit)),
+    wrap("obsidian_search", (a: { query: string; limit: number }) => vault.search(a.query, Math.min(a.limit, MAX_SEARCH_LIMIT))),
   );
 
   server.registerTool(
@@ -272,10 +277,12 @@ export function buildServer(deps: ToolDeps): McpServer {
     {
       title: "Search knowledge bases",
       description: "Case-insensitive search for documents containing every word of the query, ranked by matches. Omit base to search all bases.",
-      inputSchema: { query: z.string().min(2).max(200), base: z.string().min(1).max(64).optional(), limit: z.number().int().min(1).max(50).optional() },
+      inputSchema: { query: z.string().min(2).max(200), base: z.string().min(1).max(64).optional(), limit: searchLimit.optional() },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    wrap("knowledge_search", (a: { query: string; base?: string; limit?: number }) => knowledge.search(a.query, a.base, a.limit)),
+    wrap("knowledge_search", (a: { query: string; base?: string; limit?: number }) =>
+      knowledge.search(a.query, a.base, a.limit === undefined ? undefined : Math.min(a.limit, MAX_SEARCH_LIMIT)),
+    ),
   );
 
   server.registerTool(

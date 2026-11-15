@@ -115,9 +115,16 @@ safety against temporary fixture data.
 ### Claude CLI engineer
 
 The optional Claude engineer uses the host's Claude CLI through the runner. Set
-its `model` and `reasoning_effort` in `paperclip.yaml`; provisioning preserves
+its `engine: claude`, `model` and `effort` in `paperclip.yaml`; provisioning preserves
 those defaults in the task executor picker. Personal names and choices belong
 in the instance configuration.
+
+When updating to role-based crew settings (D-60), move each agent's `models`
+list to the top-level `engines.<engine>.models` catalog. The older
+`reasoning_effort` field remains accepted for runner agents; `effort` takes
+precedence. Review `config/paperclip.example.yaml` for the new roles and memory
+tools before running setup against an existing instance. Keep personal tool
+allowlists and disabled integrations when updating its private configuration.
 
 The default authentication remains `engines.claude.auth: token`, reading the
 configured `token_file`. To use a native CLI subscription login with refresh,

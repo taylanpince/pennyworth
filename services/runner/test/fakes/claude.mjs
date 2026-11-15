@@ -4,7 +4,7 @@
 // that arrive while it works are taken in and answered in the same turn; later ones get a turn each.
 // It exits when stdin closes, like the real one.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { log } from "./lib.mjs";
@@ -33,6 +33,17 @@ await next();
 const prompt = take();
 log("claude", { argv: process.argv.slice(2), prompt });
 out({ type: "system", subtype: "init", session_id: "session-1" });
+// Usage like the real one's: each result carries the session's running totals (cost, modelUsage),
+// which a resumed session carries on from (D-62). Every result adds $0.25 and fixed tokens.
+const totalsFile = join(dirname(process.env.FAKE_LOG), "claude-totals.json");
+let totals = process.argv.includes("--resume") && existsSync(totalsFile) ? JSON.parse(readFileSync(totalsFile, "utf8")) : 0;
+const result = (fields) => {
+  totals++;
+  writeFileSync(totalsFile, JSON.stringify(totals));
+  const model = { inputTokens: 10 * totals, outputTokens: 50 * totals, thinkingTokens: 5 * totals, cacheReadInputTokens: 1000 * totals, cacheCreationInputTokens: 100 * totals, costUSD: 0.25 * totals };
+  out({ type: "result", subtype: "success", session_id: "session-1", num_turns: 3, total_cost_usd: 0.25 * totals, usage: { input_tokens: 10, output_tokens: 50, cache_read_input_tokens: 1000, cache_creation_input_tokens: 100, iterations: [{ input_tokens: 2, cache_read_input_tokens: 900, cache_creation_input_tokens: 100 }] }, modelUsage: { "claude-opus-5-5": model }, subagent_stats: { spawned: 0 }, ...fields });
+};
+out({ type: "assistant", message: { content: [{ type: "tool_use", id: "tool-1", name: "Bash", input: {} }, { type: "tool_use", id: "tool-2", name: "mcp__grafana__query_loki_logs", input: {} }] } });
 
 const repo = [join(process.cwd(), "app"), join(process.cwd(), "acme/app")].find((d) => existsSync(join(d, ".git")));
 const git = (...args) => spawnSync("git", ["-C", repo, ...args], { stdio: "ignore" });
@@ -82,11 +93,11 @@ const during = [];
 while (lines.length) during.push(take());
 if (during.length) log("claude-mid-run", during);
 const reply = step === "silent" ? "NO_REPLY" : "Checked every repository; nothing needed changing.";
-out({ type: "result", subtype: "success", result: during.length ? `${reply}\n\nAlso, as you asked while I worked: ${during.join(" / ")}` : reply });
+result({ result: during.length ? `${reply}\n\nAlso, as you asked while I worked: ${during.join(" / ")}` : reply });
 // Anything after this turn ended gets a turn of its own, until the runner closes the input.
 for (;;) {
   await next();
   if (!lines.length && closed) break;
   const text = take();
-  out({ type: "result", subtype: "success", result: `On your later note (${text}): done.` });
+  result({ result: `On your later note (${text}): done.` });
 }

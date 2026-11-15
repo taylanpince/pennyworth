@@ -8,11 +8,13 @@ import type { Logger } from "pino";
 import { z } from "zod";
 import { RunnerReportSchema, agentsView, runTasks, workingOn, type RunContext, type RunnerReport } from "./activity.js";
 import { RecurringSchema, RunStateSchema, ScheduleSchema, changeRecurring, claimDue, recurringView, scheduleMove } from "./automation.js";
-import { AddAgentSchema, BadRequest, CreateSchema, HandOverSchema, PassSchema, RUNNER_MARKER, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
+import { AddAgentSchema, BadRequest, CreateSchema, EFFORTS, ENGINE_ADAPTER, type Engine, HandOverSchema, PassSchema, RUNNER_MARKER, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
 import { FOR_OTHERS, crewOf, deliveredFrom, deliveredText, foldedChildren, fromMarker, handOverText, mentionedAgents, partsToClose, summaryOf, type DeliveredFrom } from "./crew.js";
 import { inNetworks } from "./config.js";
 import { INLINE_TYPES, MAX_UPLOAD_BODY, UploadSchema, decode, fileType, fileViews, isPdf, pdfText, safeName } from "./files.js";
 import { MergeSchema, mergedDescription } from "./merge.js";
+import { memoryRoutes } from "./memoryapi.js";
+import { statsRoutes } from "./statsapi.js";
 import { McpAuthFailed, type ClickHouseAuth, type GleanAuth, type GrafanaAuth } from "./mcpauth.js";
 import { GoogleAuthFailed, loopbackPort, type GoogleAuth } from "./google.js";
 import { Paperclip, PaperclipError, type Issue } from "./paperclip.js";
@@ -202,7 +204,7 @@ export function createApp(opts: AppOptions): Server {
    * description as the user's request (D-45). An agent already on the task gets the instructions as a
    * comment on its part instead: one part per agent.
    */
-  async function addToCrew(ctx: Awaited<ReturnType<typeof context>>, parent: Issue, agent: Assignee, instructions: string, executor: { model?: string; effort?: string }, marker = "") {
+  async function addToCrew(ctx: Awaited<ReturnType<typeof context>>, parent: Issue, agent: Assignee, instructions: string, executor: { engine?: Engine; model?: string; effort?: string }, marker = "") {
     // The user's words lose any hidden markers; only the board's own (where a message came from, D-54) stay.
     const text = marker ? `${displayText(instructions)}\n\n${marker}` : displayText(instructions);
     const existing = (await pc.children(parent.id)).find((k) => k.assigneeAgentId === agent.key && !["done", "cancelled"].includes(k.status));
@@ -213,7 +215,7 @@ export function createApp(opts: AppOptions): Server {
     }
     const assign = paperclipUpdate(
       { ...parent, assigneeAgentId: null, assigneeAdapterOverrides: null },
-      { assignee: agent.key, ...(agent.kind === "engineer" && executor.model ? { model: executor.model } : {}), ...(agent.kind === "engineer" && executor.effort ? { effort: executor.effort } : {}) },
+      { assignee: agent.key, ...(executor.engine ? { engine: executor.engine } : {}), ...(executor.model ? { model: executor.model } : {}), ...(executor.effort ? { effort: executor.effort } : {}) },
       ctx,
     );
     // Every part carries the task's title, which Paperclip would take for a duplicate of the first one.
@@ -399,6 +401,11 @@ export function createApp(opts: AppOptions): Server {
     return { identifier: issue.identifier, recurring };
   }
 
+  // Memory (D-61): recall, search, remember and propose for the agents; the Memory view; past tasks.
+  const mem = memoryRoutes({ paperclip: pc, memory: store.memory, log, fail: (status, message) => new HttpError(status, message) });
+  // Stats (D-62): the runner's per-job usage, and the Stats view.
+  const statsApi = statsRoutes({ paperclip: pc, stats: store.stats, memory: store.memory, timezone: opts.timezone, log });
+
   // The tasks bridge (Assistant tools) and the runner (recurring runs), with the internal token (D-25).
   const internal: typeof routes = [
     { method: "POST", path: /^\/internal\/issues\/([^/]+)\/schedule$/, handle: async (m, body) => schedule(decodeURIComponent(m[1]!), body) },
@@ -456,6 +463,8 @@ export function createApp(opts: AppOptions): Server {
         return { ok: true };
       },
     },
+    ...mem.internal,
+    ...statsApi.internal,
   ];
 
   const mode = opts.mode ?? "local";
@@ -606,6 +615,7 @@ export function createApp(opts: AppOptions): Server {
         const since = new Date(Date.now() - RECENT_MS).toISOString();
         const [all, closed] = await Promise.all([pc.openIssues().then((l) => mine(l, ctx)), pc.closedSince(since).then((l) => mine(l, ctx))]);
         const open = await closeLeftoverParts(all, closed, ctx);
+        mem.episodes(closed);
         // Agents' sub-tasks are part of their parent's card (D-45): they never get a place of their own.
         const folded = foldedChildren([...open, ...closed], ctx.assignees);
         store.placeNew(open.filter((i) => !folded.has(i.id)).map((i) => ({ id: i.id, createdAt: i.createdAt, status: i.status })));
@@ -683,7 +693,7 @@ export function createApp(opts: AppOptions): Server {
         const input = parse(AddAgentSchema, body);
         const agent = ctx.assignees.find((a) => a.key === input.agent && a.kind !== "me");
         if (!agent) throw new HttpError(400, "unknown agent");
-        await addToCrew(ctx, issue, agent, input.instructions, { model: input.model, effort: input.effort });
+        await addToCrew(ctx, issue, agent, input.instructions, { engine: input.engine, model: input.model, effort: input.effort });
         return issueView(issue.id);
       },
     },
@@ -795,17 +805,24 @@ export function createApp(opts: AppOptions): Server {
     },
     {
       method: "GET",
+      // The models and efforts a crew member can run with on an engine (?engine=, default its role's).
       path: /^\/api\/models\/([0-9a-f-]{36})$/,
-      handle: async (m) => {
+      handle: async (m, _body, url) => {
         const ctx = await context();
-        const a = ctx.assignees.find((x) => x.key === m[1] && x.kind === "engineer");
-        if (!a?.adapterType) throw new HttpError(404, "not an Engineer");
-        let listed = (await pc.models(a.adapterType).catch(() => [])).map((x) => x.id);
-        if (a.engine === "openrouter") listed = listed.filter((x) => x.startsWith("openrouter/"));
-        const models = [...new Set([...(a.defaultModel ? [a.defaultModel] : []), ...(a.models ?? []), ...listed])];
-        return { default: a.defaultModel ?? null, models, efforts: a.efforts ?? [] };
+        const a = ctx.assignees.find((x) => x.key === m[1] && x.kind !== "me");
+        if (!a?.engine) throw new HttpError(404, "not on the crew");
+        const asked = url?.searchParams.get("engine") ?? a.engine;
+        const engine = (a.engines ?? [a.engine]).find((e) => e === asked);
+        if (!engine) throw new HttpError(400, `${a.persona?.name ?? a.name} runs on ${(a.engines ?? [a.engine]).join(", ")}`);
+        let listed = (await pc.models(ENGINE_ADAPTER[engine]).catch(() => [])).map((x) => x.id);
+        if (engine === "openrouter") listed = listed.filter((x) => x.startsWith("openrouter/"));
+        const own = engine === a.engine ? a.defaultModel : undefined;
+        const models = [...new Set([...(own ? [own] : []), ...(a.catalog?.[engine] ?? []), ...listed])];
+        return { engine, default: own ?? null, defaultEffort: engine === a.engine ? (a.defaultEffort ?? null) : null, models, efforts: EFFORTS[engine] };
       },
     },
+    ...mem.api,
+    ...statsApi.api,
   ];
 
   // Referenced tasks change rarely; a short cache keeps the brief cheap to render.
@@ -824,7 +841,7 @@ export function createApp(opts: AppOptions): Server {
   async function handleInternal(req: IncomingMessage, res: ServerResponse, url: URL) {
     const route = internal.find((r) => r.method === req.method && r.path.test(url.pathname));
     if (!route) throw new HttpError(404, "not found");
-    const body = await readJson(req);
+    const body = await readJson(req, route.maxBody);
     send(res, 200, JSON.stringify(await route.handle(url.pathname.match(route.path)!, body, url, req)), "application/json");
   }
 

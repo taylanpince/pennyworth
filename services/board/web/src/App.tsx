@@ -20,12 +20,14 @@ import {
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CrewView } from "./Agents";
+import { MemoryView, useMemoryPending } from "./Memory";
+import { StatsView } from "./Stats";
 import { PairRequired, api, type Session } from "./api";
-import { BackupBanner, CardView, ClickHouseBanner, GleanBanner, GoogleBanner, GrafanaBanner, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
+import { BackupBanner, CardView, ClickHouseBanner, ExecutorPicker, GleanBanner, GoogleBanner, GrafanaBanner, PhoneIcon, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
 import { CrewPicker, Drawer } from "./Drawer";
 import { Markdown, setSlackTeams } from "./markdown";
 import { PairScreen, PhonePanel } from "./Pairing";
-import { BUCKETS, BUCKET_NAMES, type Board, type Bucket, type Card } from "./types";
+import { BUCKETS, BUCKET_NAMES, type Board, type Bucket, type Card, type Executor } from "./types";
 import { matches } from "./util";
 
 type Items = Record<Bucket, Card[]>;
@@ -101,11 +103,12 @@ function useMedia(query: string) {
   return on;
 }
 
-type View = "board" | "agents";
+type View = "board" | "agents" | "memory" | "stats";
 const VIEW_KEY = "pennyworth.view";
 const savedView = (): View => {
   try {
-    return localStorage.getItem(VIEW_KEY) === "agents" ? "agents" : "board";
+    const v = localStorage.getItem(VIEW_KEY);
+    return v === "agents" || v === "memory" || v === "stats" ? v : "board";
   } catch {
     return "board";
   }
@@ -139,6 +142,9 @@ export function App() {
   }, []);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [creating, setCreating] = useState(false);
+  // Memory proposals waiting for review (D-61), for the nav badge.
+  const [memoryChanged, setMemoryChanged] = useState(0);
+  const memoryPending = useMemoryPending(memoryChanged);
   const mobile = useMedia("(max-width: 860px)");
   const holdUntil = useRef(0); // ignore polls briefly after a local change, so cards don't jump back
   const itemsRef = useRef<Items | null>(null);
@@ -416,10 +422,10 @@ export function App() {
       if (k === "c" || k === "n") return e.preventDefault(), setCreating(true);
       if (k === "b") return go("#/brief");
       if (k === "?") return go("#/help");
+      if (k === "a") return setView(view === "agents" ? "board" : "agents");
+      if (view !== "board") return;
       if (k === "d") return setShowDone((s) => !s);
       if (k === "r") return setShowRecurring((s) => !s);
-      if (k === "a") return setView(view === "agents" ? "board" : "agents");
-      if (view === "agents") return;
       if (k === "j" || k === "ArrowDown") {
         e.preventDefault();
         if (e.shiftKey && p) return void reorder(lists[p.b][p.i]!.id, 1);
@@ -490,27 +496,52 @@ export function App() {
     go(`#/t/${c.identifier}`);
   };
 
+  // Sections replace the whole page; the Show toggles next to search only add columns to the board.
+  const sections = (
+    <nav className="sections" aria-label="Sections">
+      <button className={view === "board" ? "on" : ""} aria-current={view === "board" ? "page" : undefined} onClick={() => setView("board")}>
+        Board
+      </button>
+      <button className={view === "agents" ? "on" : ""} aria-current={view === "agents" ? "page" : undefined} onClick={() => setView("agents")} title="The crew and what they're on (a)">
+        {board.agentsActive > 0 && <span className="live-dot" />}
+        Crew
+        {board.agentsActive > 0 && <span className="btn-count">{board.agentsActive}</span>}
+      </button>
+      <button className={view === "memory" ? "on" : ""} aria-current={view === "memory" ? "page" : undefined} onClick={() => setView("memory")} title="What the agents remember, and their proposals to review">
+        Memory
+        {memoryPending > 0 && <span className="btn-count needs">{memoryPending}</span>}
+      </button>
+      <button className={view === "stats" ? "on" : ""} aria-current={view === "stats" ? "page" : undefined} onClick={() => setView("stats")} title="What the agents cost and do, over time">
+        Stats
+      </button>
+    </nav>
+  );
+
   return (
     <div className={`app${mobile ? " mobile" : ""}`}>
       <header className="topbar">
-        <a className="brand" href="#/" onClick={() => setQuery("")}>
+        <a className="brand" href="#/" onClick={() => (setQuery(""), setView("board"))}>
           <img src={boardIcon} alt="" />
           <span>{boardName}</span>
         </a>
         {route.kind !== "settings" && <>
+        {!mobile && sections}
+        <span className="spacer topbar-spacer" />
         <div className="search">
           <input ref={searchRef} type="search" placeholder="Search  /" value={query} onChange={(e) => setQuery(e.target.value)} />
         </div>
-        <span className="spacer" />
-        <button className="btn primary" onClick={() => setCreating(true)} title="New task (c)">
-          {mobile ? <PlusIcon /> : "New task"}
-        </button>
-        {!mobile && (
-          <button className={`btn${view === "agents" ? " on" : ""}`} onClick={() => setView(view === "agents" ? "board" : "agents")} title="The crew and what they're on (a)">
-            {board.agentsActive > 0 && <span className="live-dot" />}
-            Crew
-            {board.agentsActive > 0 && <span className="btn-count">{board.agentsActive}</span>}
-          </button>
+        {view === "board" && !mobile && (
+          <div className="show-group" role="group" aria-label="Show columns">
+            <span className="show-label">Show</span>
+            {board.recurring.length > 0 && (
+              <button className={showRecurring ? "on" : ""} aria-pressed={showRecurring} onClick={() => setShowRecurring(!showRecurring)} title="Recurring tasks (r)">
+                Recurring
+              </button>
+            )}
+            <button className={showDone ? "on" : ""} aria-pressed={showDone} onClick={() => setShowDone(!showDone)} title="Recently done (d)">
+              Done
+            </button>
+          </div>
         )}
         {waiting.length > 0 && (
           <a className="btn" href={`#/t/${waiting[0]}`} title="Open the next agent waiting on you">
@@ -522,17 +553,12 @@ export function App() {
             Brief
           </a>
         )}
-        {board.recurring.length > 0 && (
-          <button className={`btn${showRecurring ? " on" : ""}`} onClick={() => setShowRecurring(!showRecurring)} title="Recurring tasks (r)">
-            Recurring
-          </button>
-        )}
-        <button className={`btn${showDone ? " on" : ""}`} onClick={() => setShowDone(!showDone)} title="Recently done (d)">
-          Done
+        <button className="btn primary" onClick={() => setCreating(true)} title="New task (c)">
+          {mobile ? <PlusIcon /> : "New task"}
         </button>
         {session?.mode === "local" && session.lan && !mobile && (
-          <a className="btn" href="#/phone" title="Open the board on your phone">
-            Phone
+          <a className="icon-btn" href="#/phone" title="Open the board on your phone">
+            <PhoneIcon />
           </a>
         )}
         {!mobile && (
@@ -560,15 +586,11 @@ export function App() {
       <ClickHouseBanner clickhouse={board.clickhouse} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
       <BackupBanner backup={board.backup} />
 
-      {mobile && (
+      {mobile && <div className="sections-row">{sections}</div>}
+      {mobile && view === "board" && (
         <nav className="tabs">
-          <button className={view === "agents" ? "on" : ""} onClick={() => setView("agents")}>
-            {board.agentsActive > 0 && <span className="live-dot" />}
-            Crew
-            {board.agentsActive > 0 && <span className="count">{board.agentsActive}</span>}
-          </button>
           {BUCKETS.map((b) => (
-            <button key={b} className={view === "board" && b === tab ? "on" : ""} onClick={() => (setTab(b), setView("board"))}>
+            <button key={b} className={b === tab ? "on" : ""} onClick={() => setTab(b)}>
               {BUCKET_NAMES[b]}
               {counts[b] > 0 && <span className="count">{counts[b]}</span>}
             </button>
@@ -577,6 +599,8 @@ export function App() {
       )}
 
       {view === "agents" && <CrewView query={query} crew={board.assignees} onPairing={() => setNeedsPairing(true)} />}
+      {view === "memory" && <MemoryView query={query} onPairing={() => setNeedsPairing(true)} onChanged={() => setMemoryChanged((n) => n + 1)} />}
+      {view === "stats" && <StatsView onPairing={() => setNeedsPairing(true)} />}
       <main className="columns" hidden={view !== "board"}>
         <DndContext sensors={sensors} collisionDetection={collision} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={() => (setActiveId(null), (dragFrom.current = null), void refresh(true))}>
           {visibleBuckets.map((b) => (
@@ -832,8 +856,8 @@ function Help() {
     ["c", "New task, for you or someone in the crew (lands in Triage)"],
     ["/", "Search"],
     ["b", "Today's brief"],
-    ["d", "Show recently done"],
-    ["r", "Show recurring tasks"],
+    ["d", "Board: show recently done"],
+    ["r", "Board: show recurring tasks"],
     ["a", "Crew: who is working on what"],
     ["⌘↵", "Send reply / save description"],
     ["Esc", "Close"],
@@ -865,6 +889,7 @@ function Help() {
 function NewTask({ board, onClose, onCreated, toast }: { board: Board; onClose: () => void; onCreated: (identifier: string, agent?: string) => void; toast: (text: string) => void }) {
   const [title, setTitle] = useState("");
   const [pick, setPick] = useState<string | null>(null);
+  const [executor, setExecutor] = useState<Executor>({});
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const crew = board.assignees.filter((a) => a.kind !== "me");
@@ -876,7 +901,7 @@ function NewTask({ board, onClose, onCreated, toast }: { board: Board; onClose: 
     setBusy(true);
     try {
       const task = await api.create(t, "triage");
-      if (agent) await api.addAgent(task.id, agent.key, text.trim() || t);
+      if (agent) await api.addAgent(task.id, agent.key, text.trim() || t, executor);
       onCreated(task.identifier, name);
     } catch (e) {
       toast(`Couldn't add: ${(e as Error).message}`);
@@ -896,7 +921,8 @@ function NewTask({ board, onClose, onCreated, toast }: { board: Board; onClose: 
       >
         <h2>New task</h2>
         <input className="new-title" autoFocus value={title} placeholder="What needs doing?" onChange={(e) => setTitle(e.target.value)} />
-        <CrewPicker crew={crew} pick={pick} setPick={setPick} me />
+        <CrewPicker crew={crew} pick={pick} setPick={(k) => (setPick(k), setExecutor({}))} me />
+        {agent && <ExecutorPicker assignee={agent} value={executor} onChange={setExecutor} />}
         {agent && (
           <textarea
             value={text}

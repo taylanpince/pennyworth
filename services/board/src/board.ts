@@ -9,24 +9,73 @@ export const RUNNER_MARKER = "<!-- pennyworth-runner -->";
 export const BRIEF_LABEL = "daily-brief";
 
 export type Engine = "codex" | "claude" | "openrouter";
+export const ENGINES: Engine[] = ["claude", "codex", "openrouter"];
+export const ENGINE_ADAPTER: Record<Engine, string> = { codex: "codex_local", claude: "claude_local", openrouter: "opencode_local" };
 const ADAPTER_ENGINE: Record<string, Engine> = { codex_local: "codex", claude_local: "claude", opencode_local: "openrouter" };
 const EFFORT_KEY: Partial<Record<Engine, string>> = { codex: "modelReasoningEffort", claude: "effort" };
 export const EFFORTS: Record<Engine, string[]> = { codex: ["low", "medium", "high", "xhigh"], claude: ["low", "medium", "high", "xhigh", "max"], openrouter: [] };
 
-/** Someone a task can be assigned to from the board: the user, the Assistant, or an Engineer (D-20). */
+/**
+ * Someone a task can be assigned to from the board: the user, the Assistant, another woken crew member
+ * (the Writer), or one of the runner's roles (D-20, D-60). For the crew, the role is the character and
+ * the engine a setting: `engine` and `defaultModel` are the role's own, `engines` what the picker offers.
+ */
 export interface Assignee {
   key: string; // "me" or the agent id
-  kind: "me" | "assistant" | "engineer";
+  kind: "me" | "assistant" | "agent" | "engineer";
   name: string;
+  /** What the crew member takes on, in one line (D-60). */
+  role?: string;
   engine?: Engine;
+  engines?: Engine[];
   adapterType?: string;
   defaultModel?: string;
-  /** Models offered for this Engineer (config/paperclip.yaml `models`), besides Paperclip's list. */
-  models?: string[];
+  defaultEffort?: string;
+  /** Models offered per engine (setup's engine catalog), besides Paperclip's own list. */
+  catalog?: Partial<Record<Engine, string[]>>;
   efforts?: string[];
   /** The crew member's name, voice and avatar (D-45), from config/paperclip.yaml via setup. */
   persona?: Persona;
 }
+
+/** One of the runner's crew roles: set up as one (D-60), or an Engineer from before roles. */
+export function isRole(a: Agent): boolean {
+  return (a.metadata as { runnerEngine?: unknown } | null | undefined)?.runnerEngine === true || /^pennyworth:engineer(-|$)/.test(a.metadata?.setupKey ?? "");
+}
+
+/** A role's own engine, model and effort (metadata `role`), else the adapter and primary model it had before roles. */
+export function roleEngine(a: Agent): { engine: Engine; model?: string; effort?: string } | undefined {
+  const role = (a.metadata as { role?: { engine?: unknown; model?: unknown; effort?: unknown } } | null | undefined)?.role;
+  if (role && ENGINES.includes(role.engine as Engine)) {
+    return { engine: role.engine as Engine, ...(typeof role.model === "string" && role.model ? { model: role.model } : {}), ...(typeof role.effort === "string" && role.effort ? { effort: role.effort } : {}) };
+  }
+  const engine = ADAPTER_ENGINE[a.adapterType];
+  const model = typeof a.adapterConfig?.model === "string" ? a.adapterConfig.model : "";
+  return engine ? { engine, ...(model ? { model } : {}) } : undefined;
+}
+
+const roleOf = (a: Agent): string | undefined => {
+  const job = (a.metadata as { role?: { job?: unknown } } | null | undefined)?.role?.job;
+  return typeof job === "string" && job.trim() ? job.trim().slice(0, 200) : undefined;
+};
+
+/** The models each engine offers in the picker: setup's catalog, and an OpenRouter Engineer's list from before it. */
+function catalogOf(a: Agent): Partial<Record<Engine, string[]>> {
+  const out: Partial<Record<Engine, string[]>> = {};
+  const engines = (a.metadata as { engines?: Record<string, unknown> } | null | undefined)?.engines ?? {};
+  for (const e of ENGINES) {
+    const list = Array.isArray(engines[e]) ? (engines[e] as unknown[]).filter((m): m is string => typeof m === "string") : [];
+    if (list.length) out[e] = list;
+  }
+  if (a.adapterType === "opencode_local" && !out.openrouter) {
+    const legacy = [a.adapterConfig?.model, ...(Array.isArray(a.metadata?.models) ? a.metadata.models : [])].filter((m): m is string => typeof m === "string" && m.startsWith("openrouter/"));
+    if (legacy.length) out.openrouter = [...new Set(legacy)];
+  }
+  return out;
+}
+
+// Roles in the order they're offered: the generalist first, then by how often each kind of work comes up.
+const ROLE_ORDER = ["pennyworth:engineer-claude", "pennyworth:reviewer", "pennyworth:security", "pennyworth:sre"];
 
 export interface Persona {
   name: string;
@@ -45,16 +94,37 @@ export function personaOf(agent: Agent): Persona | undefined {
 export function assignees(agents: Agent[]): Assignee[] {
   const live = agents.filter((a) => a.status !== "terminated");
   const out: Assignee[] = [{ key: "me", kind: "me", name: "You" }];
-  const assistant = live.find((a) => a.metadata?.setupKey === "pennyworth:assistant");
-  if (assistant) out.push({ key: assistant.id, kind: "assistant", name: assistant.name, ...withPersona(assistant) });
-  const engineers = live.filter((a) => /^pennyworth:engineer(-|$)/.test(a.metadata?.setupKey ?? "") && ADAPTER_ENGINE[a.adapterType]);
-  const order: Engine[] = ["codex", "claude", "openrouter"];
-  engineers.sort((a, b) => order.indexOf(ADAPTER_ENGINE[a.adapterType]!) - order.indexOf(ADAPTER_ENGINE[b.adapterType]!));
-  for (const a of engineers) {
-    const engine = ADAPTER_ENGINE[a.adapterType]!;
+  // Woken crew members (the Assistant, the Writer) run on Codex in Paperclip: the picker offers its models and effort.
+  const woken = (a: Agent, kind: "assistant" | "agent"): Assignee => {
     const model = typeof a.adapterConfig?.model === "string" ? a.adapterConfig.model : "";
-    const models = Array.isArray(a.metadata?.models) ? a.metadata.models.filter((m): m is string => typeof m === "string") : [];
-    out.push({ key: a.id, kind: "engineer", name: a.name, engine, adapterType: a.adapterType, defaultModel: model || undefined, ...(models.length ? { models } : {}), efforts: EFFORTS[engine], ...withPersona(a) });
+    const effort = typeof a.adapterConfig?.modelReasoningEffort === "string" ? a.adapterConfig.modelReasoningEffort : "";
+    const role = roleOf(a);
+    return { key: a.id, kind, name: a.name, ...(role ? { role } : {}), engine: "codex", engines: ["codex"], adapterType: a.adapterType, ...(model ? { defaultModel: model } : {}), ...(effort ? { defaultEffort: effort } : {}), efforts: EFFORTS.codex, ...withPersona(a) };
+  };
+  const assistant = live.find((a) => a.metadata?.setupKey === "pennyworth:assistant");
+  if (assistant) out.push(woken(assistant, "assistant"));
+  for (const a of live) if (a !== assistant && !isRole(a) && personaOf(a) && a.adapterType === "codex_local" && a.metadata?.setupKey?.startsWith("pennyworth:")) out.push(woken(a, "agent"));
+  const roles = live.filter((a) => isRole(a) && roleEngine(a));
+  const rank = (a: Agent) => (ROLE_ORDER.includes(a.metadata?.setupKey ?? "") ? ROLE_ORDER.indexOf(a.metadata!.setupKey!) : ROLE_ORDER.length);
+  roles.sort((a, b) => rank(a) - rank(b));
+  for (const a of roles) {
+    const own = roleEngine(a)!;
+    const role = roleOf(a);
+    const catalog = catalogOf(a);
+    out.push({
+      key: a.id,
+      kind: "engineer",
+      name: a.name,
+      ...(role ? { role } : {}),
+      engine: own.engine,
+      engines: ENGINES,
+      adapterType: a.adapterType,
+      ...(own.model ? { defaultModel: own.model } : {}),
+      ...(own.effort ? { defaultEffort: own.effort } : {}),
+      ...(Object.keys(catalog).length ? { catalog } : {}),
+      efforts: EFFORTS[own.engine],
+      ...withPersona(a),
+    });
   }
   return out;
 }
@@ -69,15 +139,16 @@ export function assigneeKey(issue: Issue, list: Assignee[]): string | null {
   return issue.assigneeUserId ? "me" : null;
 }
 
-/** The task's model and effort override, when it's assigned to an Engineer. */
-export function executorOf(issue: Issue, list: Assignee[]): { model?: string; effort?: string } | undefined {
-  const a = list.find((x) => x.key === issue.assigneeAgentId && x.kind === "engineer");
+/** The task's executor override (D-60), when it's assigned to the crew: another engine than the role's, a model, an effort. */
+export function executorOf(issue: Issue, list: Assignee[]): { engine?: Engine; model?: string; effort?: string } | undefined {
+  const a = list.find((x) => x.key === issue.assigneeAgentId && x.kind !== "me");
   if (!a?.engine) return undefined;
   const config = issue.assigneeAdapterOverrides?.adapterConfig ?? {};
-  const key = EFFORT_KEY[a.engine];
+  const named = a.kind === "engineer" && ENGINES.includes(config.engine as Engine) && config.engine !== a.engine ? (config.engine as Engine) : undefined;
+  const key = EFFORT_KEY[named ?? a.engine];
   const model = typeof config.model === "string" && config.model.trim() ? config.model.trim() : undefined;
   const effort = key && typeof config[key] === "string" && config[key] ? String(config[key]) : undefined;
-  return { ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
+  return { ...(named ? { engine: named } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
 }
 
 export interface Card {
@@ -231,7 +302,7 @@ export function replyTarget(issue: Issue, list: Assignee[]): string {
   const a = list.find((x) => x.key === issue.assigneeAgentId);
   if (a?.kind === "engineer" || labels.has("engineer")) return "The runner reads replies here and starts or continues the coding job.";
   if (labels.has("needs-review")) return "Pennyworth applies review replies here (pick N, ignore).";
-  if (a?.kind === "assistant") return "The Assistant is working on this and reads replies.";
+  if (a?.kind === "assistant" || a?.kind === "agent") return `${a.persona?.name ?? a.name} is working on this and reads replies.`;
   return "The Assistant picks up replies here after about 90 seconds.";
 }
 
@@ -245,6 +316,7 @@ export const UpdateSchema = z
     status: z.enum(["todo", "in_progress", "done", "cancelled"]),
     priority: z.enum(["critical", "high", "medium", "low"]),
     assignee: z.union([z.literal("me"), id]),
+    engine: z.enum(["codex", "claude", "openrouter"]),
     model: z.string().trim().max(120).regex(/^[A-Za-z0-9._:/\[\]-]*$/),
     effort: z.string().max(10),
     labelIds: z.array(id).max(20),
@@ -275,16 +347,22 @@ export function paperclipUpdate(issue: Issue, u: Update, ctx: { me: string; assi
     if (target.kind === "me") Object.assign(body, { assigneeUserId: ctx.me, assigneeAgentId: null, assigneeAdapterOverrides: null });
     else Object.assign(body, { assigneeAgentId: target.key, assigneeUserId: null, assigneeAdapterOverrides: null });
   }
-  if (u.model !== undefined || u.effort !== undefined) {
-    if (target?.kind !== "engineer" || !target.engine) throw new BadRequest("model and effort only apply to an Engineer");
+  if (u.engine !== undefined || u.model !== undefined || u.effort !== undefined) {
+    if (!target || target.kind === "me" || !target.engine) throw new BadRequest("the engine, model and effort only apply to the crew");
     const current = u.assignee !== undefined ? {} : executorOf(issue, ctx.assignees) ?? {};
-    let model = u.model !== undefined ? u.model : current.model ?? "";
-    if (model && target.engine === "openrouter" && !model.startsWith("openrouter/")) model = `openrouter/${model}`;
-    const effort = u.effort !== undefined ? u.effort : current.effort ?? "";
-    if (effort && !target.efforts?.includes(effort)) throw new BadRequest(`effort must be one of ${target.efforts?.join(", ") || "(none)"}`);
+    const engine = u.engine ?? current.engine ?? target.engine;
+    if (!(target.engines ?? [target.engine]).includes(engine)) throw new BadRequest(`${target.persona?.name ?? target.name} runs on ${(target.engines ?? [target.engine]).join(", ")}`);
+    // A model belongs to its engine: switching engine without naming one runs that engine's default.
+    const switched = engine !== (current.engine ?? target.engine);
+    let model = u.model !== undefined ? u.model : switched ? "" : current.model ?? "";
+    if (model && engine === "openrouter" && !model.startsWith("openrouter/")) model = `openrouter/${model}`;
+    const effort = u.effort !== undefined ? u.effort : switched ? "" : current.effort ?? "";
+    if (effort && !EFFORTS[engine].includes(effort)) throw new BadRequest(`effort must be one of ${EFFORTS[engine].join(", ") || "(none)"}`);
+    // Only these keys ever go in the override: Paperclip merges it into a woken agent's run config.
     const config: Record<string, string> = {};
-    if (model && model !== target.defaultModel) config.model = model;
-    if (effort) config[EFFORT_KEY[target.engine]!] = effort;
+    if (engine !== target.engine) config.engine = engine;
+    if (model && (engine !== target.engine || model !== target.defaultModel)) config.model = model;
+    if (effort && (engine !== target.engine || effort !== target.defaultEffort)) config[EFFORT_KEY[engine]!] = effort;
     body.assigneeAdapterOverrides = Object.keys(config).length ? { adapterConfig: config } : null;
   }
   return body;
@@ -303,7 +381,8 @@ export const AddAgentSchema = z
   .object({
     agent: z.string().min(1).max(64),
     instructions: z.string().trim().min(1).max(30_000),
-    model: z.string().trim().max(120).optional(),
+    engine: z.enum(["codex", "claude", "openrouter"]).optional(),
+    model: z.string().trim().max(120).regex(/^[A-Za-z0-9._:/\[\]-]*$/).optional(),
     effort: z.string().trim().max(20).optional(),
   })
   .strict();

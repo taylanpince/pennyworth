@@ -1,4 +1,5 @@
-import type { Agents, Board, Bucket, Cadence, IssueView, Models, RecurringView, TelegramStep, Update } from "./types";
+import type { Agents, Board, Bucket, Cadence, IssueView, Models, RecurringView, TelegramStep, Update, Engine, Executor } from "./types";
+import type { Episode, Memory, MemoryKind, MemoryList, MemoryPatch, Sparklines, Stats, StatsRange } from "./types";
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -64,11 +65,29 @@ export const api = {
     call<{ scheduled: IssueView["scheduled"]; movedNow: boolean }>("POST", `/api/issues/${encodeURIComponent(ref)}/schedule`, body),
   recurring: (ref: string, body: { action: "set"; cadence: Cadence; time: string; repos: string[] } | { action: "pause" | "resume" | "stop" | "run_now" }) =>
     call<{ recurring: RecurringView | null }>("POST", `/api/issues/${encodeURIComponent(ref)}/recurring`, body),
-  addAgent: (ref: string, agent: string, instructions: string) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/agents`, { agent, instructions }),
+  addAgent: (ref: string, agent: string, instructions: string, executor: Executor = {}) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/agents`, { agent, instructions, ...executor }),
   merge: (ref: string, into: string) => call<{ merged: string; into: string; files: number }>("POST", `/api/issues/${encodeURIComponent(ref)}/merge`, { into }),
   handOver: (ref: string, from: string, to: string) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/handover`, { from, to }),
-  models: (assignee: string) => call<Models>("GET", `/api/models/${assignee}`),
+  models: (assignee: string, engine?: Engine) => call<Models>("GET", `/api/models/${assignee}${engine ? `?engine=${engine}` : ""}`),
   telegramStart: (phone: string) => call<TelegramStep>("POST", "/api/telegram/start", { phone }),
   telegramCode: (login_id: string, code: string) => call<TelegramStep>("POST", "/api/telegram/code", { login_id, code }),
   telegramPassword: (login_id: string, password: string) => call<TelegramStep>("POST", "/api/telegram/password", { login_id, password }),
+};
+
+/** The Memory view (D-61): the agents' memories, proposals to review, and past tasks. */
+export const memoryApi = {
+  list: () => call<MemoryList>("GET", "/api/memory"),
+  pending: () => call<{ pending: number }>("GET", "/api/memory/pending"),
+  episodes: (q = "") => call<{ episodes: Episode[] }>("GET", `/api/memory/episodes${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  add: (m: { scope: string; kind: MemoryKind; text: string }) => call<Memory>("POST", "/api/memory", m),
+  update: (id: number, patch: MemoryPatch) => call<Memory>("PATCH", `/api/memory/${id}`, patch),
+  accept: (id: number, patch: Pick<MemoryPatch, "text" | "kind" | "scope"> = {}) => call<Memory>("POST", `/api/memory/${id}/accept`, patch),
+  reject: (id: number) => call<Memory>("POST", `/api/memory/${id}/reject`, {}),
+  remove: (id: number) => call<{ ok: true }>("DELETE", `/api/memory/${id}`),
+};
+
+/** The Stats view (D-62): one precomputed payload per range, and weekly tokens for the Crew tiles. */
+export const statsApi = {
+  get: (range: StatsRange) => call<Stats>("GET", `/api/stats?range=${range}`),
+  sparklines: () => call<Sparklines>("GET", "/api/stats/sparklines"),
 };
