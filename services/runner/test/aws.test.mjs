@@ -170,6 +170,28 @@ describe("AWS for Engineer jobs (D-59)", () => {
     }
   });
 
+  it("optionally combines Claude/OpenRouter credential hiding and write confinement in one sandbox", () => {
+    const { dir, aws } = setup();
+    const cfg = { claudeTokenFile: join(dir, "claude"), claudeConfigDir: join(dir, "claude-home"), openrouterKeyFile: join(dir, "or"), aws, gcp: { hidden: [join(dir, "gcloud")] }, sandbox: { credential_isolation: "permissions", extra_writable_roots: [join(dir, "cache")] } };
+    writeFileSync(cfg.claudeTokenFile, "tok");
+    writeFileSync(cfg.openrouterKeyFile, "ork");
+    for (const kind of ["claude", "openrouter"]) {
+      const { argv } = buildCommand({ cfg, engine: { kind, model: "m" }, worktree: join(dir, "work") });
+      assert.deepEqual(argv.slice(0, 4), ["codex", "sandbox", "-P", "pennyworth-job"]);
+      assert.ok(!argv.includes("bwrap"));
+      assert.ok(!argv.some((a) => a.startsWith("sandbox_mode=")), "legacy settings must not override the permissions profile");
+      const profile = argv.find((a) => a.startsWith("permissions.pennyworth-job="));
+      assert.ok(profile.includes(`${JSON.stringify(aws.home)}="deny"`));
+      assert.ok(profile.includes(`${JSON.stringify(cfg.gcp.hidden[0])}="deny"`));
+      assert.ok(profile.includes(`${JSON.stringify(join(dir, "work"))}="write"`));
+      assert.ok(profile.includes(`${JSON.stringify(join(dir, "cache"))}="write"`));
+      assert.ok(profile.includes('":root"="read"'));
+      assert.ok(profile.includes('network={enabled=true}'));
+    }
+    assert.equal(buildCommand({ cfg, engine: { kind: "codex" }, worktree: "/w", lastMessageFile: "/x" }).argv[0], "bwrap", "Codex exec retains its existing sandbox path");
+    assert.throws(() => buildCommand({ cfg, engine: { kind: "claude" }, worktree: join(aws.home, "workspace") }), /overlaps/);
+  });
+
   it("refuses commands that hand out credentials or reach the sign-in, whatever the words", () => {
     for (const ok of [
       ["ecs", "update-service", "--cluster", "prod", "--service", "api", "--force-new-deployment"],

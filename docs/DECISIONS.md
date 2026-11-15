@@ -649,3 +649,8 @@ Pennyworth reads work email, Slack, calendars and documents. The user cleared ru
 ### D-59 addition: optional IAM user authentication
 
 SSO remains the default. Accounts without Identity Center can explicitly select `aws.auth: iam` and enter a dedicated read-only IAM user's access keys through `scripts/aws-auth.sh`. The keys live only in Pennyworth's hidden AWS home. The runner validates the account ID and IAM user ARN (rejecting root and other accounts), then uses STS GetSessionToken for one-hour credentials, refreshed through the existing job lifecycle. These credentials inherit the IAM user's permissions: the configured `read_role` is documentation, not an assumed role or a permission boundary. The user must attach read-only permissions to the dedicated IAM user. IAM mode rejects write roles; the SSO authorization and write path is unchanged. Claude Code and Codex retain access, OpenRouter does not.
+
+
+### D-59 addition: single-sandbox compatibility on Ubuntu
+
+Ubuntu's `bwrap-userns-restrict` AppArmor profile strips capabilities from Bubblewrap's children, preventing the nested `bwrap → codex sandbox → Claude` path after AWS credentials enable the outer wrapper. An opt-in `sandbox.credential_isolation: permissions` mode uses one Codex permissions sandbox for Claude Code and OpenRouter, with read-only filesystem access, explicit writable workspace/state/cache paths and denied AWS/gcloud sign-in directories. It keeps the normal network access and fails closed if the installed Codex cannot load the profile. The default remains `bwrap`, and Codex engine jobs keep the original path. A real-host opt-in regression test checks startup, hidden credentials and forbidden writes; fake-engine flow tests alone cannot catch host AppArmor restrictions.
