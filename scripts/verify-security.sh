@@ -228,6 +228,10 @@ echo "$profile_sandbox" | grep -Fq '":root": "read"' \
   && echo "$profile_sandbox" | grep -Fq 'cfg.gcp?.hidden' \
   && grep -Fq 'cfg.sandbox?.credential_isolation ?? "bwrap"' services/runner/src/config.mjs \
   && pass "runner: optional single sandbox denies cloud credential reads and confines writes; bwrap remains the default" || fail "runner: single sandbox lost credential denial or the default isolation mode"
+grep -Fq 'default_permissions="pennyworth-job"' services/runner/src/engines.mjs \
+  && grep -Fq 'await checkCodexPermissions({ cfg, worktree' services/runner/src/engines.mjs \
+  && grep -Fq 'stdout.trim() !== "pennyworth-permissions-ok"' services/runner/src/engines.mjs \
+  && pass "runner: native Codex permissions are checked before model execution" || fail "runner: Codex credential denial has no preflight"
 echo "$aws_session" | grep -q 'kind: "read"' && ! echo "$aws_session" | grep -q '"write"' && ! grep -qE 'writeRole|kind: "write"' services/runner/src/engines.mjs \
   && [ "$(grep -c 'kind: "write"' services/runner/src/aws.mjs)" = 1 ] && grep -q 'roleCredentials({ aws: cfg.aws, account, kind: "write", exec })' services/runner/src/aws.mjs \
   && pass "runner: AWS jobs get read-role credentials only; the write role is used by runAwsWrite alone (services/runner/src/aws.mjs)" || fail "runner: a job may get AWS write credentials"

@@ -170,7 +170,7 @@ describe("AWS for Engineer jobs (D-59)", () => {
     }
   });
 
-  it("optionally combines Claude/OpenRouter credential hiding and write confinement in one sandbox", () => {
+  it("optionally combines credential hiding and write confinement without nested sandboxes", () => {
     const { dir, aws } = setup();
     const cfg = { claudeTokenFile: join(dir, "claude"), claudeConfigDir: join(dir, "claude-home"), openrouterKeyFile: join(dir, "or"), aws, gcp: { hidden: [join(dir, "gcloud")] }, sandbox: { credential_isolation: "permissions", extra_writable_roots: [join(dir, "cache")] } };
     writeFileSync(cfg.claudeTokenFile, "tok");
@@ -188,7 +188,14 @@ describe("AWS for Engineer jobs (D-59)", () => {
       assert.ok(profile.includes('":root"="read"'));
       assert.ok(profile.includes('network={enabled=true}'));
     }
-    assert.equal(buildCommand({ cfg, engine: { kind: "codex" }, worktree: "/w", lastMessageFile: "/x" }).argv[0], "bwrap", "Codex exec retains its existing sandbox path");
+    for (const sessionId of [undefined, "existing-thread"]) {
+      const { argv } = buildCommand({ cfg, engine: { kind: "codex" }, sessionId, worktree: "/w", lastMessageFile: "/x" });
+      assert.deepEqual(argv.slice(0, 2), ["codex", "exec"]);
+      assert.ok(argv.includes('default_permissions="pennyworth-job"'));
+      assert.ok(!argv.includes("-P"), "exec selects the profile through config, not sandbox's -P flag");
+      assert.ok(!argv.some((a) => a.startsWith("sandbox_mode=")));
+      assert.ok(argv.some((a) => a.includes(`${JSON.stringify(aws.home)}="deny"`)));
+    }
     assert.throws(() => buildCommand({ cfg, engine: { kind: "claude" }, worktree: join(aws.home, "workspace") }), /overlaps/);
   });
 
