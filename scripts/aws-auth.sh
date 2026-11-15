@@ -14,6 +14,11 @@ export PENNYWORTH_SECRETS_DIR="${PENNYWORTH_SECRETS_DIR:-$(env_get PENNYWORTH_SE
 : "${PENNYWORTH_SECRETS_DIR:?set PENNYWORTH_SECRETS_DIR in .env}"
 umask 077
 
+auth="$(node --input-type=module -e "import { loadConfig } from './services/runner/src/config.mjs'; console.log(loadConfig().aws.auth)")"
+if [ "$auth" = iam ]; then
+  exec node scripts/aws-iam-auth.mjs
+fi
+
 # The profiles come from config/runner.yaml; the sign-in needs only its sso-session.
 home="$(node --input-type=module -e "
 import { loadConfig } from '$repo/services/runner/src/config.mjs';
