@@ -135,7 +135,7 @@ describe("talking to an Engineer, end to end", () => {
     // GitHub: bare repositories that git@github.com:<org>/<name>.git resolves to.
     writeFileSync(join(home, ".gitconfig"), `[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n[protocol "file"]\n\tallow = always\n[url "${join(dir, "github")}/"]\n\tinsteadOf = git@github.com:\n`);
     gitEnv = { HOME: home, GIT_CONFIG_NOSYSTEM: "1" };
-    for (const slug of ["acme/app", "acme/infra"]) {
+    for (const slug of ["acme/app", "acme/infra", "acme/backend"]) {
       const src = join(dir, "src", slug);
       mkdirSync(src, { recursive: true });
       git(src, "init", "-q");
@@ -511,6 +511,19 @@ recurring:
     const done = await turn("Thanks!");
     assert.equal(done.comment, undefined);
     assert.equal(partComments().length, n + 1, "only the user's comment");
+  });
+
+  it("delivers a repository correction even when the remembered main repository cannot be cloned", async () => {
+    // A previous attempt saved a typo before failing to clone it (MAN-286).
+    const state = new State(join(dir, "state"));
+    state.updateTask("part", { repo: "acme/missing" });
+    state.db.close();
+    step("none");
+    await turn("Repo is acme/backend");
+    const { prompt } = claudeRuns().at(-1);
+    assert.match(prompt, /could not prepare these repositories: acme\/missing/);
+    assert.match(prompt, /Repo is acme\/backend/);
+    assert.ok(existsSync(join(dir, "work/tasks/PEN-2/backend/.git")), "the corrected repository was cloned");
   });
 
   it("never errors or asks for a repository along the way", () => {

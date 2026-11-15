@@ -910,7 +910,9 @@ async function startJob({ issue, instructions }) {
     task = await syncPicker(issue, full, task, false);
     const engine = task.engine ?? resolveEngine({}, cfg);
 
-    const workspace = await prepareWorkspace(issue, state.task(issue.id));
+    const cloneFailures = [];
+    const workspace = await prepareWorkspace(issue, state.task(issue.id), { cloneFailures });
+    if (cloneFailures.length) instructions = `(Runner note: could not prepare these repositories: ${cloneFailures.join(", ")}. Their contents may be unavailable or stale. Read the user's corrections and use pennyworth repo for the repository you need.)\n\n${instructions}`;
     // PRs merged or closed since the last run: never keep working on them.
     const prNotes = await leaveFinishedPrs(issue, workspace);
     if (prNotes.length) instructions = `(Runner note: ${prNotes.join(" ")} Build on what is there now.)\n\n${instructions}`;
@@ -1437,7 +1439,7 @@ async function addRepo(workspace, slug) {
  * `clone: false`). A task from before workspaces (one worktree of the cache clone, one branch) moves
  * in first: its branch, PR and uncommitted changes come along, and the old worktree goes.
  */
-async function prepareWorkspace(issue, task, { clone = true } = {}) {
+async function prepareWorkspace(issue, task, { clone = true, cloneFailures = [] } = {}) {
   const workspace = task.workspace ?? workspacePath(cfg.workDir, issue.identifier);
   if (!task.workspace) state.updateTask(issue.id, { workspace });
   if (task.worktree) await moveIntoWorkspace(issue, task, workspace);
@@ -1445,7 +1447,9 @@ async function prepareWorkspace(issue, task, { clone = true } = {}) {
     mkdirSync(workspace, { recursive: true });
     for (const slug of [task.repo, ...rememberRepos(issue.id, [])].filter(Boolean)) {
       await addRepo(workspace, slug).catch((err) => {
-        if (slug === task.repo) throw err;
+        // Repository names in old descriptions are hints, not a prerequisite for hearing the user.
+        // Even a missing main repository must let the agent read a correction (MAN-286).
+        cloneFailures.push(slug);
         log("repository clone failed", { issue: issue.identifier, repo: slug, err: String(err.message ?? err).slice(0, 300) });
       });
     }
