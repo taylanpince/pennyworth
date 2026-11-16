@@ -126,7 +126,10 @@ const sendJson = (res: ServerResponse, status: number, body: unknown): void => v
 /** The board's sign-in endpoints: state, and starting or finishing a sign-in (never a token). */
 async function handleAuth(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
   if (!bearer(req, authToken, true)) return sendJson(res, 401, { error: "unauthorized" });
-  if (path === "/auth/status" && req.method === "GET") return sendJson(res, 200, { configured: Boolean(UPSTREAM), ...tokens.status() });
+  // Right after a restart the state is unknown until the token is used: connect once so the board sees whether it works.
+  if (path === "/auth/status" && req.method === "GET" && tokens.status().state === "unknown") await withUpstream(async () => undefined).catch(() => undefined);
+  // The account is the stack: Grafana's MCP server has no "who am I".
+  if (path === "/auth/status" && req.method === "GET") return sendJson(res, 200, { configured: Boolean(UPSTREAM), ...tokens.status(), ...(grafanaUrl ? { account: new URL(grafanaUrl).host } : {}) });
   if (!signIn) return sendJson(res, 400, { error: "GRAFANA_URL is not set" });
   if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
   try {

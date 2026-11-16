@@ -6,6 +6,8 @@ export interface McpAuthStatus {
   configured: boolean;
   since: string;
   detail?: string;
+  /** Who the sign-in is for, when the proxy knows (Cloudflare's email, Grafana's stack). */
+  account?: string;
 }
 
 /**

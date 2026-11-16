@@ -47,6 +47,10 @@ export function loadConfig() {
     cad: { python: resolve(REPO_ROOT, expand(cfg.cad?.python ?? "scripts/cad/python")) },
     primerEnabled: cfg.primer?.enabled !== false,
     paperclipUrl: env.PAPERCLIP_URL ?? cfg.paperclip_url ?? "http://localhost:3100",
+    // For the connection checks on the board's Settings page: the secrets directory, and the ChatGPT
+    // sign-in Paperclip's agents run on (in Paperclip's data directory, which the container mounts).
+    secretsDir: secrets,
+    paperclipCodexAuthFile: join(resolve(REPO_ROOT, expand(env.PENNYWORTH_DATA_DIR ?? "data")), "paperclip/.codex/auth.json"),
     boardKeyFile: join(secrets, "paperclip_board_key"),
     boardTokenFile: join(secrets, "board_internal_token"),
     boardInternalUrl: env.BOARD_INTERNAL_URL ?? cfg.recurring?.board_url ?? "http://127.0.0.1:3122",

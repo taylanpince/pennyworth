@@ -429,3 +429,30 @@ export interface Sparklines {
   weeks: string[];
   agents: Record<string, number[]>;
 }
+
+/** One connection on the Settings page (services/board/src/connections.ts). */
+export type ConnectionState = "ok" | "attention" | "off" | "unset" | "unknown";
+export interface Connection {
+  id: string;
+  name: string;
+  group: "board" | "laptop";
+  purpose: string;
+  usedBy: string;
+  state: ConnectionState;
+  detail?: string;
+  since?: string;
+  checkedAt?: string;
+  accounts: { label: string; state: ConnectionState; detail?: string; primary?: boolean }[];
+  action:
+    | { kind: "connect"; href: string }
+    | { kind: "panel"; panel: "google" | "slack" | "telegram" | "whatsapp" }
+    | { kind: "command"; command: string; note?: string }
+    | { kind: "setup"; note: string };
+}
+export interface Connections {
+  connections: Connection[];
+  /** Settings asked the runner for a fresh check of the laptop's sign-ins, and it hasn't answered yet. */
+  checking: boolean;
+  /** When the runner last reported in (null: not since the board started). */
+  runnerSeenAt: string | null;
+}

@@ -551,10 +551,7 @@ export function GrafanaBanner({ grafana, canConnect }: { grafana: Board["grafana
  * Only on the laptop's loopback address, like Google's Reconnect.
  */
 export function TelegramBanner({ telegram, canSignIn }: { telegram: Board["telegram"]; canSignIn: boolean }) {
-  const [form, setForm] = useState<{ step: "phone" | "code" | "password"; loginId?: string; viaApp?: boolean } | null>(null);
-  const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   if (!telegram?.configured || done || (telegram.state !== "missing" && telegram.state !== "ended")) {
     return done ? (
@@ -570,31 +567,6 @@ export function TelegramBanner({ telegram, canSignIn }: { telegram: Board["teleg
   }
   const ended = telegram.state === "ended";
   const since = new Date(telegram.since);
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    if (!form || !value.trim()) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const r =
-        form.step === "phone" ? await api.telegramStart(value.trim()) : form.step === "code" ? await api.telegramCode(form.loginId!, value.trim()) : await api.telegramPassword(form.loginId!, value);
-      setValue("");
-      if (r.step === "done") {
-        setForm(null);
-        setDone(r.account.username ? `@${r.account.username}` : r.account.name);
-      } else setForm({ step: r.step, loginId: r.login_id, viaApp: r.step === "code" ? r.via_app : form.viaApp });
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  const prompts = {
-    phone: { label: "Phone number of your Telegram account", type: "tel", placeholder: "+34 600 000 000", auto: "tel" },
-    code: { label: form?.viaApp ? "The code Telegram just sent to your Telegram app" : "The code Telegram just sent you", type: "text", placeholder: "12345", auto: "one-time-code" },
-    password: { label: "Your Telegram 2FA password", type: "password", placeholder: "", auto: "current-password" },
-  };
-  const p = form && prompts[form.step];
   return (
     <div className="alert" role="alert">
       <div className="alert-row">
@@ -611,29 +583,64 @@ export function TelegramBanner({ telegram, canSignIn }: { telegram: Board["teleg
         {!canSignIn ? (
           <span className="alert-hint">Sign in from the board on your computer.</span>
         ) : (
-          !form && (
-            <button className="btn" onClick={() => setForm({ step: "phone" })}>
+          !open && (
+            <button className="btn" onClick={() => setOpen(true)}>
               {ended ? "Reconnect" : "Connect"}
             </button>
           )
         )}
       </div>
-      {form && p && (
-        <form className="alert-row" onSubmit={submit}>
-          <label className="alert-field">
-            <span>{p.label}</span>
-            <input autoFocus type={p.type} inputMode={form.step === "code" ? "numeric" : undefined} autoComplete={p.auto} placeholder={p.placeholder} value={value} onChange={(e) => setValue(e.target.value)} disabled={busy} />
-          </label>
-          <button className="btn primary" type="submit" disabled={busy || !value.trim()}>
-            {busy ? "…" : form.step === "password" ? "Sign in" : "Next"}
-          </button>
-          <button className="btn" type="button" onClick={() => (setForm(null), setValue(""), setError(null))} disabled={busy}>
-            Cancel
-          </button>
-          {error && <span className="alert-error">{error}</span>}
-        </form>
-      )}
+      {open && <TelegramSignIn className="alert-row" fieldClassName="alert-field" onDone={(who) => (setOpen(false), setDone(who))} onCancel={() => setOpen(false)} />}
     </div>
+  );
+}
+
+/**
+ * Telegram's sign-in steps (D-37): phone number, the code Telegram sends, then the 2FA password if
+ * the account has one. Used by the banner and by Settings.
+ */
+export function TelegramSignIn({ onDone, onCancel, className, fieldClassName }: { onDone: (who: string) => void; onCancel: () => void; className?: string; fieldClassName?: string }) {
+  const [form, setForm] = useState<{ step: "phone" | "code" | "password"; loginId?: string; viaApp?: boolean }>({ step: "phone" });
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!value.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r =
+        form.step === "phone" ? await api.telegramStart(value.trim()) : form.step === "code" ? await api.telegramCode(form.loginId!, value.trim()) : await api.telegramPassword(form.loginId!, value);
+      setValue("");
+      if (r.step === "done") onDone(r.account.username ? `@${r.account.username}` : r.account.name);
+      else setForm({ step: r.step, loginId: r.login_id, viaApp: r.step === "code" ? r.via_app : form.viaApp });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const prompts = {
+    phone: { label: "Phone number of your Telegram account", type: "tel", placeholder: "+34 600 000 000", auto: "tel" },
+    code: { label: form.viaApp ? "The code Telegram just sent to your Telegram app" : "The code Telegram just sent you", type: "text", placeholder: "12345", auto: "one-time-code" },
+    password: { label: "Your Telegram 2FA password", type: "password", placeholder: "", auto: "current-password" },
+  };
+  const p = prompts[form.step];
+  return (
+    <form className={className} onSubmit={submit}>
+      <label className={fieldClassName}>
+        <span>{p.label}</span>
+        <input autoFocus type={p.type} inputMode={form.step === "code" ? "numeric" : undefined} autoComplete={p.auto} placeholder={p.placeholder} value={value} onChange={(e) => setValue(e.target.value)} disabled={busy} />
+      </label>
+      <button className="btn primary" type="submit" disabled={busy || !value.trim()}>
+        {busy ? "…" : form.step === "password" ? "Sign in" : "Next"}
+      </button>
+      <button className="btn" type="button" onClick={() => (setValue(""), setError(null), onCancel())} disabled={busy}>
+        Cancel
+      </button>
+      {error && <span className="alert-error" role="alert">{error}</span>}
+    </form>
   );
 }
 

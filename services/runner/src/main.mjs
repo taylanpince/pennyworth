@@ -23,6 +23,7 @@ import { branchesFooter, slackSources, firstPrompt, followUpPrompt, latestReport
 import { PRIMER_FILES, primerLink, publishDocument, readDocument } from "./primer.mjs";
 import { startRepoHelper } from "./repohelper.mjs";
 import { baseRef, branchChanges, carryOver, dirtyCheckouts, ensureRepo, findBranches, keepBranches, messagesSince, moveOffDefault, readManifest, signUnsigned, workspacePath, workspaceRepos } from "./workspace.mjs";
+import { checkConnections } from "./connections.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import * as merges from "./merges.mjs";
@@ -115,13 +116,33 @@ function reportActivity() {
     latest: state.latestJobs(200).map((j) => ({ identifier: j.identifier, status: j.status })),
   };
   boardApi.post("/internal/runner/activity", body).then(
-    () => (activityError = ""),
+    (res) => {
+      activityError = "";
+      // Settings' Check now: the board asks in its answer.
+      if (res?.checkConnections) void reportConnections();
+    },
     (err) => {
       const msg = String(err.message ?? err).slice(0, 200);
       if (msg !== activityError) log("activity report failed", { err: msg });
       activityError = msg;
     },
   );
+}
+
+// ------------------------------------------------------------------ connections for the board's Settings page
+
+let connectionsRunning = false;
+/** Check the sign-ins that live on the laptop and tell the board: every 15 minutes, and when Settings asks. */
+async function reportConnections() {
+  if (!boardApi || connectionsRunning || process.env.PENNYWORTH_CONNECTION_CHECKS === "off") return;
+  connectionsRunning = true;
+  try {
+    await boardApi.post("/internal/runner/connections", { checks: await checkConnections(cfg) });
+  } catch (err) {
+    log("connection check report failed", { err: String(err.message ?? err).slice(0, 200) });
+  } finally {
+    connectionsRunning = false;
+  }
 }
 
 // ------------------------------------------------------------------ usage for the board's Stats view (D-62)
@@ -1874,6 +1895,8 @@ void loop();
 // The board's Agents view: on a timer, because a poll can take minutes (intake, GitHub checks).
 reportActivity();
 setInterval(reportActivity, 30_000);
+setInterval(reportConnections, 15 * 60_000);
+setTimeout(reportConnections, 5_000);
 // The Stats view (D-62): anything the board hasn't had yet, including what failed to send before.
 void reportUsage();
 setInterval(reportUsage, 5 * 60_000);

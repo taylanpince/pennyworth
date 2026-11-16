@@ -12,6 +12,8 @@
   --accent-soft: #e7ecfc;
   --accent-text: #ffffff;
   --danger: #d6336c;
+  --ok: #2f9e44;
+  --warn: #e8590c;
   --urgent: #e03131;
   --high: #e8590c;
   --low: #b5b1a8;
@@ -44,6 +46,8 @@
     --accent-text: #0e1020;
     --low: #5c5a55;
     --needs-text: #f5c95c;
+    --ok: #69db7c;
+    --warn: #ffa94d;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.55);
     color-scheme: dark;
@@ -703,6 +707,44 @@ kbd {
 .connection-field { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; }
 .connection-field input { width: 100%; padding: 10px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
 .connection-flow { margin-top: 16px; border-top: 1px solid var(--border); }
+
+/* Every connection on one page: state, account, and how to (re)connect it. */
+.settings-actions { flex: none; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.settings-summary { display: flex; gap: 14px; flex-wrap: wrap; margin: -8px 0 20px; font-size: 13px; color: var(--muted); }
+.settings-summary b { color: var(--text); font-weight: 600; }
+.conn-group { margin: 28px 0 10px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.conn-group-note { margin: -4px 0 12px; font-size: 13px; color: var(--muted); }
+.conn-list { display: grid; gap: 10px; }
+.conn { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+.conn-head { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; }
+.conn-dot { flex: none; width: 10px; height: 10px; margin-top: 6px; border-radius: 50%; background: var(--faint); }
+.conn-dot.ok { background: var(--ok); }
+.conn-dot.attention { background: var(--warn); }
+.conn-dot.off { background: transparent; border: 2px solid var(--faint); }
+.conn-main { flex: 1; min-width: 0; }
+.conn-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.conn-title h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.conn-state { font-size: 12px; color: var(--muted); }
+.conn-state.ok { color: var(--ok); }
+.conn-state.attention { color: var(--warn); }
+.conn-accounts { margin: 4px 0 0; padding: 0; list-style: none; font-size: 13px; }
+.conn-accounts li { display: flex; gap: 6px; align-items: baseline; overflow-wrap: anywhere; }
+.conn-accounts .attention { color: var(--warn); }
+.conn-purpose { margin: 4px 0 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
+.conn-detail { margin: 6px 0 0; font-size: 13px; color: var(--warn); overflow-wrap: anywhere; }
+.conn-detail.muted { color: var(--muted); }
+.conn-side { flex: none; display: flex; gap: 8px; align-items: center; }
+.conn-body { padding: 0 16px 14px 38px; }
+.conn-body .connection-field:first-child { margin-top: 0; }
+.conn-cmd { display: flex; align-items: center; gap: 8px; margin: 2px 0 6px; }
+.conn-cmd code { flex: 1; min-width: 0; padding: 7px 10px; overflow-x: auto; white-space: nowrap; font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; }
+.conn-note { margin: 0; font-size: 13px; color: var(--muted); }
+@media (max-width: 560px) {
+  .conn-head { flex-wrap: wrap; }
+  .conn-side { width: 100%; padding-left: 22px; }
+  .conn-body { padding-left: 16px; }
+  .settings-page-heading { flex-wrap: wrap; }
+}
 
 /* The role of whoever you pick, and how it runs (D-60). */
 .role-hint { margin: 8px 2px 0; font-size: 13px; color: var(--muted); }

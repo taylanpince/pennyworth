@@ -1,4 +1,5 @@
 import type { Agents, Board, Bucket, Cadence, IssueView, Models, RecurringView, TelegramStep, Update, Engine, Executor } from "./types";
+import type { Connections } from "./types";
 import type { Episode, Memory, MemoryKind, MemoryList, MemoryPatch, Sparklines, Stats, StatsRange } from "./types";
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -69,6 +70,8 @@ export const api = {
   merge: (ref: string, into: string) => call<{ merged: string; into: string; files: number }>("POST", `/api/issues/${encodeURIComponent(ref)}/merge`, { into }),
   handOver: (ref: string, from: string, to: string) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/handover`, { from, to }),
   models: (assignee: string, engine?: Engine) => call<Models>("GET", `/api/models/${assignee}${engine ? `?engine=${engine}` : ""}`),
+  connections: () => call<Connections>("GET", "/api/connections"),
+  checkConnections: () => call<Connections>("POST", "/api/connections/check", {}),
   telegramStart: (phone: string) => call<TelegramStep>("POST", "/api/telegram/start", { phone }),
   telegramCode: (login_id: string, code: string) => call<TelegramStep>("POST", "/api/telegram/code", { login_id, code }),
   telegramPassword: (login_id: string, password: string) => call<TelegramStep>("POST", "/api/telegram/password", { login_id, password }),

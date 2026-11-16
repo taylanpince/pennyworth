@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 
 type Status = { enabled?: boolean; configured?: boolean; connected?: boolean; error?: string; accounts?: { email: string; state: string; primary: boolean }[] };
-export function ConnectionPanel({ provider }: { provider: "google" | "slack" }) {
+/** Google's or Slack's sign-in. `bare` drops the card and heading, for Settings' connection list. */
+export function ConnectionPanel({ provider, bare = false, onChange }: { provider: "google" | "slack"; bare?: boolean; onChange?: () => void }) {
   const name = provider === "google" ? "Google" : "Slack";
   const [status, setStatus] = useState<Status>();
   const [clientId, setClientId] = useState("");
@@ -20,7 +21,7 @@ export function ConnectionPanel({ provider }: { provider: "google" | "slack" }) 
   useEffect(() => { let live = true; void request("status").then(s => { if (live) setStatus(s); }).catch(() => { if (live) setError("Connection status unavailable. Reload Settings to retry."); }); return () => { live = false; }; }, [provider]);
   async function configure(data: { client_id: string; client_secret?: string }) {
     setBusy(true); setError("");
-    try { await request("configure", data); setClientId(""); setStatus(await request("status")); }
+    try { await request("configure", data); setClientId(""); setStatus(await request("status")); onChange?.(); }
     catch (err) { setError((err as Error).message); }
     finally { setBusy(false); }
   }
@@ -37,7 +38,7 @@ export function ConnectionPanel({ provider }: { provider: "google" | "slack" }) 
     setBusy(true); setError(""); setDone(false);
     try {
       if (finish) {
-        await request("finish", { callback }); setCallback(""); setConsent(""); setDone(true); setStatus(await request("status"));
+        await request("finish", { callback }); setCallback(""); setConsent(""); setDone(true); setStatus(await request("status")); onChange?.();
       } else {
         const result = await request("start", provider === "google" ? { account: email } : {});
         setConsent(result.url); setCallback("");
@@ -46,14 +47,15 @@ export function ConnectionPanel({ provider }: { provider: "google" | "slack" }) 
     finally { setBusy(false); }
   }
   const ready = status?.enabled && status.configured !== false;
-  return <section className="settings-card">
-    <h2>{name}</h2>
-    <p>{provider === "google" ? "Connect read-only access to Gmail, Calendar and Drive. Email tasks follow your configured label rules." : "Connect your Slack workspace for mentions, replies and pinned action items."}</p>
+  const Wrap = bare ? "div" : "section";
+  return <Wrap className={bare ? "connection-manage" : "settings-card"}>
+    {!bare && <h2>{name}</h2>}
+    {!bare && <p>{provider === "google" ? "Connect read-only access to Gmail, Calendar and Drive. Email tasks follow your configured label rules." : "Connect your Slack workspace for mentions, replies and pinned action items."}</p>}
     {!status && !error && <p role="status">Loading connection…</p>}
     {status && !status.enabled && <p>Board sign-in is not enabled on this server. Enable the connection service and its board authentication credential first.</p>}
     {status?.enabled && provider === "slack" && !status.configured && <p>Slack needs an OAuth client for your workspace. Enter its client ID below. Register the callback http://localhost:3118/callback.</p>}
     {provider === "slack" && status?.configured && <p>{status.connected ? "Connected · reconnect to renew access or change workspace." : "Not connected"}</p>}
-    {provider === "google" && status?.accounts?.map(a => <p key={a.email}>{a.email} · {a.state}{a.primary ? " · primary" : ""}</p>)}
+    {!bare && provider === "google" && status?.accounts?.map(a => <p key={a.email}>{a.email} · {a.state}{a.primary ? " · primary" : ""}</p>)}
     {provider === "google" && status?.enabled && !status.accounts?.length && <p>No accounts connected. Use a Google OAuth Desktop client with the Gmail, Calendar and Drive APIs enabled.</p>}
     {status?.enabled && status.configured === false && <>
       {provider === "google" ? <label className="connection-field">Google Desktop client JSON<input type="file" accept="application/json,.json" disabled={busy} onChange={e => { void upload(e.target.files?.[0]); e.target.value = ""; }} /></label> : <>
@@ -74,5 +76,5 @@ export function ConnectionPanel({ provider }: { provider: "google" | "slack" }) 
     </>}
     {done && <p role="status">Connected successfully.</p>}
     {error && <p role="alert">{error}</p>}
-  </section>;
+  </Wrap>;
 }

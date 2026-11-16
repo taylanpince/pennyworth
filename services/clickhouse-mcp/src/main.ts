@@ -135,6 +135,8 @@ const sendJson = (res: ServerResponse, status: number, body: unknown): void => v
 /** The board's sign-in endpoints: state, and starting or finishing a sign-in (never a token). */
 async function handleAuth(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
   if (!bearer(req, authToken, true)) return sendJson(res, 401, { error: "unauthorized" });
+  // Right after a restart the state is unknown until the token is used: connect once so the board sees whether it works.
+  if (path === "/auth/status" && req.method === "GET" && tokens.status().state === "unknown") await withUpstream(async () => undefined).catch(() => undefined);
   if (path === "/auth/status" && req.method === "GET") return sendJson(res, 200, { configured: Boolean(UPSTREAM), ...tokens.status() });
   if (!signIn) return sendJson(res, 400, { error: "CLICKHOUSE_MCP_URL is not set" });
   if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });

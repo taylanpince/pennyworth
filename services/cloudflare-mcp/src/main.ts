@@ -104,6 +104,25 @@ function buildServer(): Server {
   return server;
 }
 
+let identity: { email: string; at: number; token: string } | undefined;
+
+/** The signed-in user's email, for the board's Settings (whoami, at most once an hour per sign-in). */
+async function whoami(): Promise<string | undefined> {
+  const token = tokens.available() ? await tokens.accessToken().catch(() => "") : "";
+  if (!token) return undefined;
+  if (identity && identity.token === token && Date.now() - identity.at < 60 * 60_000) return identity.email;
+  try {
+    const result = await withUpstream((u) => u.client.callTool({ name: "whoami", arguments: {} }, undefined, { timeout: 20_000 }));
+    const text = ((result.content as { type?: string; text?: string }[] | undefined) ?? []).map((c) => c.text ?? "").join("");
+    const email = /"email"\s*:\s*"([^"]{3,200})"/.exec(text)?.[1] ?? /"name"\s*:\s*"([^"]{1,200})"/.exec(text)?.[1];
+    if (email) identity = { email, at: Date.now(), token };
+    return email;
+  } catch (err) {
+    log.warn({ err: String(err).slice(0, 200) }, "whoami for the board failed");
+    return identity?.email;
+  }
+}
+
 function bearer(req: IncomingMessage, token: string | undefined, required: boolean): boolean {
   if (!token) return !required;
   const presented = Buffer.from((req.headers.authorization ?? "").replace(/^Bearer\s+/i, ""));
@@ -127,7 +146,13 @@ const sendJson = (res: ServerResponse, status: number, body: unknown): void => v
 /** The board's sign-in endpoints: state, and starting or finishing a sign-in (never a token). */
 async function handleAuth(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
   if (!bearer(req, authToken, true)) return sendJson(res, 401, { error: "unauthorized" });
-  if (path === "/auth/status" && req.method === "GET") return sendJson(res, 200, { configured: Boolean(UPSTREAM), ...tokens.status() });
+  // Right after a restart the state is unknown until the token is used: connect once so the board sees whether it works.
+  if (path === "/auth/status" && req.method === "GET" && tokens.status().state === "unknown") await withUpstream(async () => undefined).catch(() => undefined);
+  if (path === "/auth/status" && req.method === "GET") {
+    const s = tokens.status();
+    const account = s.state === "missing" || s.state === "expired" ? undefined : await whoami();
+    return sendJson(res, 200, { configured: Boolean(UPSTREAM), ...tokens.status(), ...(account ? { account } : {}) });
+  }
   if (!signIn) return sendJson(res, 400, { error: "CLOUDFLARE_MCP_URL is not set" });
   if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
   try {

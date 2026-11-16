@@ -46,6 +46,7 @@ host (NixOS, user taylan)
                              memory: recall, search, remember (gated on the user's comment) and propose; the Memory view; past tasks (D-61);
                              the runner's per-job usage (/internal/runner/usage) for the Stats view, which also copies Paperclip's
                              agent runs (every 5 minutes) and a fact row per task (hourly) into board.sqlite (D-62)
+                             and the runner's checks of the laptop's sign-ins (/internal/runner/connections) for Settings (D-65)
 services/paperclip-tasks-mcp  stdio MCP bridge (mounted into paperclip) for task updates by agents
 ```
 
@@ -263,6 +264,11 @@ scripts/backup.sh --verify                         # restore the latest off-mach
 - **Sign-in:** dynamic registration accepts `http://127.0.0.1:3120/clickhouse/callback`; `offline_access` isn't listed, but the token endpoint issues refresh tokens anyway. Don't ask for `clickstack:access`.
 - **The Assistant reads it too (2026-11-10),** through the same server on the backplane (`PENNYWORTH_CLICKHOUSE_MCP_TOKEN` in Paperclip). No other Paperclip agent gets it, and `verify-security.sh` checks that: the scouts run unattended over untrusted messages.
 - **Queries outlast Codex's 60-second MCP tool timeout:** the proxy caps them at 120 seconds and the runner gives Codex `tool_timeout_sec=180` for this server (`toolTimeout` in `PRIVATE_READS`).
+
+### Settings (D-65)
+
+- **Every connection belongs on the Settings page.** A new sign-in gets a card in `services/board/src/connections.ts`: board sign-ins report through their proxy's `/auth/status` (add `account` when the proxy knows who), laptop sign-ins through a check in `services/runner/src/connections.mjs` with the cheapest real call that proves it works. Never put a credential, or a piece of one, in a check's report: the schema is strict, and OpenRouter's default key label is dropped for that reason.
+- **The board loses the laptop's report on restart** (it's in memory) and asks the runner for a check on the first Settings view; the runner answers through its activity report within 30 seconds. Tests set `PENNYWORTH_CONNECTION_CHECKS=off` so the flow test makes no outside calls.
 
 ### Cloudflare (D-64)
 

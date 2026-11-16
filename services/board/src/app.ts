@@ -21,6 +21,7 @@ import { Paperclip, PaperclipError, type Issue } from "./paperclip.js";
 import { TelegramAuthFailed, type TelegramAuth } from "./telegram.js";
 import { addDays, nextWorkday, type Weekday } from "./recurrence.js";
 import { readBackup } from "./backup.js";
+import { connectionsView, HostReportSchema, type HostReport } from "./connections.js";
 import { BUCKETS, isBucket, localDate, type Store } from "./store.js";
 
 export interface AppOptions {
@@ -43,7 +44,7 @@ export interface AppOptions {
   lan?: { clients: string[]; url: string };
   internalToken?: string;
   /** Shared by the listeners: the runner reports to the internal one, the board reads it on the others. */
-  activity?: { runner?: RunnerReport };
+  activity?: { runner?: RunnerReport; host?: HostReport; checkHost?: boolean };
   /** Google sign-in state and re-consent (D-36); no banner and no reconnect without it. */
   google?: GoogleAuth;
   /** Telegram sign-in state and sign-in (D-37); no banner and no sign-in without it. */
@@ -462,6 +463,18 @@ export function createApp(opts: AppOptions): Server {
       path: /^\/internal\/runner\/activity$/,
       handle: async (_m, body) => {
         shared.runner = { ...parse(RunnerReportSchema, body), at: new Date().toISOString() };
+        // Settings asked for a fresh check of the laptop's sign-ins (Check now).
+        const checkConnections = Boolean(shared.checkHost);
+        shared.checkHost = false;
+        return { ok: true, ...(checkConnections ? { checkConnections } : {}) };
+      },
+    },
+    {
+      // The runner's checks of the sign-ins made on the laptop (GitHub, Google Cloud, AWS, Primer, engines), for Settings.
+      method: "POST",
+      path: /^\/internal\/runner\/connections$/,
+      handle: async (_m, body) => {
+        shared.host = { ...parse(HostReportSchema, body), at: new Date().toISOString() };
         return { ok: true };
       },
     },
@@ -548,7 +561,40 @@ export function createApp(opts: AppOptions): Server {
   ];
 
   const connectionFlows = new Map<string, { state: string; expires: number }>();
+  async function connectionsNow(maxAgeMs: number) {
+    const ask = <T,>(p: Promise<T> | undefined) => (p ? p.then((v) => v ?? null, () => null) : Promise.resolve(undefined));
+    const [google, telegram, slack, whatsapp, glean, grafana, clickhouse, cloudflare] = await Promise.all([
+      ask(opts.google?.status(maxAgeMs)),
+      ask(opts.telegram?.status(maxAgeMs)),
+      ask(opts.slackAuth?.call("GET", "status") as Promise<{ configured?: boolean; connected?: boolean }> | undefined),
+      ask(opts.whatsapp?.call("GET", "status") as Promise<{ state?: string }> | undefined),
+      ask(opts.glean?.status(maxAgeMs)),
+      ask(opts.grafana?.status(maxAgeMs)),
+      ask(opts.clickhouse?.status(maxAgeMs)),
+      ask(opts.cloudflare?.status(maxAgeMs)),
+    ]);
+    const proxies = Object.fromEntries(Object.entries({ glean, grafana, clickhouse, cloudflare }).filter(([, v]) => v !== undefined));
+    // After a board restart there's no report from the laptop yet: ask for one (the runner answers within 30 seconds).
+    if (!shared.host) shared.checkHost = true;
+    return {
+      connections: connectionsView({ google, googleEnabled: Boolean(opts.google), telegram, telegramEnabled: Boolean(opts.telegram), slack, slackEnabled: Boolean(opts.slackAuth), whatsapp, whatsappEnabled: Boolean(opts.whatsapp), proxies, host: shared.host }),
+      checking: Boolean(shared.checkHost),
+      runnerSeenAt: shared.runner?.at ?? null,
+    };
+  }
   const routes: { method: string; path: RegExp; maxBody?: number; handle: (m: RegExpMatchArray, body: unknown, url: URL, req: IncomingMessage) => Promise<unknown> }[] = [
+    {
+      // Every connection, for Settings: board sign-ins from their proxies, the laptop's from the runner's last check.
+      method: "GET", path: /^\/api\/connections$/,
+      handle: async () => connectionsNow(60_000),
+    },
+    {
+      method: "POST", path: /^\/api\/connections\/check$/,
+      handle: async () => {
+        shared.checkHost = true;
+        return connectionsNow(0);
+      },
+    },
     {
       method: "GET", path: /^\/api\/connections\/(google|slack)\/status$/,
       handle: async (m) => {

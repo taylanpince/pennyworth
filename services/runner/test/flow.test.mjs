@@ -238,6 +238,7 @@ recurring:
         PENNYWORTH_CONFIG_DIR: config,
         PENNYWORTH_SECRETS_DIR: secrets,
         PENNYWORTH_ENV_FILE: join(dir, "none.env"),
+        PENNYWORTH_CONNECTION_CHECKS: "off",
         PAPERCLIP_URL: url,
         BOARD_INTERNAL_URL: url,
         FAKE_LOG: join(dir, "fake.log"),

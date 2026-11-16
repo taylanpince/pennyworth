@@ -576,7 +576,7 @@ export function App() {
         </a>
       </header>
 
-      {route.kind === "settings" && <SettingsPage />}
+      {route.kind === "settings" && <SettingsPage canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />}
       {error && <div className="offline">Offline: {error}. Retrying…</div>}
       {route.kind !== "settings" && <>
       <GoogleBanner google={board.google} canReconnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
