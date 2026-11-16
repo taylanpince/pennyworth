@@ -1,4 +1,4 @@
-import { Box3, Color, DirectionalLight, HemisphereLight, LoadingManager, Mesh, MeshStandardMaterial, PerspectiveCamera, Scene, Sphere, Vector3, WebGLRenderer } from "three";
+import { Box3, Color, DirectionalLight, EdgesGeometry, HemisphereLight, LineBasicMaterial, LineSegments, LoadingManager, Mesh, MeshStandardMaterial, PerspectiveCamera, Scene, Sphere, Vector3, WebGLRenderer } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
@@ -15,12 +15,16 @@ export async function renderCad(host: HTMLDivElement, bytes: ArrayBuffer, name: 
         if (material instanceof MeshStandardMaterial) {
           material.metalness = 0;
           material.roughness = 0.7;
+          material.color.set(0x3788b5);
+          material.emissive.set(0x000000);
         }
       }
+      const edges = new LineSegments(new EdgesGeometry(object.geometry, 25), new LineBasicMaterial({ color: 0x12334b, transparent: true, opacity: 0.65 }));
+      object.add(edges);
     }
   });
   const releaseModel = () => model.traverse((object) => {
-    if (object instanceof Mesh) {
+    if (object instanceof Mesh || object instanceof LineSegments) {
       object.geometry.dispose();
       for (const material of Array.isArray(object.material) ? object.material : [object.material]) material.dispose();
     }
@@ -42,9 +46,9 @@ export async function renderCad(host: HTMLDivElement, bytes: ArrayBuffer, name: 
   renderer.domElement.setAttribute("aria-label", `${name}: drag to rotate, scroll or pinch to zoom`);
   renderer.domElement.tabIndex = 0;
   const scene = new Scene();
-  scene.background = new Color(0xe9eff2);
-  scene.add(model, new HemisphereLight(0xffffff, 0x607080, 3));
-  const sun = new DirectionalLight(0xffffff, 3);
+  scene.background = new Color(0xe1e7ed);
+  scene.add(model, new HemisphereLight(0xffffff, 0x52647a, 1.6));
+  const sun = new DirectionalLight(0xffffff, 2.5);
   sun.position.set(2, 4, 3);
   scene.add(sun);
   const camera = new PerspectiveCamera(40, 1, sphere.radius / 100, sphere.radius * 100);

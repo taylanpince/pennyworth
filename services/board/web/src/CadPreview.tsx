@@ -39,17 +39,17 @@ export function CadPreview({ url, name }: { url: string; name: string }) {
 
   return (
     <div className="cad-preview">
-      <button className="subtle" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Close preview" : "Preview 3D"}</button>
+      <button className="btn subtle" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Close preview" : "Preview 3D"}</button>
       {open && (
         <div className="cad-preview-body">
           {error ? <p role="alert">{error}</p> : <>
             {!loaded && <p role="status">Loading model…</p>}
-            <div className="cad-canvas" ref={host} />
-            {loaded && <div className="row">
-              <button className="subtle" onClick={() => viewer.current?.reset()}>Reset view</button>
-              <button className="subtle" onClick={() => viewer.current?.saveImage()}>Save image</button>
+            <div className="cad-canvas" ref={host} aria-label={`Previewing ${name}`} />
+            {loaded && <div className="row cad-controls">
+              <button className="btn subtle" onClick={() => viewer.current?.reset()}>Reset view</button>
+              <button className="btn subtle" onClick={() => viewer.current?.saveImage()}>Save image</button>
             </div>}
-            <p className="muted small">Drag to rotate · Scroll or pinch to zoom. Preview mesh; use STEP for precise CAD geometry.</p>
+            <p className="muted small">Drag to rotate · Scroll or pinch to zoom.</p>
           </>}
         </div>
       )}
