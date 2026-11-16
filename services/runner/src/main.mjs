@@ -994,7 +994,8 @@ async function startJob({ issue, instructions }) {
   const retry = isRetry(instructions); // "try again" and the like, for the Stats view (D-62)
   try {
     const full = await pc.issue(issue.id);
-    const cad = isCadRole((await pc.engineerAgents()).find((a) => a.id === full.assigneeAgentId));
+    // A Paperclip hiccup here mustn't fail the job: without the list, it's an ordinary role.
+    const cad = isCadRole((await pc.engineerAgents().catch(() => [])).find((a) => a.id === full.assigneeAgentId));
     const runtime = cad ? cadRuntime(cfg) : undefined;
     const jobCfg = cad ? { ...cfg, localCad: true } : cfg;
     // Switching a part's workflow must not resume a session with another role's tool context.

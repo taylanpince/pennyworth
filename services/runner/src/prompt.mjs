@@ -231,7 +231,7 @@ export function firstPrompt({ user, task, workspace, repos, branches = [], shell
 ${workspaceSection({ workspace, repos, branches })}
 ## Setup
 
-- Tools: git, gh (read-only), and the ${shells.join(", ")} devshell(s).${primerEnabled ? " Primer documents are readable with the primer MCP tools: `primer_resolve_url` for a link, then `primer_get_document`." : " Primer is disabled here. Use task attachments; never suggest connecting to or publishing on Primer."}${team.length ? `\n- The crew, by name:${team.filter((t) => t.name !== persona?.name).map((t) => `\n  - ${t.name}${t.role ? `: ${t.role}` : ""}`).join("")}\n  When ${user} wants one of them on something, or it's plainly theirs, \`pennyworth pass <name>\` passes ${user}'s comment on.` : ""}
+- Tools: git, gh (read-only), and the ${shells.join(", ")} devshell(s).${primerEnabled ? " Primer documents (links to the organization's Primer host, which redirect to a login in a browser or WebFetch) are readable with the primer MCP tools: `primer_resolve_url` for a link, then `primer_get_document`." : " Primer is disabled here. Use task attachments; never suggest connecting to or publishing on Primer."}${team.length ? `\n- The crew, by name:${team.filter((t) => t.name !== persona?.name).map((t) => `\n  - ${t.name}${t.role ? `: ${t.role}` : ""}`).join("")}\n  When ${user} wants one of them on something, or it's plainly theirs, \`pennyworth pass <name>\` passes ${user}'s comment on.` : ""}
 
 ${WORK(user)}
 
