@@ -94,3 +94,10 @@ export class CloudflareAuth extends McpAuth {
     super("Cloudflare", "cloudflare-mcp", baseUrl, token, log, fetchImpl);
   }
 }
+
+/** Primer, for Alfred, Ursula and the Engineers (D-66): signed in from Settings, like the others. */
+export class PrimerAuth extends McpAuth {
+  constructor(baseUrl: string, token: string, log?: Logger, fetchImpl?: typeof fetch) {
+    super("Primer", "primer-mcp", baseUrl, token, log, fetchImpl);
+  }
+}

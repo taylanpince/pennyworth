@@ -1,6 +1,6 @@
 import { SlackConnectionError, type SlackAuth } from "./slack.js";
 import type { WhatsAppAuth } from "./whatsapp.js";
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
@@ -15,13 +15,14 @@ import { INLINE_TYPES, MAX_UPLOAD_BODY, UploadSchema, decode, fileType, fileView
 import { MergeSchema, mergedDescription } from "./merge.js";
 import { memoryRoutes } from "./memoryapi.js";
 import { statsRoutes } from "./statsapi.js";
-import { McpAuthFailed, type ClickHouseAuth, type CloudflareAuth, type GleanAuth, type GrafanaAuth } from "./mcpauth.js";
+import { McpAuthFailed, type ClickHouseAuth, type CloudflareAuth, type GleanAuth, type GrafanaAuth, type PrimerAuth } from "./mcpauth.js";
 import { GoogleAuthFailed, loopbackPort, type GoogleAuth } from "./google.js";
 import { Paperclip, PaperclipError, type Issue } from "./paperclip.js";
 import { TelegramAuthFailed, type TelegramAuth } from "./telegram.js";
 import { addDays, nextWorkday, type Weekday } from "./recurrence.js";
 import { readBackup } from "./backup.js";
 import { connectionsView, HostReportSchema, type HostReport } from "./connections.js";
+import { RunnerPollSchema, SIGNIN_PROVIDERS, SignIns, type SignInProvider } from "./signins.js";
 import { BUCKETS, isBucket, localDate, type Store } from "./store.js";
 
 export interface AppOptions {
@@ -44,7 +45,7 @@ export interface AppOptions {
   lan?: { clients: string[]; url: string };
   internalToken?: string;
   /** Shared by the listeners: the runner reports to the internal one, the board reads it on the others. */
-  activity?: { runner?: RunnerReport; host?: HostReport; checkHost?: boolean };
+  activity?: { runner?: RunnerReport; host?: HostReport; checkHost?: boolean; signins?: SignIns };
   /** Google sign-in state and re-consent (D-36); no banner and no reconnect without it. */
   google?: GoogleAuth;
   /** Telegram sign-in state and sign-in (D-37); no banner and no sign-in without it. */
@@ -59,6 +60,8 @@ export interface AppOptions {
   clickhouse?: ClickHouseAuth;
   /** Cloudflare sign-in state and sign-in (D-64); no banner and no sign-in without it. */
   cloudflare?: CloudflareAuth;
+  /** Primer sign-in state and sign-in (D-66). */
+  primer?: PrimerAuth;
   /** The off-machine backup's status file (D-58); no banner without it. */
   backupStatus?: string;
 }
@@ -147,6 +150,8 @@ export function createApp(opts: AppOptions): Server {
 
   // Agent activity (Paperclip runs and the runner's jobs). The runner reports through the internal API.
   const shared = opts.activity ?? {};
+  // One relay for the board's three listeners (they share `activity`).
+  const signins = (shared.signins ??= new SignIns(() => randomBytes(12).toString("hex")));
 
   /** The task a run is attached to, and the user's tasks it works on. */
   async function runContext(issueId: string | null, prefix: string): Promise<RunContext> {
@@ -470,6 +475,15 @@ export function createApp(opts: AppOptions): Server {
       },
     },
     {
+      // The runner's long poll for sign-ins started in Settings (D-66): what it reports in, commands out.
+      method: "POST",
+      path: /^\/internal\/runner\/signins$/,
+      handle: async (_m, body) => {
+        const { updates, wait } = parse(RunnerPollSchema, body);
+        return { commands: await signins.poll(updates, wait === false ? 0 : 25_000) };
+      },
+    },
+    {
       // The runner's checks of the sign-ins made on the laptop (GitHub, Google Cloud, AWS, Primer, engines), for Settings.
       method: "POST",
       path: /^\/internal\/runner\/connections$/,
@@ -563,7 +577,7 @@ export function createApp(opts: AppOptions): Server {
   const connectionFlows = new Map<string, { state: string; expires: number }>();
   async function connectionsNow(maxAgeMs: number) {
     const ask = <T,>(p: Promise<T> | undefined) => (p ? p.then((v) => v ?? null, () => null) : Promise.resolve(undefined));
-    const [google, telegram, slack, whatsapp, glean, grafana, clickhouse, cloudflare] = await Promise.all([
+    const [google, telegram, slack, whatsapp, glean, grafana, clickhouse, cloudflare, primer] = await Promise.all([
       ask(opts.google?.status(maxAgeMs)),
       ask(opts.telegram?.status(maxAgeMs)),
       ask(opts.slackAuth?.call("GET", "status") as Promise<{ configured?: boolean; connected?: boolean }> | undefined),
@@ -572,8 +586,9 @@ export function createApp(opts: AppOptions): Server {
       ask(opts.grafana?.status(maxAgeMs)),
       ask(opts.clickhouse?.status(maxAgeMs)),
       ask(opts.cloudflare?.status(maxAgeMs)),
+      ask(opts.primer?.status(maxAgeMs)),
     ]);
-    const proxies = Object.fromEntries(Object.entries({ glean, grafana, clickhouse, cloudflare }).filter(([, v]) => v !== undefined));
+    const proxies = Object.fromEntries(Object.entries({ glean, grafana, clickhouse, cloudflare, primer }).filter(([, v]) => v !== undefined));
     // After a board restart there's no report from the laptop yet: ask for one (the runner answers within 30 seconds).
     if (!shared.host) shared.checkHost = true;
     return {
@@ -587,6 +602,33 @@ export function createApp(opts: AppOptions): Server {
       // Every connection, for Settings: board sign-ins from their proxies, the laptop's from the runner's last check.
       method: "GET", path: /^\/api\/connections$/,
       handle: async () => connectionsNow(60_000),
+    },
+    {
+      // Sign-ins on the laptop, run by the runner and driven from here (D-66).
+      method: "GET", path: new RegExp(`^/api/connections/signin/(${SIGNIN_PROVIDERS.join("|")})$`),
+      handle: async (m) => ({ session: signins.get(m[1] as SignInProvider) ?? null, runnerOnline: signins.runnerOnline() }),
+    },
+    {
+      method: "POST", path: new RegExp(`^/api/connections/signin/(${SIGNIN_PROVIDERS.join("|")})$`),
+      handle: async (m) => {
+        if (!signins.runnerOnline()) throw new HttpError(503, "The runner on the laptop isn't answering, so it can't start this sign-in. Check that pennyworth-runner is running.");
+        return { session: signins.start(m[1] as SignInProvider) };
+      },
+    },
+    {
+      method: "POST", path: new RegExp(`^/api/connections/signin/(${SIGNIN_PROVIDERS.join("|")})/input$`),
+      handle: async (m, body) => {
+        const { text } = parse(z.object({ text: z.string().trim().min(1).max(4096) }).strict(), body);
+        try {
+          return { session: signins.input(m[1] as SignInProvider, text) };
+        } catch (err) {
+          throw new HttpError(409, (err as Error).message);
+        }
+      },
+    },
+    {
+      method: "POST", path: new RegExp(`^/api/connections/signin/(${SIGNIN_PROVIDERS.join("|")})/cancel$`),
+      handle: async (m) => ({ session: signins.cancel(m[1] as SignInProvider) ?? null }),
     },
     {
       method: "POST", path: /^\/api\/connections\/check$/,
@@ -958,6 +1000,7 @@ export function createApp(opts: AppOptions): Server {
     grafana: { name: "Grafana", secret: "grafana_auth_token", connect: "/grafana/connect", callback: "/grafana/callback" },
     clickhouse: { name: "ClickHouse", secret: "clickhouse_auth_token", connect: "/clickhouse/connect", callback: "/clickhouse/callback" },
     cloudflare: { name: "Cloudflare", secret: "cloudflare_auth_token", connect: "/cloudflare/connect", callback: "/cloudflare/callback" },
+    primer: { name: "Primer", secret: "primer_auth_token", connect: "/primer/connect", callback: "/primer/callback" },
   } as const;
   const signInFor = (path: string) => (Object.keys(SIGN_INS) as (keyof typeof SIGN_INS)[]).find((k) => SIGN_INS[k].connect === path || SIGN_INS[k].callback === path);
 

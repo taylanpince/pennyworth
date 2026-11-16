@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { GoogleAccountStatus } from "./google.js";
 import type { McpAuthStatus } from "./mcpauth.js";
+import type { SignInProvider } from "./signins.js";
 import type { TelegramStatus } from "./telegram.js";
 
 /**
@@ -24,6 +25,8 @@ export type ConnectionAction =
   | { kind: "connect"; href: string }
   /** A sign-in form on the Settings page itself. */
   | { kind: "panel"; panel: "google" | "slack" | "telegram" | "whatsapp" }
+  /** A sign-in the runner makes on the laptop, driven from Settings (D-66), with the terminal command as a fallback. */
+  | { kind: "signin"; provider: SignInProvider; command: string; note?: string }
   /** A sign-in made in a terminal on the laptop. */
   | { kind: "command"; command: string; note?: string }
   /** Nothing to do from here (set up in .env or a config file first). */
@@ -70,7 +73,7 @@ export interface ConnectionInputs {
   whatsapp?: { state?: string } | null;
   whatsappEnabled: boolean;
   /** The OAuth proxies the board can sign in (D-38, D-48, D-57, D-64): null when set up but not answering. */
-  proxies: Partial<Record<"glean" | "grafana" | "clickhouse" | "cloudflare", McpAuthStatus | null>>;
+  proxies: Partial<Record<"glean" | "grafana" | "clickhouse" | "cloudflare" | "primer", McpAuthStatus | null>>;
   host?: HostReport;
 }
 
@@ -167,7 +170,8 @@ export function connectionsView(i: ConnectionInputs): Connection[] {
     });
   }
 
-  const proxies: ["glean" | "grafana" | "clickhouse" | "cloudflare", string, string, string, string][] = [
+  const proxies: ["glean" | "grafana" | "clickhouse" | "cloudflare" | "primer", string, string, string, string][] = [
+    ["primer", "Primer", "PRIMER_MCP_URL", "The org's documents: reading, and publishing when you ask.", "Alfred, Ursula and the Engineers"],
     ["glean", "Glean", "GLEAN_MCP_URL", "The company's search across Slack, Drive, Confluence, Jira, GitHub and people.", "Alfred, Ursula and the Engineers"],
     ["grafana", "Grafana", "GRAFANA_URL", "Logs, metrics, traces, dashboards and alerts, with read and query scopes only.", "the Engineers"],
     ["clickhouse", "ClickHouse", "CLICKHOUSE_MCP_URL", "ClickHouse Cloud: services, schemas and checked SELECT queries.", "Alfred and the Engineers"],
@@ -177,15 +181,14 @@ export function connectionsView(i: ConnectionInputs): Connection[] {
 
   // Signed in on the laptop, checked by the runner.
   const laptop: [HostCheck["id"], string, string, string, ConnectionAction][] = [
-    ["github", "GitHub (Alfred)", "Issues and pull requests as you: reads, and comments, issues, reviews and CI re-runs when you ask.", "Alfred", { kind: "command", command: "scripts/github-auth.sh" }],
-    ["gh", "GitHub (Engineers)", "Cloning, pushing and pull requests from the Engineers' workspaces, on your word.", "the Engineers", { kind: "command", command: "gh auth login" }],
-    ["primer", "Primer", "Reading the org's documents, and publishing when you ask.", "Alfred, Ursula and the Engineers", { kind: "command", command: "scripts/primer-auth.sh" }],
-    ["gcloud", "Google Cloud", "Logs, Monitoring, GKE, Cloud Run and the rest, read-only by the prompt's rule. Google ends the session after 16 hours.", "the Engineers", { kind: "command", command: "scripts/gcloud-auth.sh" }],
-    ["aws", "AWS", "Read roles for every account in config/runner.yaml; changes run with the write role, on your word.", "the Engineers", { kind: "command", command: "scripts/aws-auth.sh" }],
-    ["claude", "Claude Code", "The engine for Claude jobs, in its own home with no plugins or connectors.", "the Engineers on Claude", { kind: "command", command: "claude setup-token", note: "Save the token to ~/.config/pennyworth/claude_oauth_token (0600)." }],
-    ["codex", "Codex (Engineers)", "Your ChatGPT sign-in for Codex jobs on the laptop.", "the Engineers on Codex", { kind: "command", command: "codex login" }],
-    ["paperclip-codex", "Codex (Paperclip agents)", "The ChatGPT sign-in every Paperclip agent runs on.", "Alfred, Ursula and the scouts", { kind: "command", command: `docker compose exec -it -u node paperclip codex -c 'cli_auth_credentials_store="file"' login --device-auth` }],
-    ["openrouter", "OpenRouter", "Other models (DeepSeek, GLM…) for Engineer jobs, without private data.", "the Engineers on OpenRouter", { kind: "command", command: "~/.config/pennyworth/openrouter_key", note: "Save an OpenRouter API key to this file (0600)." }],
+    ["github", "GitHub (Alfred)", "Issues and pull requests as you: reads, and comments, issues, reviews and CI re-runs when you ask. It's gh's token, copied for github-mcp.", "Alfred", { kind: "signin", provider: "github", command: "scripts/github-auth.sh" }],
+    ["gh", "GitHub (Engineers)", "Cloning, pushing and pull requests from the Engineers' workspaces, on your word. Signing in again keeps the token's scopes.", "the Engineers", { kind: "signin", provider: "gh", command: "gh auth login" }],
+    ["gcloud", "Google Cloud", "Logs, Monitoring, GKE, Cloud Run and the rest, read-only by the prompt's rule. Google ends the session after 16 hours.", "the Engineers", { kind: "signin", provider: "gcloud", command: "scripts/gcloud-auth.sh" }],
+    ["aws", "AWS", "Read roles for every account in config/runner.yaml; changes run with the write role, on your word.", "the Engineers", { kind: "signin", provider: "aws", command: "scripts/aws-auth.sh" }],
+    ["claude", "Claude Code", "The engine for Claude jobs, in its own home with no plugins or connectors.", "the Engineers on Claude", { kind: "signin", provider: "claude", command: "claude setup-token", note: "Save the token it prints to ~/.config/pennyworth/claude_oauth_token (0600)." }],
+    ["codex", "Codex (Engineers)", "Your ChatGPT sign-in for Codex jobs on the laptop.", "the Engineers on Codex", { kind: "signin", provider: "codex", command: "codex login" }],
+    ["paperclip-codex", "Codex (Paperclip agents)", "The ChatGPT sign-in every Paperclip agent runs on.", "Alfred, Ursula and the scouts", { kind: "signin", provider: "paperclip-codex", command: `docker compose exec -it -u node paperclip codex -c 'cli_auth_credentials_store="file"' login --device-auth` }],
+    ["openrouter", "OpenRouter", "Other models (DeepSeek, GLM…) for Engineer jobs, without private data.", "the Engineers on OpenRouter", { kind: "signin", provider: "openrouter", command: "~/.config/pennyworth/openrouter_key", note: "Or save an OpenRouter API key to this file (0600)." }],
   ];
   for (const [id, name, purpose, usedBy, action] of laptop) {
     const h = fromHost(i.host, id);

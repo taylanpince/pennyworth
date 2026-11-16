@@ -66,7 +66,6 @@ describe("connection checks for Settings", () => {
     const by = Object.fromEntries(checks.map((c) => [c.id, c]));
     assert.deepEqual(by.github, { id: "github", state: "ok", accounts: [{ label: "@octo", state: "ok" }] });
     assert.deepEqual(by.gh.accounts, [{ label: "@octo", state: "ok" }]);
-    assert.deepEqual(by.primer.accounts, [{ label: "me@example.com", state: "ok" }]);
     assert.deepEqual(by.slack.accounts, [{ label: "Me (me) · Acme", state: "ok" }]);
     assert.deepEqual(by.gcloud.accounts, [{ label: "me@example.com · projects: prod", state: "ok" }]);
     assert.equal(by.aws.accounts[0].state, "ok");
@@ -100,7 +99,6 @@ describe("connection checks for Settings", () => {
     assert.equal(by.gcloud.state, "expired");
     assert.match(by.gcloud.detail, /16-hour/);
     assert.equal(by.aws.state, "unset");
-    assert.equal(by.primer.state, "missing");
     assert.equal(by.slack.state, "unset");
     assert.equal(by.claude.state, "missing");
     assert.equal(by.codex.state, "missing");

@@ -7,7 +7,7 @@ import { accessToken } from "./gcp.mjs";
 
 /**
  * The sign-ins that live on the laptop, checked for the board's Settings page: GitHub (Alfred's token
- * and the Engineers' gh), Primer, Slack, Google Cloud, AWS and the engines. Each check is the cheapest
+ * and the Engineers' gh), Slack, Google Cloud, AWS and the engines. Each check is the cheapest
  * real call that proves the sign-in works (who am I, a token refresh, a read role), never a write.
  * The board gets states and account names only, never a credential.
  */
@@ -88,14 +88,6 @@ export async function checkConnections(cfg, { fetchImpl = fetch, exec = run, aws
         throw Object.assign(new Error(`gh: ${short(err)}`), { status: /auth login|401/i.test(short(err)) ? 401 : undefined });
       });
       return { state: "ok", accounts: [{ label: `@${login}`, state: "ok" }] };
-    }),
-    add("primer", async () => {
-      if (cfg.primerEnabled === false) return { state: "unset", detail: "Primer is off for this instance" };
-      const token = read(cfg.primerTokenFile);
-      if (!token) return { state: "missing", detail: "no read token: run scripts/bootstrap.sh" };
-      const text = await mcpTool(cfg.primerMcpUrl, token, "primer_whoami", {}, fetchImpl);
-      const who = firstMatch(text, /"email"\s*:\s*"([^"]+)"/, /"name"\s*:\s*"([^"]+)"/);
-      return { state: "ok", ...(who ? { accounts: [{ label: who, state: "ok" }] } : {}) };
     }),
     add("slack", async () => {
       const token = read(cfg.slackTokenFile);

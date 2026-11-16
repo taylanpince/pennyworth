@@ -265,9 +265,10 @@ scripts/backup.sh --verify                         # restore the latest off-mach
 - **The Assistant reads it too (2026-11-10),** through the same server on the backplane (`PENNYWORTH_CLICKHOUSE_MCP_TOKEN` in Paperclip). No other Paperclip agent gets it, and `verify-security.sh` checks that: the scouts run unattended over untrusted messages.
 - **Queries outlast Codex's 60-second MCP tool timeout:** the proxy caps them at 120 seconds and the runner gives Codex `tool_timeout_sec=180` for this server (`toolTimeout` in `PRIVATE_READS`).
 
-### Settings (D-65)
+### Settings (D-65, D-66)
 
 - **Every connection belongs on the Settings page.** A new sign-in gets a card in `services/board/src/connections.ts`: board sign-ins report through their proxy's `/auth/status` (add `account` when the proxy knows who), laptop sign-ins through a check in `services/runner/src/connections.mjs` with the cheapest real call that proves it works. Never put a credential, or a piece of one, in a check's report: the schema is strict, and OpenRouter's default key label is dropped for that reason.
+- **Laptop sign-ins run in the runner, driven from Settings (D-66).** `services/runner/src/signins.mjs` has a driver per tool. Only a link, a one-time code and a prompt go back to the board (by pattern, then a strict schema); never relay a tool's raw output. **Check what a login does to the current sign-in before running it against real files:** `codex login` deletes it as it starts, so Codex signs in to a fresh home and copies `auth.json` over on success (two cancelled tests logged out every Paperclip agent on 2026-11-16). Killing `docker compose exec` leaves the process running in the container; stop it there.
 - **The board loses the laptop's report on restart** (it's in memory) and asks the runner for a check on the first Settings view; the runner answers through its activity report within 30 seconds. Tests set `PENNYWORTH_CONNECTION_CHECKS=off` so the flow test makes no outside calls.
 
 ### Cloudflare (D-64)

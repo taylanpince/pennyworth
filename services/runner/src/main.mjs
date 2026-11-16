@@ -24,6 +24,7 @@ import { PRIMER_FILES, primerLink, publishDocument, readDocument } from "./prime
 import { startRepoHelper } from "./repohelper.mjs";
 import { baseRef, branchChanges, carryOver, dirtyCheckouts, ensureRepo, findBranches, keepBranches, messagesSince, moveOffDefault, readManifest, signUnsigned, workspacePath, workspaceRepos } from "./workspace.mjs";
 import { checkConnections } from "./connections.mjs";
+import { SignInRunner } from "./signins.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import * as merges from "./merges.mjs";
@@ -142,6 +143,50 @@ async function reportConnections() {
     log("connection check report failed", { err: String(err.message ?? err).slice(0, 200) });
   } finally {
     connectionsRunning = false;
+  }
+}
+
+// ------------------------------------------------------------------ sign-ins started from Settings (D-66)
+
+const signinUpdates = [];
+let signinFlushing = false;
+/** Send what the page should show now (a link, a code, the result) without waiting for the long poll. */
+async function flushSignins() {
+  if (!boardApi || signinFlushing || !signinUpdates.length) return;
+  signinFlushing = true;
+  try {
+    while (signinUpdates.length) {
+      const updates = signinUpdates.splice(0, 20);
+      const res = await boardApi.post("/internal/runner/signins", { updates, wait: false }).catch((err) => {
+        signinUpdates.unshift(...updates);
+        throw err;
+      });
+      for (const c of res.commands ?? []) void signinRunner.handle(c);
+    }
+  } catch (err) {
+    log("sign-in update failed", { err: String(err.message ?? err).slice(0, 200) });
+    setTimeout(() => void flushSignins(), 3_000);
+  } finally {
+    signinFlushing = false;
+  }
+}
+const signinRunner = new SignInRunner(cfg, (u) => {
+  signinUpdates.push(u);
+  void flushSignins();
+  // A finished sign-in shows in Settings right away.
+  if (u.status === "done") void reportConnections();
+}, { log });
+
+/** The long poll: commands from Settings (start, the user's answer, cancel) arrive within a second. */
+async function signinLoop() {
+  if (!boardApi || process.env.PENNYWORTH_CONNECTION_CHECKS === "off") return;
+  for (;;) {
+    try {
+      const res = await boardApi.post("/internal/runner/signins", { updates: [] });
+      for (const c of res.commands ?? []) void signinRunner.handle(c);
+    } catch {
+      await new Promise((r) => setTimeout(r, 5_000));
+    }
   }
 }
 
@@ -1897,6 +1942,7 @@ reportActivity();
 setInterval(reportActivity, 30_000);
 setInterval(reportConnections, 15 * 60_000);
 setTimeout(reportConnections, 5_000);
+void signinLoop();
 // The Stats view (D-62): anything the board hasn't had yet, including what failed to send before.
 void reportUsage();
 setInterval(reportUsage, 5 * 60_000);

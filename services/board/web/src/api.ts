@@ -1,5 +1,5 @@
 import type { Agents, Board, Bucket, Cadence, IssueView, Models, RecurringView, TelegramStep, Update, Engine, Executor } from "./types";
-import type { Connections } from "./types";
+import type { Connections, SignInSession } from "./types";
 import type { Episode, Memory, MemoryKind, MemoryList, MemoryPatch, Sparklines, Stats, StatsRange } from "./types";
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -72,6 +72,10 @@ export const api = {
   models: (assignee: string, engine?: Engine) => call<Models>("GET", `/api/models/${assignee}${engine ? `?engine=${engine}` : ""}`),
   connections: () => call<Connections>("GET", "/api/connections"),
   checkConnections: () => call<Connections>("POST", "/api/connections/check", {}),
+  signIn: (provider: string) => call<{ session: SignInSession | null; runnerOnline: boolean }>("GET", `/api/connections/signin/${provider}`),
+  startSignIn: (provider: string) => call<{ session: SignInSession }>("POST", `/api/connections/signin/${provider}`, {}),
+  answerSignIn: (provider: string, text: string) => call<{ session: SignInSession }>("POST", `/api/connections/signin/${provider}/input`, { text }),
+  cancelSignIn: (provider: string) => call<{ session: SignInSession | null }>("POST", `/api/connections/signin/${provider}/cancel`, {}),
   telegramStart: (phone: string) => call<TelegramStep>("POST", "/api/telegram/start", { phone }),
   telegramCode: (login_id: string, code: string) => call<TelegramStep>("POST", "/api/telegram/code", { login_id, code }),
   telegramPassword: (login_id: string, password: string) => call<TelegramStep>("POST", "/api/telegram/password", { login_id, password }),

@@ -227,6 +227,13 @@ grep -qF 'export const READ_SCOPE = /^(user:read|account:read|[a-z0-9_-]+\.(read
   && grep -q 'const reads = readScopes(supported);' services/cloudflare-mcp/src/signin.ts && grep -q 'const writes = granted ? writeScopes(granted) : \[\];' services/cloudflare-mcp/src/signin.ts \
   && [ "$(sed -n 's/^export const READ_TOOLS = \[\(.*\)\];/\1/p' services/cloudflare-mcp/src/policy.ts | tr -d '" ')" = "search,execute,docs,whoami" ] \
   && pass "cloudflare-mcp asks for Cloudflare's read scopes only and refuses a sign-in with more (services/cloudflare-mcp/src/policy.ts)" || fail "cloudflare-mcp: scopes, the sign-in check or the tool list changed"
+# Sign-ins from Settings (D-66): the runner sends back only an https link, a plain code and a prompt (strict schema),
+# never a tool's output, and Codex signs in to a fresh home so a sign-in can't remove the current one.
+grep -qF '.refine((u) => u.startsWith("https://"), "https links only")' services/board/src/signins.ts \
+  && grep -qF 'code: z.string().regex(/^[A-Za-z0-9-]{4,20}$/).optional(),' services/board/src/signins.ts \
+  && grep -qF 'export const RunnerPollSchema = z.object({ updates: z.array(Update).max(20), wait: z.boolean().optional() }).strict();' services/board/src/signins.ts \
+  && grep -qF 'const home = mkdtempSync(join(tmpdir(), "pennyworth-codex-login-"));' services/runner/src/signins.mjs \
+  && pass "board: the sign-in relay takes only https links and plain codes; Codex sign-ins can't remove the current one (D-66)" || fail "sign-in relay schema or Codex's fresh-home sign-in changed"
 # Engineer jobs' Google Cloud (D-53): the user's own access, read-only by the prompt's rule; jobs get a
 # one-hour access token only, never the sign-in's refresh token.
 grep -q '\*\*Read only:\*\* describe, list, get, read and get-iam-policy commands' services/runner/src/prompt.mjs \

@@ -50,10 +50,12 @@ describe("Settings: the connections view", () => {
         ],
       },
     });
-    expect(v.gcloud).toMatchObject({ group: "laptop", state: "attention", checkedAt: "2026-11-16T10:00:00Z", action: { kind: "command", command: "scripts/gcloud-auth.sh" } });
+    expect(v.gcloud).toMatchObject({ group: "laptop", state: "attention", checkedAt: "2026-11-16T10:00:00Z", action: { kind: "signin", provider: "gcloud", command: "scripts/gcloud-auth.sh" } });
     expect(v.aws!.state).toBe("attention");
     expect(v.github).toMatchObject({ state: "ok", accounts: [{ label: "@octo", state: "ok" }] });
-    expect(v.primer).toMatchObject({ state: "unknown", detail: "the runner didn't report it" });
+    expect(v.codex).toMatchObject({ state: "unknown", detail: "the runner didn't report it", action: { kind: "signin", provider: "codex" } });
+    // Primer signs in on the board now (D-66).
+    expect(v.primer).toMatchObject({ group: "board", state: "unset" });
     // Without compose.connections.yaml, Slack reconnects with the script.
     expect(v.slack!.action).toMatchObject({ kind: "command", command: "scripts/slack-auth.sh" });
   });

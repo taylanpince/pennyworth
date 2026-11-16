@@ -1,15 +1,23 @@
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-/** Written by src/auth.ts: the token pair plus the dynamically registered client it belongs to. */
+/** Written by a sign-in (src/signin.ts, or src/auth.ts before D-66): the token pair plus the registered client it belongs to. */
 export interface StoredToken {
   access_token: string;
   refresh_token?: string;
   expires_at?: number; // epoch ms
   scope?: string;
   client_id: string;
+  client_secret?: string;
   token_endpoint: string;
   resource?: string;
+}
+
+/** Sign-in state for the board's banner and the healthcheck. */
+export interface AuthStatus {
+  state: "missing" | "ok" | "expired" | "unknown";
+  since: string;
+  detail?: string;
 }
 
 export class PrimerAuthError extends Error {}
@@ -31,11 +39,13 @@ export function parseTokenResponse(json: Record<string, unknown>, now = Date.now
 /**
  * Holds the user token and refreshes it. The newest token pair is written back atomically,
  * because Primer rotates refresh tokens on every use and revokes the whole family when an
- * old one is reused. One proxy process is the only refresher.
+ * old one is reused. One proxy process is the only refresher. A refresh Primer refuses marks the
+ * sign-in expired, which the board shows with a Reconnect button.
  */
 export class TokenStore {
   private token?: StoredToken;
   private refreshing?: Promise<StoredToken>;
+  private status_: AuthStatus = { state: "unknown", since: new Date().toISOString() };
 
   constructor(
     private readonly path: string,
@@ -46,12 +56,29 @@ export class TokenStore {
     return existsSync(this.path);
   }
 
+  status(): AuthStatus {
+    if (!this.available()) return { state: "missing", since: this.status_.since };
+    return this.status_;
+  }
+
+  /** Record what the last use of the token showed. */
+  mark(state: "ok" | "expired", detail?: string): void {
+    if (this.status_.state === state && this.status_.detail === detail) return;
+    this.status_ = { state, since: new Date().toISOString(), ...(detail ? { detail } : {}) };
+  }
+
   private load(): StoredToken {
     if (!this.token) {
-      if (!existsSync(this.path)) throw new PrimerAuthError("Primer is not connected yet (run scripts/primer-auth.sh)");
+      if (!existsSync(this.path)) throw new PrimerAuthError("Primer is not connected yet (Connect on the board)");
       this.token = JSON.parse(readFileSync(this.path, "utf8")) as StoredToken;
     }
     return this.token;
+  }
+
+  /** Store a token pair from a new sign-in. */
+  replace(t: StoredToken): void {
+    this.save(t);
+    this.mark("ok");
   }
 
   private save(t: StoredToken): void {
@@ -76,11 +103,24 @@ export class TokenStore {
 
   private async doRefresh(): Promise<StoredToken> {
     const t = this.load();
-    if (!t.refresh_token) throw new PrimerAuthError("Primer token expired and has no refresh token (run scripts/primer-auth.sh)");
+    if (!t.refresh_token) {
+      this.mark("expired", "the sign-in has no refresh token");
+      throw new PrimerAuthError("Primer token expired and has no refresh token (Reconnect on the board)");
+    }
     const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: t.refresh_token, client_id: t.client_id });
+    if (t.client_secret) body.set("client_secret", t.client_secret);
     if (t.resource) body.set("resource", t.resource);
     const res = await this.fetchImpl(t.token_endpoint, { method: "POST", body, signal: AbortSignal.timeout(15_000) });
-    const next = parseTokenResponse((await res.json()) as Record<string, unknown>);
+    const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    let next;
+    try {
+      if (!res.ok && typeof json.error !== "string") throw new PrimerAuthError(`Primer token endpoint answered ${res.status}`);
+      next = parseTokenResponse(json);
+    } catch (err) {
+      // A refusal (invalid_grant and the like) needs the user; a 5xx is Primer's problem and may pass.
+      if (res.status < 500) this.mark("expired", String((err as Error).message));
+      throw err;
+    }
     this.save({ ...t, ...next, refresh_token: next.refresh_token ?? t.refresh_token });
     return this.token!;
   }

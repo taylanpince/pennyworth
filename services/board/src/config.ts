@@ -51,6 +51,8 @@ export interface Config {
   clickhouse?: { url: string; token: string };
   /** cloudflare-mcp's sign-in endpoints (D-64): off unless the token file exists. */
   cloudflare?: { url: string; token: string };
+  /** primer-mcp's sign-in endpoints (D-66): off unless the token file exists. */
+  primer?: { url: string; token: string };
   /** The off-machine backup's status file (D-58), written by scripts/backup.sh --offsite. */
   backupStatus: string;
 }
@@ -81,6 +83,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     grafana: grafanaConfig(env),
     clickhouse: clickhouseConfig(env),
     cloudflare: cloudflareConfig(env),
+    primer: primerConfig(env),
     backupStatus: env.BOARD_BACKUP_STATUS ?? join(dirname(env.BOARD_DB ?? "/data/board/board.sqlite"), "backup.json"),
   };
 }
@@ -119,6 +122,12 @@ function cloudflareConfig(env: NodeJS.ProcessEnv): Config["cloudflare"] {
   const file = env.CLOUDFLARE_AUTH_TOKEN_FILE ?? "/run/secrets/cloudflare_auth_token";
   if (!existsSync(file)) return undefined;
   return { url: (env.CLOUDFLARE_SERVICE_URL ?? "http://cloudflare-mcp:8091").replace(/\/+$/, ""), token: readFileSync(file, "utf8").trim() };
+}
+
+function primerConfig(env: NodeJS.ProcessEnv): Config["primer"] {
+  const file = env.PRIMER_AUTH_TOKEN_FILE ?? "/run/secrets/primer_auth_token";
+  if (!existsSync(file)) return undefined;
+  return { url: (env.PRIMER_SERVICE_URL ?? "http://primer-mcp:8084").replace(/\/+$/, ""), token: readFileSync(file, "utf8").trim() };
 }
 
 function internalConfig(env: NodeJS.ProcessEnv): Config["internal"] {

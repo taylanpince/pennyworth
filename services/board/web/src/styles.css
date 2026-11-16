@@ -739,6 +739,15 @@ kbd {
 .conn-cmd { display: flex; align-items: center; gap: 8px; margin: 2px 0 6px; }
 .conn-cmd code { flex: 1; min-width: 0; padding: 7px 10px; overflow-x: auto; white-space: nowrap; font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; }
 .conn-note { margin: 0; font-size: 13px; color: var(--muted); }
+.signin { display: grid; gap: 10px; }
+.signin p { margin: 0; }
+.signin-step { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0; }
+.signin-n { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: 12px; font-weight: 600; color: var(--accent); background: var(--accent-soft); }
+.signin-field { flex: 1; min-width: 220px; margin: 0; }
+.signin-code { padding: 4px 10px; font-size: 18px; letter-spacing: 0.08em; font-weight: 600; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; }
+.signin-ok { color: var(--ok); }
+.signin [role="alert"] { color: var(--danger); }
+.signin .link-btn { font-size: 13px; }
 @media (max-width: 560px) {
   .conn-head { flex-wrap: wrap; }
   .conn-side { width: 100%; padding-left: 22px; }

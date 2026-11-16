@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { TelegramSignIn } from "./components";
 import { ConnectionPanel } from "./Connections";
-import type { Connection, Connections, ConnectionState } from "./types";
+import type { Connection, Connections, ConnectionState, SignInSession } from "./types";
 import { WhatsAppPanel } from "./WhatsApp";
 
 const STATE_LABEL: Record<ConnectionState, string> = { ok: "Connected", attention: "Needs attention", off: "Not connected", unset: "Not set up", unknown: "Unknown" };
@@ -144,7 +144,7 @@ function ConnectionCard({ c, canConnect, onChange }: { c: Connection; canConnect
       <span className="conn-note">Connect from the laptop</span>
     );
   } else {
-    const label = a.kind === "panel" ? (c.state === "ok" ? (c.id === "google" ? "Manage" : verb) : verb) : a.kind === "setup" || c.state === "unset" ? "How to set up" : c.state === "ok" || c.state === "attention" ? "How to reconnect" : "How to connect";
+    const label = a.kind === "signin" ? verb : a.kind === "panel" ? (c.state === "ok" ? (c.id === "google" ? "Manage" : verb) : verb) : a.kind === "setup" || c.state === "unset" ? "How to set up" : c.state === "ok" || c.state === "attention" ? "How to reconnect" : "How to connect";
     side = (
       <button className={`btn${!open && (c.state === "attention" || c.state === "off") ? " primary" : ""}`} aria-expanded={open} onClick={() => setOpen(!open)}>
         {open ? "Close" : label}
@@ -195,6 +195,7 @@ function ConnectionCard({ c, canConnect, onChange }: { c: Connection; canConnect
             ) : (
               <p className="conn-note">Sign in from the board on your laptop.</p>
             ))}
+          {a.kind === "signin" && <SignInFlow provider={a.provider} name={c.name} command={a.command} note={a.note} onDone={onChange} onClose={() => setOpen(false)} />}
           {a.kind === "command" && <Command command={a.command} note={a.note} />}
           {a.kind === "setup" && <p className="conn-note">{a.note}</p>}
         </div>
@@ -222,6 +223,149 @@ function Command({ command, note }: { command: string; note?: string }) {
         </button>
       </div>
       <p className="conn-note">{note ?? "Run it in a terminal in the Pennyworth folder on the laptop."}</p>
+    </>
+  );
+}
+
+/**
+ * A sign-in the runner makes on the laptop (D-66): it starts the tool's own login, and this shows
+ * what to do: open the link, enter the code there, or paste back what the page shows.
+ */
+function SignInFlow({ provider, name, command, note, onDone, onClose }: { provider: string; name: string; command: string; note?: string; onDone: () => void; onClose: () => void }) {
+  const [session, setSession] = useState<SignInSession | null>(null);
+  const [error, setError] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [terminal, setTerminal] = useState(false);
+  const live = useRef(true);
+  const finished = (s: SignInSession | null) => !s || s.status === "done" || s.status === "failed" || s.status === "cancelled";
+
+  async function start() {
+    setError("");
+    setSession(null);
+    try {
+      setSession((await api.startSignIn(provider)).session);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+  useEffect(() => {
+    live.current = true;
+    void start();
+    return () => {
+      live.current = false;
+    };
+  }, [provider]);
+  // Follow the runner's progress while the sign-in is open.
+  useEffect(() => {
+    if (finished(session)) return;
+    const t = setInterval(async () => {
+      try {
+        const r = await api.signIn(provider);
+        if (!live.current) return;
+        setSession(r.session);
+        if (r.session?.status === "done") onDone();
+      } catch {}
+    }, 1_500);
+    return () => clearInterval(t);
+  }, [provider, session?.status]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!answer.trim()) return;
+    setBusy(true);
+    try {
+      setSession((await api.answerSignIn(provider, answer.trim())).session);
+      setAnswer("");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function cancel() {
+    await api.cancelSignIn(provider).catch(() => undefined);
+    onClose();
+  }
+
+  const s = session;
+  return (
+    <div className="signin">
+      {error && <p role="alert">{error}</p>}
+      {!s && !error && <p className="conn-note" role="status">Starting…</p>}
+      {s && s.status !== "done" && s.status !== "failed" && s.status !== "cancelled" && (
+        <>
+          {s.url && (
+            <p className="signin-step">
+              <span className="signin-n">1</span>
+              <a className="btn primary" href={s.url} target="_blank" rel="noreferrer">
+                Open {name} sign-in
+              </a>
+            </p>
+          )}
+          {s.code && (
+            <p className="signin-step">
+              <span className="signin-n">2</span>
+              <span>
+                Enter this code there: <CopyCode code={s.code} />
+              </span>
+            </p>
+          )}
+          {s.prompt && (
+            <form className="signin-step" onSubmit={submit}>
+              <span className="signin-n">{s.url ? 2 : 1}</span>
+              <label className="connection-field signin-field">
+                <span>{s.prompt.label}</span>
+                <input autoFocus type={s.prompt.secret ? "password" : "text"} autoComplete="off" spellCheck={false} value={answer} onChange={(e) => setAnswer(e.target.value)} disabled={busy} />
+              </label>
+              <button className="btn primary" type="submit" disabled={busy || !answer.trim()}>
+                {busy ? "…" : "Continue"}
+              </button>
+            </form>
+          )}
+          <p className="conn-note" role="status">
+            {s.message ?? (s.code && !s.prompt ? "Waiting for you to approve it there. This page updates by itself." : s.url && !s.prompt ? "Waiting for the sign-in to finish…" : "")}
+          </p>
+          <p>
+            <button className="btn" onClick={() => void cancel()}>
+              Cancel
+            </button>
+          </p>
+        </>
+      )}
+      {s?.status === "done" && (
+        <p className="signin-ok" role="status">
+          {s.message ?? "Connected."}
+        </p>
+      )}
+      {(s?.status === "failed" || s?.status === "cancelled") && (
+        <>
+          <p role="alert">{s.message}</p>
+          <p>
+            <button className="btn" onClick={() => void start()}>
+              Try again
+            </button>
+          </p>
+        </>
+      )}
+      <p className="conn-note">
+        <button className="link-btn" onClick={() => setTerminal(!terminal)} aria-expanded={terminal}>
+          {terminal ? "Hide" : "Or sign in from a terminal"}
+        </button>
+      </p>
+      {terminal && <Command command={command} note={note} />}
+    </div>
+  );
+}
+
+function CopyCode({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <>
+      <code className="signin-code">{code}</code>{" "}
+      <button className="btn" onClick={() => void navigator.clipboard?.writeText(code).then(() => (setCopied(true), setTimeout(() => setCopied(false), 1500)), () => undefined)}>
+        {copied ? "Copied" : "Copy"}
+      </button>
     </>
   );
 }

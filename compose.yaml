@@ -225,12 +225,15 @@ services:
       PRIMER_TOKEN_FILE: /state/token.json
       MCP_TOKEN_FILE: /run/secrets/primer_mcp_token
       MCP_READ_TOKEN_FILE: /run/secrets/primer_mcp_read_token
+      # The board's sign-in endpoints (D-66): state, and starting or finishing a sign-in.
+      PRIMER_AUTH_TOKEN_FILE: /run/secrets/primer_auth_token
     volumes:
       # Read-write: Primer rotates the refresh token on every refresh.
       - ${PENNYWORTH_SECRETS_DIR}/primer:/state
     secrets:
       - primer_mcp_token
       - primer_mcp_read_token
+      - primer_auth_token
     dns: [1.1.1.1, 8.8.8.8]   # see paperclip
     ports:
       # Loopback only, for the runner's Engineer jobs on the host: /mcp/read with its own token (D-40, D-51).
@@ -425,6 +428,7 @@ services:
       - grafana_auth_token  # Grafana sign-in state and sign-in only; not the MCP token
       - clickhouse_auth_token # ClickHouse sign-in state and sign-in only (D-57); not the MCP token
       - cloudflare_auth_token # Cloudflare sign-in state and sign-in only (D-64); not the MCP token
+      - primer_auth_token   # Primer sign-in state and sign-in only (D-66); not the MCP tokens
     ports:
       - "127.0.0.1:3120:3120"
       # LAN listener; loopback-only unless .env sets BOARD_LAN_BIND=0.0.0.0 (e.g. with BOARD_LAN_PORT=80).
@@ -480,6 +484,8 @@ secrets:
     file: ${PENNYWORTH_SECRETS_DIR}/primer_mcp_token
   primer_mcp_read_token:
     file: ${PENNYWORTH_SECRETS_DIR}/primer_mcp_read_token
+  primer_auth_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/primer_auth_token
   glean_mcp_token:
     file: ${PENNYWORTH_SECRETS_DIR}/glean_mcp_token
   glean_mcp_read_token:

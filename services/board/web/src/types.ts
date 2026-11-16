@@ -446,6 +446,7 @@ export interface Connection {
   action:
     | { kind: "connect"; href: string }
     | { kind: "panel"; panel: "google" | "slack" | "telegram" | "whatsapp" }
+    | { kind: "signin"; provider: string; command: string; note?: string }
     | { kind: "command"; command: string; note?: string }
     | { kind: "setup"; note: string };
 }
@@ -455,4 +456,17 @@ export interface Connections {
   checking: boolean;
   /** When the runner last reported in (null: not since the board started). */
   runnerSeenAt: string | null;
+}
+
+/** A sign-in the runner is making on the laptop for Settings (services/board/src/signins.ts). */
+export interface SignInSession {
+  id: string;
+  provider: string;
+  status: "starting" | "waiting" | "done" | "failed" | "cancelled";
+  url?: string;
+  code?: string;
+  prompt?: { label: string; secret: boolean };
+  message?: string;
+  startedAt: string;
+  updatedAt: string;
 }

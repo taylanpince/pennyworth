@@ -56,6 +56,7 @@ gen_secret telegram_mcp_token
 gen_secret telegram_auth_token   # the board's Telegram sign-in state and sign-in (D-37)
 gen_secret primer_mcp_token
 gen_secret primer_mcp_read_token   # the runner's Engineer jobs, /mcp/read on 127.0.0.1:3123 (D-51)
+gen_secret primer_auth_token       # the board's Primer sign-in state and sign-in (D-66)
 gen_secret glean_mcp_token
 gen_secret glean_mcp_read_token    # the runner's Engineer jobs, /mcp/read on 127.0.0.1:3126 (D-51)
 gen_secret glean_auth_token      # the board's Glean sign-in state and sign-in (D-38)
