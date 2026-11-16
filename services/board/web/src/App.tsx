@@ -23,7 +23,7 @@ import { CrewView } from "./Agents";
 import { MemoryView, useMemoryPending } from "./Memory";
 import { StatsView } from "./Stats";
 import { PairRequired, api, type Session } from "./api";
-import { BackupBanner, CardView, ClickHouseBanner, ExecutorPicker, GleanBanner, GoogleBanner, GrafanaBanner, PhoneIcon, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
+import { BackupBanner, CardView, ClickHouseBanner, CloudflareBanner, ExecutorPicker, GleanBanner, GoogleBanner, GrafanaBanner, PhoneIcon, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
 import { CrewPicker, Drawer } from "./Drawer";
 import { Markdown, setSlackTeams } from "./markdown";
 import { PairScreen, PhonePanel } from "./Pairing";
@@ -584,6 +584,7 @@ export function App() {
       <GleanBanner glean={board.glean} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
       <GrafanaBanner grafana={board.grafana} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
       <ClickHouseBanner clickhouse={board.clickhouse} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
+      <CloudflareBanner cloudflare={board.cloudflare} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
       <BackupBanner backup={board.backup} />
 
       {mobile && <div className="sections-row">{sections}</div>}

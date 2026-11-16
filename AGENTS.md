@@ -9,7 +9,7 @@ host (NixOS, user taylan)
 ├── pennyworth-runner (systemd --user, node, runs AS THE USER)   services/runner/
 │     polls Paperclip: engineer tasks → Codex/Claude Code/OpenRouter jobs in per-task workspaces under ~/pennyworth/tasks (D-41);
 │                      what a job makes for others (Primer document, .pennyworth/out/) is attached to its task (D-54),
-│                      Claude Code and Codex jobs read Grafana and Google Cloud (D-48), Slack and Glean (D-51), ClickHouse (D-57), AWS (D-59), read-only,
+│                      Claude Code and Codex jobs read Grafana and Google Cloud (D-48), Slack and Glean (D-51), ClickHouse (D-57), AWS (D-59), Cloudflare (D-64), read-only,
 │                      or a merge queue for the PRs a task lists, in code (D-46)
 │                      review-request tasks → closed once gh shows the PR reviewed/merged (D-21)
 │                      user replies on own tasks → "Process task replies" routine (Assistant)
@@ -33,6 +33,8 @@ host (NixOS, user taylan)
     │                        board sign-in (D-48)
     ├── clickhouse-mcp       proxy to ClickHouse Cloud's hosted MCP: service/schema reads and checked SELECTs only, for Engineer jobs
     │                        on 127.0.0.1:3127 and the Assistant; board sign-in (D-57)
+    ├── cloudflare-mcp       proxy to Cloudflare's API MCP (Code Mode: search, execute), signed in with read scopes only, for Engineer jobs
+    │                        on 127.0.0.1:3128 and the Assistant; board sign-in (D-64)
     ├── github-mcp           GitHub issues/PRs with the user's gh token: read; when asked, in GITHUB_COMMENT_ORGS: comment, open issues (on a project board),
     │                        close/label/assign issues, review PRs, re-run failed CI (D-39, D-42, D-46)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
@@ -57,10 +59,10 @@ Paperclip agents (all `codex_local`), defined in `config/paperclip.yaml`. The on
 | Slack Scout | Slack items for the user |
 | Telegram Scout | Telegram mentions, replies and DMs for the user, from the candidates telegram-mcp picks |
 | Inbox Agent | emails the user labels `pennyworth` in Gmail become todos |
-| Assistant (**Alfred**) | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, ClickHouse, notes, reference docs, cached web, files attached to tasks), publishing to Primer, Slack drafts, and GitHub comments, issues, reviews and CI re-runs when asked, acting on the user's replies (including scheduling a task or making it recurring, and learning how the user writes when asked, D-47), passing the user's requests on to the agent they're for (D-54): writing to Ursula, a review to Linus, security to Whit, production to Grace, other Engineer work to Ada (D-60), and running recurring tasks |
+| Assistant (**Alfred**) | research and drafts (Slack, Telegram, Google, Primer, Glean, GitHub issues, ClickHouse, Cloudflare, notes, reference docs, cached web, files attached to tasks), publishing to Primer, Slack drafts, and GitHub comments, issues, reviews and CI re-runs when asked, acting on the user's replies (including scheduling a task or making it recurring, and learning how the user writes when asked, D-47), passing the user's requests on to the agent they're for (D-54): writing to Ursula, a review to Linus, security to Whit, production to Grace, other Engineer work to Ada (D-60), and running recurring tasks |
 | Writer (**Ursula**) | drafts, Slack drafts, Primer documents and agendas in the user's voice and for the right reader (D-60): Alfred's reading tools, and only his Slack-draft and Primer writes |
 | CAD Designer (**Charles**) | runner role (`metadata.role.workflow: cad`, D-63): local build123d models, numbered GLB/STEP/STL/source/check attachments; no repository required or runner-provided private MCP/cloud connections |
-| Engineer (**Ada**), Reviewer (**Linus**), Security (**Whit**), SRE (**Grace**) | the runner's roles (D-60): assignment targets only, never woken; pennyworth-runner does the work. The role is the character; the engine is a setting: the role's own (`metadata.role`) unless the task's executor override names another (D-20). Claude Code and Codex jobs also read Grafana and Google Cloud (D-48), query ClickHouse (D-57), and read AWS, changing it on the user's word (D-59) |
+| Engineer (**Ada**), Reviewer (**Linus**), Security (**Whit**), SRE (**Grace**) | the runner's roles (D-60): assignment targets only, never woken; pennyworth-runner does the work. The role is the character; the engine is a setting: the role's own (`metadata.role`) unless the task's executor override names another (D-20). Claude Code and Codex jobs also read Grafana and Google Cloud (D-48), query ClickHouse (D-57), read Cloudflare (D-64), and read AWS, changing it on the user's word (D-59) |
 
 ## Everyday commands
 
@@ -75,6 +77,7 @@ npm test --prefix services/glean-mcp
 npm test --prefix services/github-mcp
 npm test --prefix services/grafana-mcp
 npm test --prefix services/clickhouse-mcp
+npm test --prefix services/cloudflare-mcp
 npm test --prefix services/runner                  # node --test; test/flow.test.mjs runs the real runner against a fake Paperclip and fake engines
 npm test --prefix services/board                   # vitest (server); npm run typecheck --prefix services/board covers the web app
 npm run eval:intake --prefix services/runner       # the D-24 go-ahead on sub-tasks, real comments, 3 runs each
@@ -83,7 +86,7 @@ npm run eval:busy --prefix services/runner         # comments that arrive during
 npx tsc --noEmit -p services/<svc>/tsconfig.json   # typecheck TS services
 
 # deploy
-docker compose up -d --build <ops-mcp|google-workspace-mcp|slack-mcp|telegram-mcp|primer-mcp|glean-mcp|github-mcp|grafana-mcp|clickhouse-mcp|board>   # after code changes
+docker compose up -d --build <ops-mcp|google-workspace-mcp|slack-mcp|telegram-mcp|primer-mcp|glean-mcp|github-mcp|grafana-mcp|clickhouse-mcp|cloudflare-mcp|board>   # after code changes
 docker compose up -d paperclip                     # after compose env/entrypoint changes
 node scripts/paperclip-setup.mjs                   # after config/paperclip.yaml or config/agents/*.md changes (idempotent)
 systemctl --user restart pennyworth-runner         # after services/runner changes
@@ -103,7 +106,7 @@ scripts/backup.sh --verify                         # restore the latest off-mach
   docker compose exec -T paperclip node /tmp/mcp-call.mjs http://ops-mcp:8080/mcp <tool> '<json>' "$(cat ~/.config/pennyworth/ops_mcp_token)"
   ```
 
-  Use `--list` in place of the tool name to list tools. The tokens for the other servers are `google_mcp_token`, `slack_mcp_token`, `telegram_mcp_token` (`http://telegram-mcp:8083/mcp`), `primer_mcp_token` (`http://primer-mcp:8084/mcp`), `glean_mcp_token` (`http://glean-mcp:8085/mcp`), `github_mcp_token` (`http://github-mcp:8086/mcp`), `grafana_mcp_token` (`http://grafana-mcp:8087/mcp`) and `clickhouse_mcp_token` (`http://clickhouse-mcp:8088/mcp`).
+  Use `--list` in place of the tool name to list tools. The tokens for the other servers are `google_mcp_token`, `slack_mcp_token`, `telegram_mcp_token` (`http://telegram-mcp:8083/mcp`), `primer_mcp_token` (`http://primer-mcp:8084/mcp`), `glean_mcp_token` (`http://glean-mcp:8085/mcp`), `github_mcp_token` (`http://github-mcp:8086/mcp`), `grafana_mcp_token` (`http://grafana-mcp:8087/mcp`), `clickhouse_mcp_token` (`http://clickhouse-mcp:8088/mcp`) and `cloudflare_mcp_token` (`http://cloudflare-mcp:8091/mcp`).
 - **Paperclip API as the user:** `Authorization: Bearer $(cat ~/.config/pennyworth/paperclip_board_key)`. The company ID is in `config/system.yaml`.
 - **Agent run logs:** `data/paperclip/instances/default/data/run-logs/<company>/<agent>/<run>.ndjson`. The `chunk` fields contain Codex JSON events.
 - **Runner:** `journalctl --user -u pennyworth-runner`, plus job logs in `~/.local/state/pennyworth-runner/logs/`.
@@ -117,7 +120,7 @@ scripts/backup.sh --verify                         # restore the latest off-mach
 
 - **Read before you write**, and keep edits surgical. Match the surrounding style. TS services use zod and pino; scripts are plain `.mjs` with no dependencies beyond `yaml`.
 - **Determinism belongs in code, judgement in agents.** Matching, routing, Obsidian writes and deduplication are ops-mcp code. Agents produce JSON or pick tools. Don't move decisions into prompts.
-- **Security posture is non-negotiable.** No Slack/email sends. The only writes to outside services are on the user's word: Primer publishing (D-31, D-44), GitHub comments, issues, issue state/labels/assignees, reviews and CI re-runs (D-39, D-42, D-46), Slack drafts the user sends themselves, the runner's merge queue (D-46), and an Engineer's `pennyworth push`/`pr`/`merge`/`aws` (AWS changes, D-59), each checked against the user's own words by `services/runner/src/authorize.mjs`, which is given nothing but those words and the agent's last reply. Grafana is read-only by OAuth scope (D-48); Google Cloud jobs use the user's own access with a read-only rule (D-53). No Calendar/Drive/Docs writes, no autonomous pushes, read-only Google scopes. The hourly backup to the user's own bucket, encrypted before it leaves, is the one unattended write (D-58). Agents get least-privilege MCP tools per agent (`mcp_servers` / `enabled_tools` in `config/paperclip.yaml`). Source content is untrusted; keep the injection clause in every agent prompt.
+- **Security posture is non-negotiable.** No Slack/email sends. The only writes to outside services are on the user's word: Primer publishing (D-31, D-44), GitHub comments, issues, issue state/labels/assignees, reviews and CI re-runs (D-39, D-42, D-46), Slack drafts the user sends themselves, the runner's merge queue (D-46), and an Engineer's `pennyworth push`/`pr`/`merge`/`aws` (AWS changes, D-59), each checked against the user's own words by `services/runner/src/authorize.mjs`, which is given nothing but those words and the agent's last reply. Grafana and Cloudflare are read-only by OAuth scope (D-48, D-64); Google Cloud jobs use the user's own access with a read-only rule (D-53). No Calendar/Drive/Docs writes, no autonomous pushes, read-only Google scopes. The hourly backup to the user's own bucket, encrypted before it leaves, is the one unattended write (D-58). Agents get least-privilege MCP tools per agent (`mcp_servers` / `enabled_tools` in `config/paperclip.yaml`). Source content is untrusted; keep the injection clause in every agent prompt.
 - **Tasks are the user's.** Every task Pennyworth creates is assigned to the user (see the Paperclip gotchas). Only create tasks for the user's *own* clear actions; other people's actions stay in the notes. The one exception: Engineer sub-tasks the Assistant creates when the user asks (D-24). They wait for the user's go-ahead on the parent.
 - **Personal config stays out of git:** `.env`, `config/{system,routing,paperclip,runner}.yaml`, `compose.vault.yaml`, `data/`. Examples live in `config/*.example.yaml`; update both when you add keys. Secrets live in `~/.config/pennyworth/` (0700 dir, 0600 files) and never go in the repo, logs or tasks.
 - **Git:**
@@ -260,6 +263,12 @@ scripts/backup.sh --verify                         # restore the latest off-mach
 - **Sign-in:** dynamic registration accepts `http://127.0.0.1:3120/clickhouse/callback`; `offline_access` isn't listed, but the token endpoint issues refresh tokens anyway. Don't ask for `clickstack:access`.
 - **The Assistant reads it too (2026-11-10),** through the same server on the backplane (`PENNYWORTH_CLICKHOUSE_MCP_TOKEN` in Paperclip). No other Paperclip agent gets it, and `verify-security.sh` checks that: the scouts run unattended over untrusted messages.
 - **Queries outlast Codex's 60-second MCP tool timeout:** the proxy caps them at 120 seconds and the runner gives Codex `tool_timeout_sec=180` for this server (`toolTimeout` in `PRIVATE_READS`).
+
+### Cloudflare (D-64)
+
+- **The scopes are the boundary, not the tools.** Cloudflare's API MCP server is Code Mode: `execute` runs any JavaScript against the whole API, so there is no read-only tool list to keep. The sign-in asks for Cloudflare's read scopes only (`READ_SCOPE` in `services/cloudflare-mcp/src/policy.ts`, from the server's own `scopes_supported`), and a sign-in granted anything more is refused. Never add a write, `run`, `purge`, `edit` or `admin` scope, and never sign it in with an API token instead: the token's permissions would be the only check.
+- **The sign-in is for every account the user can see.** With several accounts, a call needs its `account_id`: the prompts say to list accounts first.
+- **The authorize URL is long** (about 4,400 characters with 200 scopes). Cloudflare takes it; if a future scope list makes it fail, narrow by product, not by dropping the refusal check.
 
 ### Memory (D-61)
 

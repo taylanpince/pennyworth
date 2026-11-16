@@ -2,7 +2,7 @@ import type { AddressInfo } from "node:net";
 import pino from "pino";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
-import { ClickHouseAuth, GleanAuth, GrafanaAuth } from "../src/mcpauth.js";
+import { ClickHouseAuth, CloudflareAuth, GleanAuth, GrafanaAuth } from "../src/mcpauth.js";
 import type { Paperclip } from "../src/paperclip.js";
 import { Store } from "../src/store.js";
 
@@ -88,7 +88,7 @@ describe("Glean sign-in routes", () => {
   });
 });
 
-describe("Grafana and ClickHouse sign-in routes", () => {
+describe("Grafana, ClickHouse and Cloudflare sign-in routes", () => {
   const seen: { path: string; body: unknown }[] = [];
   const grafana = new GrafanaAuth("http://grafana", "t", undefined, (async (u: string | URL, init?: RequestInit) => {
     const path = new URL(String(u)).pathname;
@@ -105,8 +105,15 @@ describe("Grafana and ClickHouse sign-in routes", () => {
     if (path === "/auth/finish") return json({ ok: true });
     return json({}, 404);
   }) as typeof fetch);
-  // No Glean: its bare /callback must not reach Grafana or ClickHouse.
-  const app = createApp({ paperclip: {} as Paperclip, store: new Store(":memory:"), log: pino({ level: "silent" }), staticDir: "/nonexistent", timezone: "UTC", grafana, clickhouse, allowedHosts: ["localhost:3120", "127.0.0.1:3120"], mode: "local" });
+  const cloudflare = new CloudflareAuth("http://cloudflare", "t", undefined, (async (u: string | URL, init?: RequestInit) => {
+    const path = new URL(String(u)).pathname;
+    seen.push({ path: `cloudflare${path}`, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    if (path === "/auth/start") return json({ url: "https://mcp.cloudflare.com/authorize?state=s" });
+    if (path === "/auth/finish") return json({ ok: true });
+    return json({}, 404);
+  }) as typeof fetch);
+  // No Glean: its bare /callback must not reach Grafana, ClickHouse or Cloudflare.
+  const app = createApp({ paperclip: {} as Paperclip, store: new Store(":memory:"), log: pino({ level: "silent" }), staticDir: "/nonexistent", timezone: "UTC", grafana, clickhouse, cloudflare, allowedHosts: ["localhost:3120", "127.0.0.1:3120"], mode: "local" });
   let base = "";
   beforeAll(async () => {
     await new Promise<void>((r) => app.listen(0, "127.0.0.1", r));
@@ -143,6 +150,14 @@ describe("Grafana and ClickHouse sign-in routes", () => {
     expect(seen.at(-1)).toEqual({ path: "clickhouse/auth/start", body: { redirect_uri: "http://localhost:3120/clickhouse/callback" } });
     expect(await get("/clickhouse/callback?state=s&code=good")).toMatchObject({ status: 302, location: "/" });
     expect(seen.at(-1)).toEqual({ path: "clickhouse/auth/finish", body: { state: "s", code: "good" } });
+  });
+
+  it("sends the laptop to Cloudflare with its own callback (D-64)", async () => {
+    const r = await get("/cloudflare/connect");
+    expect(r).toMatchObject({ status: 302, location: expect.stringMatching(/^https:\/\/mcp\.cloudflare\.com\//) });
+    expect(seen.at(-1)).toEqual({ path: "cloudflare/auth/start", body: { redirect_uri: "http://localhost:3120/cloudflare/callback" } });
+    expect(await get("/cloudflare/callback?state=s&code=good")).toMatchObject({ status: 302, location: "/" });
+    expect(seen.at(-1)).toEqual({ path: "cloudflare/auth/finish", body: { state: "s", code: "good" } });
   });
 
   it("leaves Glean's /callback alone when Glean isn't set up", async () => {

@@ -75,6 +75,9 @@ export function loadConfig() {
     // ClickHouse reads for Claude Code and Codex jobs (D-57): clickhouse-mcp's loopback port.
     clickhouseMcpUrl: env.CLICKHOUSE_RUNNER_URL ?? cfg.clickhouse?.url ?? "http://127.0.0.1:3127/mcp",
     clickhouseTokenFile: join(secrets, "clickhouse_mcp_token"),
+    // Cloudflare reads for Claude Code and Codex jobs (D-64): cloudflare-mcp's loopback port.
+    cloudflareMcpUrl: env.CLOUDFLARE_RUNNER_URL ?? cfg.cloudflare?.url ?? "http://127.0.0.1:3128/mcp",
+    cloudflareTokenFile: join(secrets, "cloudflare_mcp_token"),
     gcp: {
       credentialsFile: gcpCredentials,
       projects: (cfg.gcp?.projects ?? []).filter(Boolean),

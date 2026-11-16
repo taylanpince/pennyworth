@@ -678,6 +678,38 @@ export function BackupBanner({ backup }: { backup: Board["backup"] }) {
 }
 
 /**
+ * Cloudflare sign-in (D-64): a banner when Pennyworth isn't signed in to Cloudflare yet, or it stopped
+ * accepting the sign-in, with Connect / Reconnect on the laptop (it returns to its loopback address).
+ */
+export function CloudflareBanner({ cloudflare, canConnect }: { cloudflare: Board["cloudflare"]; canConnect: boolean }) {
+  if (!cloudflare?.configured || (cloudflare.state !== "missing" && cloudflare.state !== "expired")) return null;
+  const since = new Date(cloudflare.since);
+  return (
+    <div className="alert" role="alert">
+      <div className="alert-row">
+        <span>
+          {cloudflare.state === "missing" ? (
+            <>Cloudflare isn't connected yet. Alfred and the Engineers can't read it until it is.</>
+          ) : (
+            <>
+              Cloudflare sign-in stopped working on {since.toLocaleDateString(undefined, { weekday: "long" })} at{" "}
+              {since.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}. Alfred and the Engineers can't read it.
+            </>
+          )}
+        </span>
+        {canConnect ? (
+          <a className="btn" href="/cloudflare/connect">
+            {cloudflare.state === "missing" ? "Connect" : "Reconnect"}
+          </a>
+        ) : (
+          <span className="alert-hint">Connect from the board on your computer.</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * ClickHouse sign-in (D-57): a banner when Pennyworth isn't signed in to ClickHouse Cloud yet, or it
  * stopped accepting the sign-in, with Connect / Reconnect on the laptop (it returns to its loopback address).
  */

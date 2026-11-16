@@ -171,6 +171,8 @@ export interface Board {
   grafana: SignInStatus | null;
   /** ClickHouse sign-in, for the Engineers (D-57); null when the board can't ask. */
   clickhouse: SignInStatus | null;
+  /** Cloudflare sign-in, for the Engineers and Alfred (D-64); null when the board can't ask. */
+  cloudflare: SignInStatus | null;
   /** The off-machine backup of tasks and board (D-58); null when the board can't tell. */
   backup: BackupStatus | null;
 }
@@ -183,10 +185,10 @@ export interface BackupStatus {
   stale: boolean;
 }
 
-/** A sign-in through an MCP proxy (Glean, Grafana, ClickHouse). */
+/** A sign-in through an MCP proxy (Glean, Grafana, ClickHouse, Cloudflare). */
 export interface SignInStatus {
   state: "missing" | "ok" | "expired" | "unknown";
-  /** Whether the service is set up (GLEAN_MCP_URL, GRAFANA_URL, CLICKHOUSE_MCP_URL): without it there's no banner. */
+  /** Whether the service is set up (GLEAN_MCP_URL, GRAFANA_URL, CLICKHOUSE_MCP_URL, CLOUDFLARE_MCP_URL): without it there's no banner. */
   configured: boolean;
   since: string;
   detail?: string;

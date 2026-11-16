@@ -15,7 +15,7 @@ import { INLINE_TYPES, MAX_UPLOAD_BODY, UploadSchema, decode, fileType, fileView
 import { MergeSchema, mergedDescription } from "./merge.js";
 import { memoryRoutes } from "./memoryapi.js";
 import { statsRoutes } from "./statsapi.js";
-import { McpAuthFailed, type ClickHouseAuth, type GleanAuth, type GrafanaAuth } from "./mcpauth.js";
+import { McpAuthFailed, type ClickHouseAuth, type CloudflareAuth, type GleanAuth, type GrafanaAuth } from "./mcpauth.js";
 import { GoogleAuthFailed, loopbackPort, type GoogleAuth } from "./google.js";
 import { Paperclip, PaperclipError, type Issue } from "./paperclip.js";
 import { TelegramAuthFailed, type TelegramAuth } from "./telegram.js";
@@ -56,6 +56,8 @@ export interface AppOptions {
   grafana?: GrafanaAuth;
   /** ClickHouse sign-in state and sign-in (D-57); no banner and no sign-in without it. */
   clickhouse?: ClickHouseAuth;
+  /** Cloudflare sign-in state and sign-in (D-64); no banner and no sign-in without it. */
+  cloudflare?: CloudflareAuth;
   /** The off-machine backup's status file (D-58); no banner without it. */
   backupStatus?: string;
 }
@@ -620,7 +622,7 @@ export function createApp(opts: AppOptions): Server {
         const folded = foldedChildren([...open, ...closed], ctx.assignees);
         store.placeNew(open.filter((i) => !folded.has(i.id)).map((i) => ({ id: i.id, createdAt: i.createdAt, status: i.status })));
         const recurring = new Map([...store.allRecurring()].map(([id, r]) => [id, { summary: recurringView(r, opts.timezone).summary, nextRun: r.nextRun, paused: r.paused }]));
-        const [busy, google, telegram, glean, grafana, clickhouse] = await Promise.all([working(ctx), opts.google?.status(), opts.telegram?.status(), opts.glean?.status(), opts.grafana?.status(), opts.clickhouse?.status()]);
+        const [busy, google, telegram, glean, grafana, clickhouse, cloudflare] = await Promise.all([working(ctx), opts.google?.status(), opts.telegram?.status(), opts.glean?.status(), opts.grafana?.status(), opts.clickhouse?.status(), opts.cloudflare?.status()]);
         const board = buildBoard({ open, closed, placements: store.placements(), seen: store.allSeen(), schedules: store.schedules(), recurring, installedAt: store.meta("installed_at")!, assignees: ctx.assignees, crew: { working: busy.map, jobs: latestJobs(shared.runner) } });
         for (const card of [...Object.values(board.buckets).flat(), ...board.recurring]) {
           const w = busy.map.get(card.identifier);
@@ -632,7 +634,7 @@ export function createApp(opts: AppOptions): Server {
         // When Tomorrow next rolls into Today: the next calendar day, except before days off.
         const today = localDate(opts.timezone);
         const rollsOn = nextWorkday(today, opts.workdays ?? WORKWEEK);
-        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, slackTeams: opts.slackTeams ?? {}, rollsOn, rollsTomorrow: rollsOn === addDays(today, 1), buckets: board.buckets, agentsActive: busy.active, google: google ?? null, telegram: telegram ?? null, glean: glean ?? null, grafana: grafana ?? null, clickhouse: clickhouse ?? null, backup: opts.backupStatus ? readBackup(opts.backupStatus) : null };
+        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, slackTeams: opts.slackTeams ?? {}, rollsOn, rollsTomorrow: rollsOn === addDays(today, 1), buckets: board.buckets, agentsActive: busy.active, google: google ?? null, telegram: telegram ?? null, glean: glean ?? null, grafana: grafana ?? null, clickhouse: clickhouse ?? null, cloudflare: cloudflare ?? null, backup: opts.backupStatus ? readBackup(opts.backupStatus) : null };
       },
     },
     { method: "GET", path: /^\/api\/issues\/([^/]+)$/, handle: async (m) => issueView(decodeURIComponent(m[1]!)) },
@@ -899,7 +901,7 @@ export function createApp(opts: AppOptions): Server {
   }
 
   /**
-   * Sign in to Glean (D-38), Grafana or ClickHouse (D-57): /<service>/connect sends the browser to
+   * Sign in to Glean (D-38), Grafana, ClickHouse (D-57) or Cloudflare (D-64): /<service>/connect sends the browser to
    * the service's sign-in, which sends it back to the callback, and the proxy keeps the token. On the
    * laptop's loopback address only, like Google's Reconnect: the sign-in client is registered for that
    * redirect. Glean's callback is plain /callback because the organization's Glean only permits
@@ -909,6 +911,7 @@ export function createApp(opts: AppOptions): Server {
     glean: { name: "Glean", secret: "glean_auth_token", connect: "/glean/connect", callback: "/callback" },
     grafana: { name: "Grafana", secret: "grafana_auth_token", connect: "/grafana/connect", callback: "/grafana/callback" },
     clickhouse: { name: "ClickHouse", secret: "clickhouse_auth_token", connect: "/clickhouse/connect", callback: "/clickhouse/callback" },
+    cloudflare: { name: "Cloudflare", secret: "cloudflare_auth_token", connect: "/cloudflare/connect", callback: "/cloudflare/callback" },
   } as const;
   const signInFor = (path: string) => (Object.keys(SIGN_INS) as (keyof typeof SIGN_INS)[]).find((k) => SIGN_INS[k].connect === path || SIGN_INS[k].callback === path);
 

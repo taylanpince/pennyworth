@@ -63,6 +63,8 @@ gen_secret grafana_mcp_token     # the runner's Engineer jobs, on 127.0.0.1:3124
 gen_secret grafana_auth_token    # the board's Grafana sign-in state and sign-in
 gen_secret clickhouse_mcp_token  # the runner's Engineer jobs, on 127.0.0.1:3127 (D-57)
 gen_secret clickhouse_auth_token # the board's ClickHouse sign-in state and sign-in
+gen_secret cloudflare_mcp_token  # the runner's Engineer jobs, on 127.0.0.1:3128, and the Assistant (D-64)
+gen_secret cloudflare_auth_token # the board's Cloudflare sign-in state and sign-in
 gen_secret github_mcp_token
 gen_secret whatsapp_auth_token
 gen_secret whatsapp_mcp_token
@@ -77,6 +79,7 @@ mkdir -p "$PENNYWORTH_SECRETS_DIR/primer" && chmod 0700 "$PENNYWORTH_SECRETS_DIR
 mkdir -p "$PENNYWORTH_SECRETS_DIR/glean" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/glean"
 mkdir -p "$PENNYWORTH_SECRETS_DIR/grafana" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/grafana"
 mkdir -p "$PENNYWORTH_SECRETS_DIR/clickhouse" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/clickhouse"
+mkdir -p "$PENNYWORTH_SECRETS_DIR/cloudflare" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/cloudflare"
 
 echo "Config"
 mkdir -p "$config_dir"

@@ -107,6 +107,15 @@ for c in $containers; do
       [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
         && pass "clickhouse-mcp: only its own token directory mounted" || fail "clickhouse-mcp has unexpected mounts: $mounts"
       ;;
+    *cloudflare-mcp*)
+      # Loopback only, for the runner's Engineer jobs (D-64); bearer token required.
+      [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = '{"8091/tcp":[{"HostIp":"127.0.0.1","HostPort":"3128"}]}' ] \
+        && pass "cloudflare-mcp: published on 127.0.0.1:3128 only" || fail "cloudflare-mcp ports are not loopback 3128 only"
+      [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3128/mcp)" = "401" ] \
+        && pass "cloudflare-mcp: loopback endpoint requires the token" || fail "cloudflare-mcp: loopback endpoint answers without the token"
+      [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
+        && pass "cloudflare-mcp: only its own token directory mounted" || fail "cloudflare-mcp has unexpected mounts: $mounts"
+      ;;
     *github-mcp*)
       [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "github-mcp: no published ports" || fail "github-mcp publishes ports"
       ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -q . \
@@ -172,6 +181,9 @@ for a in config/paperclip.yaml config/paperclip.example.yaml; do
   # ClickHouse (D-57): production data for the Assistant only, never the scouts that read untrusted messages unattended.
   ch_agents="$(node -e 'const fs=require("node:fs"),yaml=require("./services/ops-mcp/node_modules/yaml"); const c=yaml.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(Object.entries(c.agents??{}).filter(([,a])=>(a.mcp_servers??[]).includes("clickhouse")).map(([k])=>k+": ").sort().join(""))' "$a")"
   { [ -z "$ch_agents" ] || [ "$ch_agents" = "assistant: " ]; } && pass "$a: ClickHouse is disabled or limited to the Assistant" || fail "$a: ClickHouse given to: $ch_agents"
+  # Cloudflare (D-64): every account and zone, for the Assistant only, never the scouts.
+  cf_agents="$(node -e 'const fs=require("node:fs"),yaml=require("./services/ops-mcp/node_modules/yaml"); const c=yaml.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(Object.entries(c.agents??{}).filter(([,a])=>(a.mcp_servers??[]).includes("cloudflare")).map(([k])=>k+": ").sort().join(""))' "$a")"
+  { [ -z "$cf_agents" ] || [ "$cf_agents" = "assistant: " ]; } && pass "$a: Cloudflare is disabled or limited to the Assistant" || fail "$a: Cloudflare given to: $cf_agents"
   # Memory (D-61): only crew agents (with a persona) write memories; the scouts read the global rules only.
   mem_writers="$(awk '/^  [a-z0-9-]+:$/{agent=$1} /memory_(remember|propose)/{print agent}' "$a" | sort -u | tr '\n' ' ')"
   personas="$(awk '/^  [a-z0-9-]+:$/{agent=$1} /^    persona:/{print agent}' "$a" | sort -u | tr '\n' ' ')"
@@ -209,6 +221,12 @@ bad_ch="$(echo "$ch_tools" | grep -Ev '^(get_organizations|get_services_list|get
   && grep -q 'args = checkCall(name' services/clickhouse-mcp/src/main.ts \
   && grep -qE 'const EXTERNAL = .*url.*s3.*remote.*file.*executable' services/clickhouse-mcp/src/policy.ts \
   && pass "clickhouse-mcp asks for mcp:access only and checks every query (one read statement, no external table functions, no SETTINGS)" || fail "clickhouse-mcp: scopes or query check changed"
+# Cloudflare (D-64): execute runs any API request, so the sign-in's scopes are the boundary: reads only, and a
+# sign-in granted anything more is refused.
+grep -qF 'export const READ_SCOPE = /^(user:read|account:read|[a-z0-9_-]+\.(read|metadata_read|content_read))$/;' services/cloudflare-mcp/src/policy.ts \
+  && grep -q 'const reads = readScopes(supported);' services/cloudflare-mcp/src/signin.ts && grep -q 'const writes = granted ? writeScopes(granted) : \[\];' services/cloudflare-mcp/src/signin.ts \
+  && [ "$(sed -n 's/^export const READ_TOOLS = \[\(.*\)\];/\1/p' services/cloudflare-mcp/src/policy.ts | tr -d '" ')" = "search,execute,docs,whoami" ] \
+  && pass "cloudflare-mcp asks for Cloudflare's read scopes only and refuses a sign-in with more (services/cloudflare-mcp/src/policy.ts)" || fail "cloudflare-mcp: scopes, the sign-in check or the tool list changed"
 # Engineer jobs' Google Cloud (D-53): the user's own access, read-only by the prompt's rule; jobs get a
 # one-hour access token only, never the sign-in's refresh token.
 grep -q '\*\*Read only:\*\* describe, list, get, read and get-iam-policy commands' services/runner/src/prompt.mjs \

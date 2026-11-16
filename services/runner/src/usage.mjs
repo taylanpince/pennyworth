@@ -20,7 +20,7 @@ import { stripHidden } from "./commands.mjs";
  * where the engine reports it (not Codex).
  */
 
-const MCP_SERVERS = ["primer", "grafana", "slack", "glean", "clickhouse"];
+const MCP_SERVERS = ["primer", "grafana", "slack", "glean", "clickhouse", "cloudflare"];
 const TOKEN_FIELDS = ["inputTokens", "cacheReadTokens", "cacheWriteTokens", "outputTokens", "reasoningTokens"];
 
 const n = (v) => (Number.isFinite(v) ? v : 0);

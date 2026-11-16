@@ -50,6 +50,10 @@ mcp_servers:
   clickhouse:
     url: http://clickhouse-mcp:8088/mcp
     bearer_token_env_var: PENNYWORTH_CLICKHOUSE_MCP_TOKEN
+  # Cloudflare, every account and zone, read scopes only (D-64).
+  cloudflare:
+    url: http://cloudflare-mcp:8091/mcp
+    bearer_token_env_var: PENNYWORTH_CLOUDFLARE_MCP_TOKEN
   paperclip_tasks:
     command: node
     args: [/opt/pennyworth/paperclip-tasks-mcp.mjs]
@@ -191,7 +195,7 @@ agents:
     timeout_sec: 3600
     # Public web pages and search via OpenAI's cached index only (D-19).
     web_search: cached
-    mcp_servers: [slack, telegram, google_workspace, primer, glean, github, clickhouse, paperclip_tasks, ops_mcp]
+    mcp_servers: [slack, telegram, google_workspace, primer, glean, github, clickhouse, cloudflare, paperclip_tasks, ops_mcp]
     enabled_tools:
       # Reads only, on request (D-29); the scout tools stay with the Telegram Scout.
       telegram: [list_allowed_chats, read_chat_history, search_chat_history, get_new_messages]
@@ -205,6 +209,8 @@ agents:
       google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
       # Reads only; clickhouse-mcp checks every query (D-57).
       clickhouse: [get_organizations, get_services_list, get_service_details, list_databases, list_tables, run_select_query]
+      # Read scopes only: Cloudflare refuses every change (D-64).
+      cloudflare: [search, execute, docs, whoami]
       # task_create_engineer_task: Engineer sub-tasks that wait for the user's go-ahead (D-24).
       # task_schedule, task_recurring: board moves on a date and recurring tasks (D-25). task_merge: merging tasks (D-56).
       paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status, task_create_engineer_task, task_schedule, task_recurring, task_pass_on, task_merge, memory_recall, memory_search, memory_remember, memory_propose]
@@ -255,7 +261,7 @@ agents:
     previous_keys: [engineer]
     name: SRE
     persona: { name: Grace, voice: "Steady under pressure; timeline first, then the cause, then the fix.", avatar: grace }
-    role: "Incidents, prod changes, adding and removing networks, merge queues. Reads Grafana, ClickHouse, GCP and AWS."
+    role: "Incidents, prod changes, adding and removing networks, merge queues. Reads Grafana, ClickHouse, Cloudflare, GCP and AWS."
     title: Incidents, production changes and rollouts (pennyworth-runner)
     instructions: config/agents/engineer.md
     adapter: codex_local
