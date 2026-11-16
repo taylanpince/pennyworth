@@ -278,8 +278,8 @@ agents:
     title: Pull request and spec reviews (pennyworth-runner)
     instructions: config/agents/engineer.md
     adapter: opencode_local
-    engine: claude
-    model: claude-opus-5-5
+    engine: codex
+    model: gpt-6-sol
     dispatch: runner
     mcp_servers: []
 
@@ -290,8 +290,8 @@ agents:
     title: Vulnerability sweeps, pentest triage and exposure checks (pennyworth-runner)
     instructions: config/agents/engineer.md
     adapter: claude_local
-    engine: claude
-    model: claude-opus-5-5
+    engine: codex
+    model: gpt-6-astra
     dispatch: runner
     mcp_servers: []
 
