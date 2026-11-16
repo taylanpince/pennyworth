@@ -98,6 +98,18 @@ engines:
       - openrouter/qwen/qwen3-coder-next
 
 agents:
+  cad-designer:
+    name: CAD Designer
+    title: Parametric CAD models and printable parts
+    persona: { name: Charles, voice: "Practical and exact; explains dimensions, fit and what changed.", avatar: charles }
+    role: "Designs dimensioned 3D parts with build123d; delivers interactive previews, STEP/STL downloads and editable source."
+    instructions: config/agents/cad-designer.md
+    adapter: codex_local
+    dispatch: runner
+    workflow: cad
+    engine: codex
+    reasoning_effort: high
+    mcp_servers: []
   meeting-librarian:
     name: Meeting Librarian
     title: Meeting memory

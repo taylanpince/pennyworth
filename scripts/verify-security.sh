@@ -167,10 +167,11 @@ for a in config/paperclip.yaml config/paperclip.example.yaml; do
   [ -f "$a" ] || continue
   drafters="$(awk '/^  [a-z-]+:$/{agent=$1} /slack_send_message_draft/{print agent}' "$a" | sort -u | tr '\n' ' ')"
   # The Writer drafts too (D-60); never the scouts, which read untrusted messages unattended.
-  [ "$drafters" = "assistant: writer: " ] && pass "$a: only the Assistant and the Writer can save Slack drafts" || fail "$a: Slack drafts allowed for: $drafters"
+  bad_drafters="$(for w in $drafters; do case "$w" in assistant:|writer:) ;; *) printf '%s ' "$w" ;; esac; done)"
+  [ -z "$bad_drafters" ] && pass "$a: Slack drafts disabled or limited to the Assistant and the Writer" || fail "$a: Slack drafts allowed for: $drafters"
   # ClickHouse (D-57): production data for the Assistant only, never the scouts that read untrusted messages unattended.
-  ch_agents="$(awk '/^  [a-z-]+:$/{agent=$1} /^    mcp_servers:.*[[ ,]clickhouse[],]/{print agent}' "$a" | sort -u | tr '\n' ' ')"
-  [ "$ch_agents" = "assistant: " ] && pass "$a: only the Assistant reads ClickHouse" || fail "$a: ClickHouse given to: $ch_agents"
+  ch_agents="$(node -e 'const fs=require("node:fs"),yaml=require("./services/ops-mcp/node_modules/yaml"); const c=yaml.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(Object.entries(c.agents??{}).filter(([,a])=>(a.mcp_servers??[]).includes("clickhouse")).map(([k])=>k+": ").sort().join(""))' "$a")"
+  { [ -z "$ch_agents" ] || [ "$ch_agents" = "assistant: " ]; } && pass "$a: ClickHouse is disabled or limited to the Assistant" || fail "$a: ClickHouse given to: $ch_agents"
   # Memory (D-61): only crew agents (with a persona) write memories; the scouts read the global rules only.
   mem_writers="$(awk '/^  [a-z0-9-]+:$/{agent=$1} /memory_(remember|propose)/{print agent}' "$a" | sort -u | tr '\n' ' ')"
   personas="$(awk '/^  [a-z0-9-]+:$/{agent=$1} /^    persona:/{print agent}' "$a" | sort -u | tr '\n' ' ')"

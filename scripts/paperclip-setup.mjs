@@ -241,13 +241,19 @@ On the user's board you are ${me.name}. Voice: ${me.voice} The voice sets your t
 }
 
 function runnerAgentBody(key, a, existing) {
+  if (a.workflow !== undefined && a.workflow !== "cad") fail(`agent ${key}: unknown runner workflow ${a.workflow}`);
   if (!RUNNER_ADAPTERS.includes(a.adapter)) fail(`agent ${key}: dispatch: runner needs one of ${RUNNER_ADAPTERS.join(", ")}`);
   if (a.mcp_servers?.length) fail(`agent ${key}: runner agents get no MCP servers`);
   const engine = a.engine ?? { codex_local: "codex", claude_local: "claude", opencode_local: "openrouter" }[a.adapter];
   if (!ENGINES.includes(engine)) fail(`agent ${key}: engine must be one of ${ENGINES.join(", ")}`);
-  const model = String(a.model ?? "").trim();
+  // Keep instance defaults when setup is rerun, but never carry a model across engines.
+  const oldEngine = existing?.metadata?.role?.engine ?? { codex_local: "codex", claude_local: "claude", opencode_local: "openrouter" }[existing?.adapterType];
+  const oldRole = oldEngine === engine ? existing?.metadata?.role : undefined;
+  const oldConfig = oldEngine === engine ? existing?.adapterConfig : undefined;
+  const model = String(a.model ?? oldRole?.model ?? oldConfig?.model ?? "").trim();
   if (engine === "openrouter" && model && !/^openrouter\/\S+$/.test(model)) fail(`agent ${key}: an openrouter model is openrouter/<model>`);
-  if (a.effort !== undefined && !["minimal", "low", "medium", "high", "xhigh", "max"].includes(a.effort)) fail(`agent ${key}: unknown effort ${a.effort}`);
+  const effort = a.effort ?? a.reasoning_effort ?? oldRole?.effort ?? oldConfig?.[engine === "claude" ? "effort" : "modelReasoningEffort"];
+  if (effort !== undefined && !["minimal", "low", "medium", "high", "xhigh", "max"].includes(effort)) fail(`agent ${key}: unknown effort ${effort}`);
   if (a.models !== undefined) fail(`agent ${key}: models moved to the top-level engines list (D-60)`);
   // Paperclip keeps the adapter the agent was created with; it's a label only for runner roles.
   const adapterType = existing?.adapterType ?? a.adapter;
@@ -256,7 +262,7 @@ function runnerAgentBody(key, a, existing) {
   if (adapterType === "claude_local") adapterConfig.dangerouslySkipPermissions = false;
   // opencode agents need a model in Paperclip's eyes: the role's, else the first OpenRouter one listed.
   if (adapterType === "opencode_local") adapterConfig.model = engine === "openrouter" && model ? model : (engineCatalog().openrouter?.[0] ?? existing?.adapterConfig?.model ?? "openrouter/z-ai/glm-5.3-flash");
-  const role = { job: roleOf(key, a) ?? "", engine, ...(model ? { model } : {}), ...(a.effort ? { effort: a.effort } : {}) };
+  const role = { job: roleOf(key, a) ?? "", engine, ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(a.workflow ? { workflow: a.workflow } : {}) };
   return {
     name: a.name,
     role: "general",
@@ -447,19 +453,21 @@ async function ensureRoutines(companyId, agents) {
     }
 
     if (r.webhook) {
-      const label = "transcript watcher";
+      const prefix = r.webhook_prefix ?? "meeting";
+      if (!/^[a-z][a-z0-9_-]*$/.test(prefix)) fail("invalid webhook_prefix");
+      const label = r.webhook_label ?? "transcript watcher";
       const existing = triggers.find((t) => t.kind === "webhook" && t.label === label);
       let material;
       if (!existing) {
         material = (await api("POST", `/api/routines/${routine.id}/triggers`, { kind: "webhook", label, signingMode: "hmac_sha256", replayWindowSec: 300 })).json.secretMaterial;
         step(`Added signed webhook trigger to ${r.title}`);
-      } else if (!readSecret("meeting_webhook_secret")) {
+      } else if (!readSecret(`${prefix}_webhook_secret`)) {
         material = (await api("POST", `/api/routine-triggers/${existing.id}/rotate-secret`, {})).json.secretMaterial;
         step("Rotated webhook secret (local copy was missing)");
       }
       if (material) {
-        writeSecret("meeting_webhook_url", material.webhookUrl);
-        writeSecret("meeting_webhook_secret", material.webhookSecret);
+        writeSecret(`${prefix}_webhook_url`, material.webhookUrl);
+        writeSecret(`${prefix}_webhook_secret`, material.webhookSecret);
       }
     }
   }

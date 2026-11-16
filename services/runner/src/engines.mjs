@@ -55,7 +55,8 @@ export async function checkCodexPermissions({ cfg, worktree, stateRoots = [], sh
 
 /** Wrap a command in the requested devshells: nix develop A --command nix develop B --command … */
 export function inDevshells(flake, shells, argv) {
-  return shells.reduceRight((inner, shell) => ["nix", "develop", `${flake}#${shell}`, "--command", ...inner], argv);
+  if (flake === "") return argv; // Explicit host-toolchain mode, including optional service shells.
+  return shells.filter(Boolean).reduceRight((inner, shell) => ["nix", "develop", `${flake}#${shell}`, "--command", ...inner], argv);
 }
 
 function sandboxConfig(cfg, worktree, stateRoots = []) {
@@ -93,6 +94,7 @@ const CLAUDE_TOOLS = "Bash,Read,Edit,Write,NotebookEdit,Task,TaskStop,TaskCreate
  * Primer is set up.
  */
 function primer(cfg) {
+  if (cfg.localCad || cfg.primerEnabled === false) return undefined;
   if (!cfg.primerMcpUrl || !cfg.primerTokenFile || !existsSync(cfg.primerTokenFile)) return undefined;
   return { url: cfg.primerMcpUrl, token: readFileSync(cfg.primerTokenFile, "utf8").trim() };
 }
@@ -117,6 +119,7 @@ const PRIVATE_READS = [
   { name: "clickhouse", url: "clickhouseMcpUrl", tokenFile: "clickhouseTokenFile", env: "CLICKHOUSE_MCP_TOKEN", toolTimeout: 180 },
 ];
 export function privateReads(cfg) {
+  if (cfg.localCad) return [];
   return PRIVATE_READS.filter((s) => cfg[s.url] && cfg[s.tokenFile] && existsSync(cfg[s.tokenFile])).map((s) => ({
     name: s.name,
     url: cfg[s.url],
@@ -143,7 +146,7 @@ function hiding(cfg, argv) {
  * for engines that observe.
  */
 export function buildCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp, aws }) {
-  const built = engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp: observes(engine.kind) ? gcp : undefined, aws: observes(engine.kind) ? aws : undefined });
+  const built = engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp: observes(engine.kind) && !cfg.localCad ? gcp : undefined, aws: observes(engine.kind) && !cfg.localCad ? aws : undefined });
   return { ...built, argv: hiding(cfg, built.argv) };
 }
 
@@ -205,8 +208,11 @@ function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp,
     };
   }
   if (engine.kind === "claude") {
-    if (!existsSync(cfg.claudeTokenFile)) throw new Error(`Claude Code isn't set up for the runner: run \`claude setup-token\` and save the token to \`${cfg.claudeTokenFile}\` (0600).`);
-    const token = readFileSync(cfg.claudeTokenFile, "utf8").trim();
+    const auth = cfg.claudeAuth ?? "token";
+    if (!["token", "login"].includes(auth)) throw new Error("Claude auth must be token or login");
+    if (auth === "token" && !existsSync(cfg.claudeTokenFile)) throw new Error(`Claude Code isn't set up for the runner: run \`claude setup-token\` and save the token to \`${cfg.claudeTokenFile}\` (0600).`);
+    if (auth === "login" && !existsSync(join(cfg.claudeConfigDir, ".credentials.json"))) throw new Error("Sign in to Claude in the runner-owned config directory before using login authentication.");
+    const token = auth === "token" ? readFileSync(cfg.claudeTokenFile, "utf8").trim() : undefined;
     mkdirSync(cfg.claudeConfigDir, { recursive: true, mode: 0o700 });
     // Headless, no prompts (the codex sandbox is the write boundary), and nothing from your own
     // Claude setup: a runner-owned config dir, no settings files (yours or the repo's: no hooks),
@@ -231,7 +237,7 @@ function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp,
       argv: codexSandbox(cfg, worktree, [cfg.claudeConfigDir, ...gcpRoots], claude),
       env: {
         ...mcpEnv,
-        CLAUDE_CODE_OAUTH_TOKEN: token,
+        ...(token ? { CLAUDE_CODE_OAUTH_TOKEN: token } : {}),
         CLAUDE_CONFIG_DIR: cfg.claudeConfigDir,
         ENABLE_CLAUDEAI_MCP_SERVERS: "false",
         DISABLE_AUTOUPDATER: "1",
@@ -274,11 +280,17 @@ export async function runAgent({ cfg, engine, shells, worktree, prompt, sessionI
     ...jobEnv,
   };
   delete agentEnv.SSH_AUTH_SOCK;
+  if (cfg.primerEnabled === false) delete agentEnv.PRIMER_MCP_TOKEN;
+  if (cfg.localCad) {
+    for (const key of ["PRIMER_MCP_TOKEN", ...PRIVATE_READS.map((r) => r.env)]) delete agentEnv[key];
+    for (const key of Object.keys(agentEnv)) if (/^(AWS_|CLOUDSDK_)/.test(key) || key === "GOOGLE_APPLICATION_CREDENTIALS") delete agentEnv[key];
+  }
   // Never a prompt on the user's desktop: without credentials, git over https and ssh would fall back
   // to the session's askpass dialog (seahorse) and pop it up for every private Go module or repo.
   delete agentEnv.SSH_ASKPASS;
   agentEnv.SSH_ASKPASS_REQUIRE = "never";
   agentEnv.GIT_ASKPASS = "false";
+  if (engine.kind === "claude" && cfg.claudeAuth === "login") delete agentEnv.CLAUDE_CODE_OAUTH_TOKEN;
   if (engine.kind === "claude") delete agentEnv.ANTHROPIC_API_KEY; // the subscription token, never an API key
 
   if (engine.kind === "codex" && cfg.sandbox?.credential_isolation === "permissions") {
@@ -344,6 +356,7 @@ export async function runAgent({ cfg, engine, shells, worktree, prompt, sessionI
       }
     });
     child.stderr.on("data", (d) => log.write(d));
+    child.on("error", (err) => log.write(`Engine could not start: ${err.message}\n`));
     child.stdin.on("error", () => {}); // a message sent as the process exits
     if (streamInput) {
       child.stdin.write(userMessage(prompt));

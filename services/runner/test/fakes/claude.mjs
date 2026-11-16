@@ -31,7 +31,7 @@ const take = () => {
 
 await next();
 const prompt = take();
-log("claude", { argv: process.argv.slice(2), prompt });
+log("claude", { argv: process.argv.slice(2), prompt, cad: { python: process.env.CAD_PYTHON, export: process.env.CAD_EXPORT, hasPrivateTokens: ["PRIMER_MCP_TOKEN", "SLACK_MCP_TOKEN", "GRAFANA_MCP_TOKEN", "GLEAN_MCP_TOKEN", "CLICKHOUSE_MCP_TOKEN"].some((key) => Boolean(process.env[key])), hasCloud: Boolean(process.env.CLOUDSDK_CONFIG || process.env.AWS_SHARED_CREDENTIALS_FILE) } });
 out({ type: "system", subtype: "init", session_id: "session-1" });
 // Usage like the real one's: each result carries the session's running totals (cost, modelUsage),
 // which a resumed session carries on from (D-62). Every result adds $0.25 and fixed tokens.
@@ -80,6 +80,9 @@ if (step === "commit") {
   mkdirSync(join(process.cwd(), ".pennyworth/out"), { recursive: true });
   writeFileSync(join(process.cwd(), ".pennyworth/primer.md"), "# Wallet copy, mapped to the app\n\nWhere each string goes.\n");
   writeFileSync(join(process.cwd(), ".pennyworth/out/move-page.png"), Buffer.from("89504e470d0a1a0a", "hex"));
+} else if (step.startsWith("cad-v")) {
+  mkdirSync(join(process.cwd(), ".pennyworth/out"), { recursive: true });
+  for (const ext of ["glb", "step", "stl", "py", "json"]) writeFileSync(join(process.cwd(), `.pennyworth/out/bracket-${step.slice(4)}.${ext}`), "CAD fixture");
 } else if (step === "slow") {
   await new Promise((r) => setTimeout(r, 6000));
 }

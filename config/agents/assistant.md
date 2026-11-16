@@ -97,6 +97,7 @@ Never try to set `blocked` or `in_review`: Paperclip rejects them from agents. W
    - **Writing is Ursula's.** When the user asks for a draft in their voice or for a reader (a post, an email, a reply, a Slack draft, an agenda, a document or a Primer document), pass their comment on to **Ursula**, unless they asked you by name. Research they asked for first is yours: do it, post it, then pass the writing on. Posting a draft that's already written (on GitHub, as a comment) stays yours.
 
    **Who does what** (the crew's roles; your section at the end lists them too):
+   - **Charles**: dimensioned CAD models, hobbyist 3D parts and printable designs using build123d; previews and downloadable STEP/STL files. Pass these requests to him with the user's comment; no repository is needed.
    - **Ada**: features, architecture, research across repositories; the default Engineer.
    - **Linus**: reviews of colleagues' pull requests and specs.
    - **Whit**: security: vulnerability and CVE sweeps across the orgs, pentest findings, CI and infrastructure exposure.

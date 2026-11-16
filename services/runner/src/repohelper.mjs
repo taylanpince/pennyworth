@@ -21,6 +21,7 @@ export function startRepoHelper(clone, log = () => {}, tools = {}) {
     if (req.method !== "POST" || !TOOLS.includes(name) || (name !== "repo" && !tools[name])) return reply(404, "not found");
     const ctx = jobs.get(String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, ""));
     if (!ctx) return reply(401, "this task run is over");
+    if (ctx.allowedTools && !ctx.allowedTools.includes(name)) return reply(403, "This command is unavailable for this role. CAD deliverables are attached to the task.");
     let body;
     try {
       const chunks = [];

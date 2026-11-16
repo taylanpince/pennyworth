@@ -1,3 +1,5 @@
+import { boardName, boardIcon } from "./branding";
+import { SettingsPage } from "./Settings";
 import {
   DndContext,
   DragOverlay,
@@ -29,7 +31,7 @@ import { BUCKETS, BUCKET_NAMES, type Board, type Bucket, type Card, type Executo
 import { matches } from "./util";
 
 type Items = Record<Bucket, Card[]>;
-type Route = { kind: "board" } | { kind: "task"; ref: string; focus?: string } | { kind: "brief" } | { kind: "help" } | { kind: "phone" } | { kind: "pair"; code: string };
+type Route = { kind: "board" } | { kind: "task"; ref: string; focus?: string } | { kind: "brief" } | { kind: "help" } | { kind: "settings" } | { kind: "phone" } | { kind: "pair"; code: string };
 
 const HINTS: Record<Bucket, string> = {
   triage: "New tasks land here",
@@ -81,6 +83,7 @@ function parseRoute(): Route {
   }
   if (h === "brief") return { kind: "brief" };
   if (h === "help") return { kind: "help" };
+  if (h === "settings") return { kind: "settings" };
   if (h === "phone") return { kind: "phone" };
   if (h.startsWith("pair/")) return { kind: "pair", code: h.slice(5) };
   return { kind: "board" };
@@ -397,7 +400,7 @@ export function App() {
         return setSelected(null);
       }
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (route.kind === "task" || route.kind === "brief") return;
+      if (route.kind === "task" || route.kind === "brief" || route.kind === "settings") return;
       const lists = filtered;
       if (!lists) return;
       const cols = visibleBuckets;
@@ -518,9 +521,10 @@ export function App() {
     <div className={`app${mobile ? " mobile" : ""}`}>
       <header className="topbar">
         <a className="brand" href="#/" onClick={() => (setQuery(""), setView("board"))}>
-          <img src="/icon.png" alt="" />
-          <span>Pennyworth</span>
+          <img src={boardIcon} alt="" />
+          <span>{boardName}</span>
         </a>
+        {route.kind !== "settings" && <>
         {!mobile && sections}
         <span className="spacer topbar-spacer" />
         <div className="search">
@@ -562,9 +566,19 @@ export function App() {
             ?
           </a>
         )}
+        </>}
+        {route.kind === "settings" && <span className="spacer" />}
+        <a className="icon-btn" href="#/settings" title="Settings" aria-label="Settings" aria-current={route.kind === "settings" ? "page" : undefined}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+            <path d="m9 3-.6 2.5-2 .9L4 5.7 2 9l1.8 1.8v2.4L2 15l2 3.3 2.4-.7 2 .9L9 21h6l.6-2.5 2-.9 2.4.7 2-3.3-1.8-1.8v-2.4L22 9l-2-3.3-2.4.7-2-.9L15 3Z" />
+            <circle cx="12" cy="12" r="3.2" />
+          </svg>
+        </a>
       </header>
 
+      {route.kind === "settings" && <SettingsPage />}
       {error && <div className="offline">Offline: {error}. Retrying…</div>}
+      {route.kind !== "settings" && <>
       <GoogleBanner google={board.google} canReconnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
       <TelegramBanner telegram={board.telegram} canSignIn={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
       <GleanBanner glean={board.glean} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
@@ -643,6 +657,7 @@ export function App() {
           </section>
         )}
       </main>
+      </>}
 
       {route.kind === "task" && (
         <Drawer

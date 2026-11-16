@@ -1,0 +1,24 @@
+# Optional. Use a dedicated OAuth credential; never mount it into the read-only Google connector.
+services:
+  paperclip:
+    secrets: [calendar_write_token]
+  calendar-write-mcp:
+    image: pennyworth/google-workspace-mcp:local
+    build: ./services/google-workspace-mcp
+    command: [node, dist/src/calendar-write-main.js]
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      MCP_TOKEN_FILE: /run/secrets/calendar_write_token
+      GOOGLE_WRITE_CREDENTIALS_FILE: /run/secrets/calendar_write_oauth
+      GOOGLE_WRITE_CALENDAR_ID: ${GOOGLE_WRITE_CALENDAR_ID:?set an explicit calendar ID}
+    secrets: [calendar_write_token, calendar_write_oauth]
+    networks: [backplane, egress]
+secrets:
+  calendar_write_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/calendar_write_token
+  calendar_write_oauth:
+    file: ${PENNYWORTH_SECRETS_DIR}/calendar_write_oauth.json

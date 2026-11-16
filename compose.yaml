@@ -35,6 +35,8 @@ services:
         PENNYWORTH_GITHUB_MCP_TOKEN="$$(cat /run/secrets/github_mcp_token)"
         PENNYWORTH_CLICKHOUSE_MCP_TOKEN="$$(cat /run/secrets/clickhouse_mcp_token)"
         PENNYWORTH_BOARD_TOKEN="$$(cat /run/secrets/board_internal_token)"
+        PENNYWORTH_WHATSAPP_MCP_TOKEN="$$(cat /run/secrets/whatsapp_mcp_token 2>/dev/null || true)"
+        PENNYWORTH_CALENDAR_WRITE_TOKEN="$$(cat /run/secrets/calendar_write_token 2>/dev/null || true)"
         && exec /usr/bin/tini -- docker-entrypoint.sh "$$@"
       - paperclip
     command: ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
@@ -353,7 +355,12 @@ services:
   # board key, kept server-side; loopback only (put `tailscale serve` in front for the phone).
   board:
     <<: *hardening
-    build: ./services/board
+    build:
+      context: ./services/board
+      args:
+        BOARD_NAME: ${BOARD_NAME:-Pennyworth}
+        BOARD_ICON: ${BOARD_ICON:-/icon.png}
+        BOARD_APP_ID: ${BOARD_APP_ID:-/}
     image: pennyworth/board:local
     user: "${PUID:-1000}:${PGID:-100}"
     read_only: true

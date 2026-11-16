@@ -22,11 +22,19 @@ export class Reconnect {
     return JSON.parse(readFileSync(this.credsPath, "utf8")) as CredentialsFile;
   }
 
+  configured(): boolean { try { return Boolean(this.creds().client_id); } catch { return false; } }
+
+  configure(clientId: string, clientSecret: string): void {
+    const current = this.creds();
+    if (current.client_id || current.refresh_token || Object.keys(current.accounts ?? {}).length) throw new ReconnectError("An OAuth client is already configured; change it on the server.");
+    writeFileSync(this.credsPath, JSON.stringify({ ...current, client_id: clientId, client_secret: clientSecret }, null, 2), { mode: 0o600 });
+  }
+
   /** Google's consent URL for `account`, which must already be connected. */
-  start(account: string, redirectUri: string): { url: string } {
+  start(account: string, redirectUri: string, allowNew = false): { url: string } {
     const creds = this.creds();
     if (!creds.client_id) throw new ReconnectError("no OAuth client on file; run scripts/google-auth.sh once");
-    if (!creds.accounts?.[account]) throw new ReconnectError(`${account} isn't a connected account`);
+    if (!allowNew && !creds.accounts?.[account]) throw new ReconnectError(`${account} isn't a connected account`);
     if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/[\w/-]*$/.test(redirectUri)) throw new ReconnectError("redirect must be a loopback address");
     const now = Date.now();
     for (const [k, p] of this.pending) if (p.expires < now) this.pending.delete(k);
@@ -68,6 +76,7 @@ export class Reconnect {
     if (email.toLowerCase() !== p.account.toLowerCase()) throw new ReconnectError(`you signed in as ${email}, not ${p.account}; nothing changed`);
     const latest = this.creds(); // the file may have changed while the user was at Google
     latest.accounts = { ...(latest.accounts ?? {}), [p.account]: { ...(latest.accounts?.[p.account] ?? {}), refresh_token: tokens.refresh_token, scopes: granted } };
+    latest.primary ??= p.account;
     // Written in place: the file is a single-file bind mount, which a rename would not replace.
     writeFileSync(this.credsPath, JSON.stringify(latest, null, 2), { mode: 0o600 });
     return { email: p.account };

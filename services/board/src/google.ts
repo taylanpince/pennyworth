@@ -14,7 +14,7 @@ export interface GoogleAccountStatus {
  * Google token.
  */
 export class GoogleAuth {
-  private cached: { at: number; accounts: GoogleAccountStatus[]; error?: string } | undefined;
+  private cached: { at: number; accounts: GoogleAccountStatus[]; configured?: boolean; error?: string } | undefined;
 
   constructor(
     private readonly baseUrl: string,
@@ -36,11 +36,11 @@ export class GoogleAuth {
   }
 
   /** Sign-in state per account, at most a minute old. Undefined when the sidecar can't be asked. */
-  async status(maxAgeMs = 60_000): Promise<{ accounts: GoogleAccountStatus[]; error?: string } | undefined> {
+  async status(maxAgeMs = 60_000): Promise<{ accounts: GoogleAccountStatus[]; configured?: boolean; error?: string } | undefined> {
     if (!this.cached || Date.now() - this.cached.at >= maxAgeMs) {
       try {
-        const s = await this.call<{ accounts: GoogleAccountStatus[]; error?: string }>("GET", "/auth/status");
-        this.cached = { at: Date.now(), accounts: s.accounts ?? [], ...(s.error ? { error: s.error } : {}) };
+        const s = await this.call<{ accounts: GoogleAccountStatus[]; configured?: boolean; error?: string }>("GET", "/auth/status");
+        this.cached = { at: Date.now(), accounts: s.accounts ?? [], configured: s.configured, ...(s.error ? { error: s.error } : {}) };
       } catch (err) {
         this.log?.warn({ err: String((err as Error).message).slice(0, 300) }, "Google sign-in state unavailable");
         this.cached = undefined;
@@ -51,8 +51,14 @@ export class GoogleAuth {
     return status;
   }
 
-  start(account: string, redirectUri: string) {
-    return this.call<{ url: string }>("POST", "/auth/start", { account, redirect_uri: redirectUri });
+  async configure(client_id: string, client_secret: string) {
+    const result = await this.call("POST", "/auth/configure", { client_id, client_secret });
+    this.cached = undefined;
+    return result;
+  }
+
+  start(account: string, redirectUri: string, allowNew = false) {
+    return this.call<{ url: string }>("POST", "/auth/start", { account, redirect_uri: redirectUri, ...(allowNew ? { allow_new: true } : {}) });
   }
 
   async finish(state: string, code: string) {

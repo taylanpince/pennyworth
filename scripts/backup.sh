@@ -15,6 +15,7 @@
 # $PENNYWORTH_SECRETS_DIR/backup/password. Keep a copy of that password somewhere else: without it no
 # snapshot can be read. Each --offsite run writes data/board/backup.json for the board's banner.
 set -euo pipefail
+umask 077
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo"
@@ -25,7 +26,10 @@ config="$(cd "${PENNYWORTH_CONFIG_DIR:-./config}" && pwd)"
 secrets="${PENNYWORTH_SECRETS_DIR:-$HOME/.config/pennyworth}"
 runner_state="${PENNYWORTH_RUNNER_STATE_DIR:-$HOME/.local/state/pennyworth-runner}"
 instance="$data/paperclip/instances/default"
-cache="${XDG_CACHE_HOME:-$HOME/.cache}/pennyworth-backup"
+backup_name="${PENNYWORTH_BACKUP_NAME:-pennyworth}"
+[[ "$backup_name" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo "invalid backup name" >&2; exit 1; }
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/$backup_name-backup"
+whatsapp_state="${PENNYWORTH_WHATSAPP_STATE_DIR:-}"
 status_file="$data/board/backup.json"
 # Paperclip dumps every hour; an older newest dump while it runs means its backups stopped.
 max_dump_age_min=150
@@ -84,14 +88,27 @@ stage() {
   sqlite_copy "$data/ops-mcp/state.sqlite" "$dir/ops-mcp/state.sqlite"
   sqlite_copy "$runner_state/state.sqlite" "$dir/runner/state.sqlite"
 
+  if [ -n "$whatsapp_state" ]; then
+    [ -f "$whatsapp_state/messages.sqlite" ] || { echo "error: configured WhatsApp database is missing" >&2; return 1; }
+    sqlite_copy "$whatsapp_state/messages.sqlite" "$dir/whatsapp/messages.sqlite"
+  fi
+
   # Personal configuration (no secrets: those stay in $PENNYWORTH_SECRETS_DIR).
   for f in "$config"/*.yaml; do
     case "$f" in *.example.yaml) continue ;; esac
     cp "$f" "$dir/config/"
   done
+  for f in "$config"/*.md; do
+    [ ! -f "$f" ] || cp "$f" "$dir/config/"
+  done
   cp -r "$config/agents" "$dir/config/" 2>/dev/null || true
   [ -f "$env_file" ] && cp "$env_file" "$dir/repo/env"
-  [ -f compose.vault.yaml ] && cp compose.vault.yaml "$dir/repo/"
+  for f in compose*.yaml; do
+    [ ! -f "$f" ] || cp "$f" "$dir/repo/"
+  done
+  if [ -d services/board/web/public ]; then
+    cp -r services/board/web/public "$dir/repo/board-public"
+  fi
 
   printf 'created=%s\nhost=%s\npaperclip_running=%s\npaperclip_dump=%s\ncommit=%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(hostname)" "$running" "$(basename "$dump")" \
@@ -133,7 +150,7 @@ case "$mode" in
   archive)
     out_dir="${1:-$repo/backups}"
     mkdir -p "$out_dir"
-    archive="$out_dir/pennyworth-$(date +%Y%m%d-%H%M%S).tar.gz"
+    archive="$out_dir/$backup_name-$(date +%Y%m%d-%H%M%S).tar.gz"
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     echo "Backing up to $archive"
@@ -162,12 +179,12 @@ case "$mode" in
       exit 0
     fi
     log="$cache/last.log"
-    trap 'rc=$?; [ $rc -eq 0 ] || write_status failed "$(tail -1 "$log" 2>/dev/null)"; exit $rc' EXIT
+    trap 'rc=$?; rm -rf "$cache/stage"; [ $rc -eq 0 ] || write_status failed "$(tail -1 "$log" 2>/dev/null)"; exit $rc' EXIT
     {
       stage "$cache/stage"
-      restic backup --host pennyworth --tag pennyworth --json --quiet "$cache/stage" | tail -1 > "$cache/summary.json"
+      restic backup --host "$backup_name" --tag "$backup_name" --json --quiet "$cache/stage" | tail -1 > "$cache/summary.json"
       if due prune 86400; then
-        restic forget --host pennyworth --tag pennyworth --prune \
+        restic forget --host "$backup_name" --tag "$backup_name" --prune \
           --keep-hourly 48 --keep-daily 30 --keep-weekly 26 --keep-monthly 24
         touch "$cache/prune.last"
       fi
@@ -188,12 +205,14 @@ case "$mode" in
     work="$(mktemp -d)"
     container="pennyworth-verify-$$"
     trap 'docker rm -f "$container" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
-    restic restore "$id" --target "$work" --quiet
+    restic restore "$id" --host "$backup_name" --tag "$backup_name" --target "$work" --quiet
     root="$(dirname "$(find "$work" -name MANIFEST -path '*/stage/MANIFEST' | head -1)")"
     [ -f "$root/MANIFEST" ] || { echo "error: snapshot $id has no Pennyworth backup" >&2; exit 1; }
     echo "Snapshot $id:"
     sed 's/^/  /' "$root/MANIFEST"
-    for db in board/board.sqlite ops-mcp/state.sqlite runner/state.sqlite; do
+    databases=(board/board.sqlite ops-mcp/state.sqlite runner/state.sqlite)
+    if [ -f "$root/whatsapp/messages.sqlite" ] || [ -n "$whatsapp_state" ]; then databases+=(whatsapp/messages.sqlite); fi
+    for db in "${databases[@]}"; do
       [ -f "$root/$db" ] || { echo "  MISSING $db"; exit 1; }
       result="$(node --disable-warning=ExperimentalWarning -e '
         const { DatabaseSync } = require("node:sqlite");

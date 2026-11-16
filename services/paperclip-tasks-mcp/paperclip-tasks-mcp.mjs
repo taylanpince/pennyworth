@@ -149,7 +149,7 @@ async function isOwnPart(issue) {
   return (await api("GET", "/api/agents/me")).id === issue.assigneeAgentId && (await isUsersTask(issue.parentId));
 }
 
-const MARKER = /^[A-Za-z0-9:._\/-]{3,200}$/;
+const MARKER = /^[A-Za-z0-9:@._\/-]{3,200}$/;
 const ALL_STATUSES = `${OPEN_STATUSES},done,cancelled`;
 const isOpen = (status) => OPEN_STATUSES.split(",").includes(status);
 
@@ -182,7 +182,7 @@ function noteIssue(i) {
     return;
   }
   const markers = new Map();
-  for (const [, merged, m] of i.description.matchAll(/<!-- (merged-)?source:([A-Za-z0-9:._\/-]{3,200}) -->/g)) {
+  for (const [, merged, m] of i.description.matchAll(/<!-- (merged-)?source:([A-Za-z0-9:@._\/-]{3,200}) -->/g)) {
     if (!markers.has(m) || !merged) markers.set(m, merged ? "merged-source" : "source");
   }
   for (const m of known?.markers.keys() ?? []) byMarker.get(m)?.delete(i.id);

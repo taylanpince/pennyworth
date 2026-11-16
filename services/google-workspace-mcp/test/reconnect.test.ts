@@ -107,3 +107,27 @@ describe("reconnect from the board", () => {
     await expect(r.finish("made-up-state-value", "c")).rejects.toThrow(/expired or was already used/);
   });
 });
+
+it("adds a new account only when explicitly requested, preserving the primary", async () => {
+  const path = credsFile();
+  const r = new Reconnect(path, google("new@home.io").impl);
+  const { url } = r.start("new@home.io", "http://localhost:3120/google/callback", true);
+  await r.finish(stateOf(url), "code");
+  const saved = JSON.parse(readFileSync(path, "utf8"));
+  expect(saved.primary).toBe("me@work.com");
+  expect(saved.accounts["new@home.io"].refresh_token).toBe("new");
+  expect(saved.accounts["me@side.io"].refresh_token).toBe("side");
+});
+
+it("configures a fresh client without allowing replacement of existing credentials", () => {
+  const path = credsFile();
+  const before = readFileSync(path, "utf8");
+  expect(() => new Reconnect(path).configure("other", "secret")).toThrow(/already configured/);
+  expect(readFileSync(path, "utf8")).toBe(before);
+  writeFileSync(path, "{}");
+  const r = new Reconnect(path);
+  expect(r.configured()).toBe(false);
+  r.configure("new-client", "new-secret");
+  expect(r.configured()).toBe(true);
+  expect(() => r.configure("other", "secret")).toThrow(/already configured/);
+});

@@ -44,11 +44,14 @@ export function loadConfig() {
     file,
     companyId,
     selfName,
+    cad: { python: resolve(REPO_ROOT, expand(cfg.cad?.python ?? "scripts/cad/python")) },
+    primerEnabled: cfg.primer?.enabled !== false,
     paperclipUrl: env.PAPERCLIP_URL ?? cfg.paperclip_url ?? "http://localhost:3100",
     boardKeyFile: join(secrets, "paperclip_board_key"),
     boardTokenFile: join(secrets, "board_internal_token"),
     boardInternalUrl: env.BOARD_INTERNAL_URL ?? cfg.recurring?.board_url ?? "http://127.0.0.1:3122",
     openrouterKeyFile: expand(cfg.engines?.openrouter?.key_file ?? join(secrets, "openrouter_key")),
+    claudeAuth: cfg.engines?.claude?.auth ?? "token",
     claudeTokenFile: expand(cfg.engines?.claude?.token_file ?? join(secrets, "claude_oauth_token")),
     // A Claude Code session past this much context starts afresh on the next turn, with the
     // conversation and the workspace (resuming it again re-reads all of it on every call).

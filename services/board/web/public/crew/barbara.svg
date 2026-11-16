@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><title>Barbara</title>
+<rect width="64" height="64" fill="#547649"/>
+<path d="M15 44V24c0-20 34-20 34 0v20z" fill="#8e402c"/>
+<path d="M7 64c3-14 13-20 25-20s22 6 25 20" fill="#c79648"/>
+<rect x="27" y="36" width="10" height="12" rx="3" fill="#d8a380"/>
+<ellipse cx="32" cy="27" rx="11" ry="14" fill="#efbf9e"/>
+<path d="M20 25c-3-17 23-23 26-4-9 2-15-1-18-6-1 4-4 8-8 10" fill="#8e402c"/>
+<g fill="none" stroke="#433b32" stroke-width="2"><rect x="22" y="24" width="9" height="7" rx="3"/><rect x="33" y="24" width="9" height="7" rx="3"/><path d="M31 27h2"/></g>
+<path d="M28 35q4 3 8 0" fill="none" stroke="#a36253" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M24 44l8 9 8-9 3 20H21z" fill="#e9e4cf"/>
+<path d="M21 46l-4 18m26-18 4 18" stroke="#826338" stroke-width="2"/>
+<path d="M46 50v10" stroke="#315661" stroke-width="2"/>
+</svg>

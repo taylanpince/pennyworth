@@ -194,20 +194,25 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
 }
 
-const StartSchema = z.object({ account: z.string().email().max(320), redirect_uri: z.string().url().max(200) }).strict();
+const StartSchema = z.object({ account: z.string().email().max(320), redirect_uri: z.string().url().max(200), allow_new: z.boolean().default(false) }).strict();
 const FinishSchema = z.object({ state: z.string().min(16).max(100), code: z.string().min(4).max(2000) }).strict();
 
 /** /auth/status, /auth/start and /auth/finish for the board (D-36). */
 async function handleAuth(req: IncomingMessage, path: string): Promise<[number, unknown]> {
   if (path === "/auth/status" && req.method === "GET") {
     if (fixturesDir) return [200, { accounts: [] }];
-    return [200, { accounts: multi?.authStatus() ?? [], ...(authError ? { error: authError } : {}) }];
+    return [200, { configured: reconnect.configured(), accounts: multi?.authStatus() ?? [], ...(authError ? { error: authError } : {}) }];
   }
   if (req.method !== "POST") return [405, { error: "method not allowed" }];
   try {
+    if (path === "/auth/configure") {
+      const a = z.object({ client_id: z.string().min(5).max(500), client_secret: z.string().min(1).max(500) }).strict().parse(await readJson(req));
+      reconnect.configure(a.client_id, a.client_secret);
+      return [200, { configured: true }];
+    }
     if (path === "/auth/start") {
       const a = StartSchema.parse(await readJson(req));
-      return [200, reconnect.start(a.account, a.redirect_uri)];
+      return [200, reconnect.start(a.account, a.redirect_uri, a.allow_new)];
     }
     if (path === "/auth/finish") {
       const a = FinishSchema.parse(await readJson(req));

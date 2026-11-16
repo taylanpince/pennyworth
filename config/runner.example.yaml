@@ -25,6 +25,7 @@ engines:
     key_file: ~/.config/pennyworth/openrouter_key
   claude:                             # "engine: claude" / "use Claude": Claude Code, headless, inside codex sandbox
     model: ""                         # empty = Claude Code's default; or opus, sonnet, haiku, fable, claude-…
+    auth: token                       # or login: native CLI login in the isolated config_dir
     token_file: ~/.config/pennyworth/claude_oauth_token   # from `claude setup-token` (0600)
     # Runner-owned Claude Code home: none of your plugins, hooks, MCP servers or claude.ai connectors.
     config_dir: ~/.local/state/pennyworth-runner/claude
@@ -35,6 +36,7 @@ engines:
 # Primer for every engine, read-only (D-40). Token: $PENNYWORTH_SECRETS_DIR/primer_mcp_token.
 # publish_url: where the runner itself publishes a task's Primer document (D-44); never given to jobs.
 primer:
+  enabled: true                     # false for personal instances: no reads, publishing, or prompt guidance
   url: http://127.0.0.1:3123/mcp/read
   publish_url: http://127.0.0.1:3123/mcp
 
@@ -79,6 +81,10 @@ intake:
   model: ""                           # empty = your Codex default
   reasoning_effort: low
   timeout_seconds: 180
+
+# Local build123d interpreter for CAD roles (scripts/cad/setup.sh installs it).
+cad:
+  python: scripts/cad/python
 
 devshells:
   flake: ~/config/nixos               # nix develop <flake>#<shell>

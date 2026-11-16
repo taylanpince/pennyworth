@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import { FOR_OTHERS, RUNNER_MARKER, deliveredFrom, isAgentSubtask, isUserPart, ownRequest, findRepos, mentionedRepos, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, roleEngine, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { observes, runAgent } from "./engines.mjs";
+import { CAD_TOOLS, cadRuntime, isCadRole } from "./cad.mjs";
 import { gcpSession } from "./gcp.mjs";
 import { awsSession, checkAwsCommand, runAwsWrite, showCommand } from "./aws.mjs";
 import { outputs, shareOutputs, syncFiles } from "./files.mjs";
@@ -781,6 +782,7 @@ async function agentEngine(ctx, args) {
  * (D-44): a new document, or new versions of the one the user linked, such as another agent's (D-54).
  */
 async function agentPrimer(ctx, args) {
+  if (cfg.primerEnabled === false) throw new UserError("Primer is disabled in this instance. Deliver files as task attachments instead.");
   const link = String(args.link ?? "").trim();
   const target = link ? primerLink(link) : undefined;
   if (link && !target) throw new UserError("That isn't a link to a Primer document (…/d/<id>). Use the link the document has in Primer.");
@@ -992,15 +994,23 @@ async function startJob({ issue, instructions }) {
   const retry = isRetry(instructions); // "try again" and the like, for the Stats view (D-62)
   try {
     const full = await pc.issue(issue.id);
+    const cad = isCadRole((await pc.engineerAgents()).find((a) => a.id === full.assigneeAgentId));
+    const runtime = cad ? cadRuntime(cfg) : undefined;
+    const jobCfg = cad ? { ...cfg, localCad: true } : cfg;
+    // Switching a part's workflow must not resume a session with another role's tool context.
+    const workflow = cad ? "cad" : "general";
+    if ((state.get(`workflow:${issue.id}`) || "general") !== workflow) state.updateTask(issue.id, { session_id: null });
+    state.set(`workflow:${issue.id}`, workflow);
     // Every repository the request, the task and the task it is part of (D-45) name joins the workspace
     // (D-41); the first leads. None named: the workspace starts empty, and the agent clones what it needs.
     const parent = await crewParent(full).catch(() => undefined);
-    const candidates = await repoCandidates(`${instructions}\n${full.title}\n${withParent(full.description, parent)}`);
+    const candidates = cad ? [] : await repoCandidates(`${instructions}\n${full.title}\n${withParent(full.description, parent)}`);
     let task = state.task(issue.id);
     if (!task.repo && candidates.length) task = await applySettings(issue, task, { repo: candidates[0] });
     rememberRepos(issue.id, candidates.filter((c) => c.toLowerCase() !== String(task.repo).toLowerCase()));
     task = await syncPicker(issue, full, task, false);
     const engine = task.engine ?? resolveEngine({}, cfg);
+    const observing = observes(engine.kind) && !cad;
 
     const cloneFailures = [];
     const workspace = await prepareWorkspace(issue, state.task(issue.id), { cloneFailures });
@@ -1015,13 +1025,13 @@ async function startJob({ issue, instructions }) {
     state.updateTask(issue.id, { shells, engine });
     // Grafana and Google Cloud reads for Claude Code and Codex (D-48): gcloud's devshell, and a
     // one-hour token of the job's own (D-53).
-    const runShells = observes(engine.kind) && cfg.gcp.shell && !shells.includes(cfg.gcp.shell) ? [...shells, cfg.gcp.shell] : shells;
-    gcp = observes(engine.kind)
+    const runShells = observing && cfg.gcp.shell && !shells.includes(cfg.gcp.shell) ? [...shells, cfg.gcp.shell] : shells;
+    gcp = observing
       ? await gcpSession({ credentialsFile: cfg.gcp.credentialsFile, dir: join(cfg.stateDir, "gcloud", issue.identifier), project: cfg.gcp.projects[0], log: (m, f) => log(m, { issue: issue.identifier, ...f }) })
       : undefined;
     if (gcp && gcp.state !== "ok" && gcp.state !== "missing") log("gcp unavailable for the job", { issue: issue.identifier, state: gcp.state, detail: gcp.detail });
     // AWS for the same engines (D-59): read roles for the job; changes only through `pennyworth aws`.
-    aws = observes(engine.kind) && cfg.aws.accounts.length ? await awsSession({ aws: cfg.aws, dir: join(cfg.stateDir, "aws", issue.identifier), log: (m, f) => log(m, { issue: issue.identifier, ...f }) }) : undefined;
+    aws = observing && cfg.aws.accounts.length ? await awsSession({ aws: cfg.aws, dir: join(cfg.stateDir, "aws", issue.identifier), log: (m, f) => log(m, { issue: issue.identifier, ...f }) }) : undefined;
     if (aws && (aws.state !== "ok" || aws.unavailable.length)) log("aws unavailable for the job", { issue: issue.identifier, state: aws.state, detail: aws.detail ?? aws.unavailable.map((u) => `${u.name}: ${u.detail}`).join("; ") });
 
     const logPath = join(logsDir, `${issue.identifier}-${Date.now()}.log`);
@@ -1042,7 +1052,7 @@ async function startJob({ issue, instructions }) {
 
     const branches = state.branches(issue.id);
     const files = await syncFiles(pc, full, workspace, log, new Set(Object.values(sharedOutputs(issue.id)).map((f) => f.id)));
-    const primer = primerRecord(issue.id);
+    const primer = cfg.primerEnabled && !cad ? primerRecord(issue.id) : undefined;
     // The task this is part of and what the others on it found (D-45): on the first run, then again when it changed.
     const crewCtx = await crewContext(full).catch((err) => (log("crew context unavailable", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 200) }), undefined));
     const crewKey = `crew:${issue.id}`;
@@ -1055,7 +1065,7 @@ async function startJob({ issue, instructions }) {
     const memory = memoryText && (!resumed || state.get(`memory:${issue.id}`) !== memoryHash(memoryText)) ? memoryText : "";
     if (memoryText) state.set(`memory:${issue.id}`, memoryHash(memoryText));
     // Private reads for Claude Code and Codex (D-48, D-51, D-57), and the Slack messages the task came from.
-    const observe = observes(engine.kind)
+    const observe = observing
       ? {
           grafana: existsSync(cfg.grafanaTokenFile),
           slack: existsSync(cfg.slackTokenFile),
@@ -1073,16 +1083,17 @@ async function startJob({ issue, instructions }) {
     Object.assign(running.get(issue.id), { channel, who: persona?.name });
     // The conversation (all of it for a new session, what's new for a resumed one) and where the work stands.
     const { thread, stand, words } = await conversation(issue, workspace, { instructions, resumed, persona });
-    const prompt = resumed
-      ? followUpPrompt({ user: cfg.selfName, instructions, workspace, repos, branches, files, primer, crew, observe, thread, stand, memory })
-      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, shells: runShells, instructions, files, primer, persona, crew, observe, thread, stand, team: crewNames(await pc.agents().catch(() => engineers)), memory, restarted: Boolean(state.get(`restarted:${issue.id}`)) });
+    let prompt = resumed
+      ? followUpPrompt({ user: cfg.selfName, instructions, workspace, repos, branches, files, primer, primerEnabled: cfg.primerEnabled && !cad, crew, observe, thread, stand, memory })
+      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, shells: runShells, instructions, files, primer, primerEnabled: cfg.primerEnabled && !cad, persona, crew, observe, thread, stand, team: crewNames(await pc.agents().catch(() => engineers)), memory, restarted: Boolean(state.get(`restarted:${issue.id}`)) });
+    if (runtime) prompt += `\n\n${runtime.instructions}\n\nThese CAD-specific workflow instructions replace the generic repository/commit and Primer guidance above. The current user request still defines what to design.\n`;
     if (!resumed) state.set(`restarted:${issue.id}`, "");
     const tipsBefore = await branchTips(workspace);
-    tools = { issue, workspace, words, instructions, kind: engine.kind, who: persona?.name, memoryScope: memoryOf, signal: controller.signal };
+    tools = { issue, workspace, words, instructions, kind: engine.kind, who: persona?.name, memoryScope: memoryOf, signal: controller.signal, ...(cad ? { allowedTools: CAD_TOOLS } : {}) };
     const helper = repoHelper.register(tools);
     let result;
     try {
-      result = await runAgent({ cfg, engine, shells: runShells, worktree: workspace, prompt, sessionId: resumed ? state.task(issue.id).session_id : undefined, logPath, signal: controller.signal, env: helper.env, gcp, aws, channel, onProgress: (p) => (Object.assign(running.get(issue.id) ?? {}, { progress: p }), reportProgress()) });
+      result = await runAgent({ cfg: jobCfg, engine, shells: runShells, worktree: workspace, prompt, sessionId: resumed ? state.task(issue.id).session_id : undefined, logPath, signal: controller.signal, env: { ...helper.env, ...runtime?.env }, gcp, aws, channel, onProgress: (p) => (Object.assign(running.get(issue.id) ?? {}, { progress: p }), reportProgress()) });
     } finally {
       helper.done();
     }
@@ -1111,7 +1122,7 @@ async function startJob({ issue, instructions }) {
     const tidy = await tidyBranches(issue, workspace, { commitDirty: false });
     const rows = await branchRows(issue, workspace);
     const stillDirty = (await dirtyCheckouts(after)).length > 0;
-    const primerNote = outcome.finished ? await publishToPrimer(issue, full, workspace) : "";
+    const primerNote = outcome.finished && !cad ? await publishToPrimer(issue, full, workspace) : "";
     const sharedNote = outcome.finished ? await shareWork(issue, full, workspace) : "";
     const footer = [
       committedNow || tidy.notes.length ? branchesFooter(rows, { multiRepo: new Set(rows.map((r) => r.repo)).size > 1 }) : "",
@@ -1196,6 +1207,7 @@ const savePrimer = (issueId, record) => state.set(`primer:${issueId}`, JSON.stri
  * Resolves with a line for the task comment ("" when there was nothing to do).
  */
 async function publishToPrimer(issue, full, workspace) {
+  if (cfg.primerEnabled === false) return "";
   const record = primerRecord(issue.id);
   if (!record) return "";
   const token = existsSync(cfg.primerPublishTokenFile) ? readFileSync(cfg.primerPublishTokenFile, "utf8").trim() : "";
