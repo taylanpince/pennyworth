@@ -3,6 +3,7 @@ import { api } from "./api";
 import { Avatar, Chips, CloseIcon, CrewAvatar, ExecutorPicker, MergeMenu, MoveMenu, Plan, SnoozeMenu, memberIssue } from "./components";
 import { Markdown } from "./markdown";
 import { CadPreview } from "./CadPreview";
+import { commentFiles } from "./commentFiles";
 import { BUCKETS, BUCKET_NAMES, WEEKDAYS, type Assignee, type Board, type Bucket, type Cadence, type CommentView, type CrewState, type Executor, type IssueView, type Label, type Update, type Weekday } from "./types";
 import { PRIORITIES, PRIORITY_NAMES, ago, elapsed, executorLabel, roleLine, roleTitle, runTime, shortName, todayIn, when } from "./util";
 
@@ -651,6 +652,7 @@ const OPEN_COMMENTS = 2;
 function Thread({ issue, board, agent, prefix, title = "Activity" }: { issue: IssueView; board: Board; agent?: Assignee; prefix: string; title?: string }) {
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const comments = issue.comments;
+  const deliveries = commentFiles(comments, issue.files);
   const older = comments.slice(0, Math.max(0, comments.length - OPEN_COMMENTS));
   const allOpen = older.every((c) => open.has(c.id));
   const toggle = (id: string) => setOpen((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set([...s, id])));
@@ -693,6 +695,7 @@ function Thread({ issue, board, agent, prefix, title = "Activity" }: { issue: Is
               {time(c)}
             </div>
             <Markdown text={c.body} prefix={prefix} />
+            {deliveries.has(c.id) && <Files issue={issue} files={deliveries.get(c.id)} title="Files from this reply" />}
           </article>
         );
       })}
@@ -843,12 +846,12 @@ function Description({ issue, prefix, editable, save }: { issue: IssueView; pref
 const size = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
 
 /** Files on the task (D-43). A PDF's text version is for the agents and isn't listed. */
-function Files({ issue }: { issue: IssueView }) {
-  const files = issue.files.filter((f) => !f.textOf);
+function Files({ issue, files: selected = issue.files, title = "Files" }: { issue: IssueView; files?: IssueView["files"]; title?: string }) {
+  const files = selected.filter((f) => !f.textOf);
   if (!files.length) return null;
   return (
     <section className="files">
-      <h3>Files</h3>
+      <h3>{title}</h3>
       <ul>
         {files.map((f) => (
           <li key={f.id}>
