@@ -5,8 +5,8 @@ import { Markdown } from "./markdown";
 import { ModelCard } from "./ModelCard";
 import { modelFiles } from "./modelFiles";
 import { commentFiles } from "./commentFiles";
-import { BUCKETS, BUCKET_NAMES, WEEKDAYS, type Assignee, type Board, type Bucket, type Cadence, type CommentView, type CrewState, type Executor, type IssueView, type Label, type Update, type Weekday } from "./types";
-import { PRIORITIES, PRIORITY_NAMES, ago, elapsed, executorLabel, roleLine, roleTitle, runTime, shortName, todayIn, when } from "./util";
+import { BUCKETS, BUCKET_NAMES, WEEKDAYS, type Assignee, type Board, type Bucket, type Cadence, type CommentView, type CrewState, type Executor, type IssueView, type Label, type SubtaskView, type Update, type Weekday } from "./types";
+import { PRIORITIES, PRIORITY_NAMES, ago, elapsed, executorLabel, mostUrgent, roleLine, roleTitle, runTime, shortName, todayIn, when } from "./util";
 
 interface Props {
   refId: string;
@@ -71,13 +71,15 @@ export function Drawer({ refId, focus, board, onClose, onChanged, onMove, onSnoo
     }
   }
 
-  async function setStatus(status: "todo" | "in_progress" | "done" | "cancelled") {
+  async function setStatus(status: "todo" | "in_progress" | "done" | "cancelled", subtasks?: "close" | "keep") {
     if (!issue) return;
     const before = issue.status;
-    await update({ status });
+    await update({ status, ...(subtasks ? { subtasks } : {}) });
     if (status === "done" || status === "cancelled") {
       toast(`${issue.identifier} ${status === "done" ? "done" : "cancelled"}`, { label: "Undo", run: () => void api.update(issue.id, { status: before === "in_progress" ? "in_progress" : "todo" }).then(onChanged) });
-      onClose();
+      // A subtask goes back to its task (D-68).
+      if (issue.parent && issue.assignee === "me") location.hash = `#/t/${issue.parent.identifier}/subtasks`;
+      else onClose();
     }
   }
 
@@ -100,7 +102,7 @@ interface BodyProps {
   board: Board;
   busy: boolean;
   update: (u: Update, note?: string) => Promise<void>;
-  setStatus: (s: "todo" | "in_progress" | "done" | "cancelled") => Promise<void>;
+  setStatus: (s: "todo" | "in_progress" | "done" | "cancelled", subtasks?: "close" | "keep") => Promise<void>;
   onClose: () => void;
   onMove: (id: string, bucket: Bucket) => Promise<void>;
   onSnooze: Props["onSnooze"];
@@ -122,7 +124,8 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
   const mine = issue.assignee === "me";
   const [bucket, setBucket] = useState<Bucket | null>(issue.bucket);
   useEffect(() => setBucket(issue.bucket), [issue.bucket]);
-  const focused = focus && issue.crew.find((m) => m.issues.some((i) => i.identifier === focus))?.agent;
+  // A task's subtasks have a tab of their own (D-68): #/t/PEN-1/subtasks.
+  const focused = focus === "subtasks" ? focus : focus && issue.crew.find((m) => m.issues.some((i) => i.identifier === focus))?.agent;
   const [tab, setTab] = useState<string>(focused || "overview");
   useEffect(() => {
     if (focused) setTab(focused);
@@ -133,7 +136,7 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
   const pick = (t: string) => {
     setTab(t);
     setAdding(false);
-    history.replaceState(null, "", t === "overview" ? `#/t/${issue.identifier}` : `#/t/${issue.identifier}/${memberIssue(issue.crew.find((m) => m.agent === t)!)}`);
+    history.replaceState(null, "", t === "overview" ? `#/t/${issue.identifier}` : t === "subtasks" ? `#/t/${issue.identifier}/subtasks` : `#/t/${issue.identifier}/${memberIssue(issue.crew.find((m) => m.agent === t)!)}`);
   };
   const who = (key: string) => board.assignees.find((a) => a.key === key);
   // A message that @-mentioned another agent went to their chat (D-54): open it once the crew shows it.
@@ -146,6 +149,13 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
     setMoving(identifier);
     void reload();
   };
+  // Closing a task with open subtasks asks whether they close too (D-68).
+  const openSubtasks = issue.subtasks.filter((s) => s.status !== "done" && s.status !== "cancelled").length;
+  const [closing, setClosing] = useState<"done" | "cancelled" | null>(null);
+  const close = (s: "done" | "cancelled") => (openSubtasks ? setClosing(s) : void setStatus(s));
+  const subtask = Boolean(issue.parent && mine);
+  const canSubtask = mine && !issue.parent && !issue.recurring;
+  const subtasksDone = issue.subtasks.filter((s) => s.status === "done").length;
 
   return (
     <>
@@ -192,7 +202,7 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
           Details
         </button>
         {editable && !closed && (
-          <button className="btn primary" disabled={busy} onClick={() => void setStatus("done")}>
+          <button className="btn primary" disabled={busy} onClick={() => close("done")}>
             Done
           </button>
         )}
@@ -204,7 +214,27 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
       </header>
       {issue.parent && (
         <div className="part-of">
-          Part of <a href={`#/t/${issue.parent.identifier}`}>{issue.parent.identifier}{issue.parent.title ? `: ${issue.parent.title}` : ""}</a>
+          {subtask ? "Subtask of" : "Part of"} <a href={`#/t/${issue.parent.identifier}${subtask ? "/subtasks" : ""}`}>{issue.parent.identifier}{issue.parent.title ? `: ${issue.parent.title}` : ""}</a>
+        </div>
+      )}
+      {closing && (
+        <div className="crew-banner proposed closing">
+          <span>
+            <b>
+              {openSubtasks} subtask{openSubtasks === 1 ? " is" : "s are"} still open.
+            </b>{" "}
+            {closing === "done" ? "Close" : "Cancel"} {openSubtasks === 1 ? "it" : "them"} too, or keep {openSubtasks === 1 ? "it" : "them"} open on the board?
+          </span>
+          <span className="spacer" />
+          <button className="btn" onClick={() => setClosing(null)}>
+            Back
+          </button>
+          <button className="btn" disabled={busy} onClick={() => (setClosing(null), void setStatus(closing, "keep"))}>
+            Keep open
+          </button>
+          <button className="btn primary" autoFocus disabled={busy} onClick={() => (setClosing(null), void setStatus(closing, "close"))}>
+            {closing === "done" ? "Close" : "Cancel"} {openSubtasks === 1 ? "it" : "them"} too
+          </button>
         </div>
       )}
       <div className="task-top">
@@ -228,11 +258,21 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
           )}
         </div>
       </div>
-      {(issue.crew.length > 0 || (mine && editable && !closed)) && (
+      {(issue.crew.length > 0 || issue.subtasks.length > 0 || (mine && editable && !closed)) && (
         <nav className="task-tabs" aria-label="The crew on this task">
           <button className={`task-tab${tab === "overview" ? " on" : ""}`} onClick={() => pick("overview")}>
             Overview
           </button>
+          {canSubtask && (issue.subtasks.length > 0 || tab === "subtasks") && (
+            <button className={`task-tab${tab === "subtasks" ? " on" : ""}`} onClick={() => pick("subtasks")}>
+              Subtasks
+              {issue.subtasks.length > 0 && (
+                <span className="fan">
+                  {subtasksDone}/{issue.subtasks.length}
+                </span>
+              )}
+            </button>
+          )}
           {issue.crew.map((m) => (
             <button key={m.agent} className={`task-tab${tab === m.agent ? " on" : ""}`} onClick={() => pick(m.agent)}>
               <CrewAvatar member={m} assignee={who(m.agent)} size={20} />
@@ -264,7 +304,11 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
               toast={toast}
             />
           )}
-          {member ? (
+          {tab === "subtasks" && canSubtask ? (
+            <div className="drawer-scroll">
+              <Subtasks issue={issue} board={board} editable={editable && !closed} setIssue={setIssue} onChanged={onChanged} toast={toast} />
+            </div>
+          ) : member ? (
             <AgentPane key={member.agent} task={issue} member={member} focus={focus} board={board} reload={reload} onChanged={onChanged} toast={toast} moved={moved} />
           ) : (
             <Overview issue={issue} board={board} editable={editable} update={update} reload={reload} toast={toast} pick={pick} onAdd={() => setAdding(true)} moved={moved} />
@@ -295,7 +339,29 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
                 <BringBack issue={issue} board={board} done={() => (void reload(), onChanged())} toast={toast} />
               </DetailSection>
             )}
-            {editable && !closed && (issue.recurring || mine) && (
+            {editable && !closed && mine && !issue.recurring && (subtask || !issue.subtasks.length) && (
+              <DetailSection title="Subtask" hint={subtask ? "Opens from its task, not the board." : "Puts it under a bigger task, off the board."}>
+                {subtask ? (
+                  <button className="btn" disabled={busy} onClick={() => void api.setParent(issue.id, null).then((v) => (setIssue(v), onChanged(), toast(`${issue.identifier} is back on the board, in Triage`)), (e) => toast(`Couldn't move it: ${(e as Error).message}`))}>
+                    Move to the board
+                  </button>
+                ) : (
+                  <MergeMenu
+                    card={issue}
+                    kind="subtask"
+                    label="Make it a subtask of…"
+                    targets={BUCKETS.flatMap((b) => board.buckets[b]).filter((c) => c.assignee === "me" && !c.recurring && c.id !== issue.id)}
+                    onPick={(into) =>
+                      void api.setParent(issue.id, into.id).then(
+                        (v) => (setIssue(v), onChanged(), toast(`${issue.identifier} is a subtask of ${into.identifier}`, { label: "Open", run: () => (location.hash = `#/t/${into.identifier}`) })),
+                        (e) => toast(`Couldn't do that: ${(e as Error).message}`),
+                      )
+                    }
+                  />
+                )}
+              </DetailSection>
+            )}
+            {editable && !closed && (issue.recurring || (mine && !subtask)) && (
               <DetailSection title="Repeats" hint={issue.recurring ? undefined : "Runs its description on a schedule; each run lands on top of Today."}>
                 <Repeats issue={issue} board={board} done={() => (void reload(), onChanged())} toast={toast} />
               </DetailSection>
@@ -303,7 +369,7 @@ function IssueBody({ issue, focus, board, busy, update, setStatus, onClose, onMo
             <footer className="details-foot">
               <span className="muted small">Created {when(issue.createdAt)}</span>
               {editable && !closed && (
-                <button className="btn danger" disabled={busy} onClick={() => void setStatus("cancelled")}>
+                <button className="btn danger" disabled={busy} onClick={() => close("cancelled")}>
                   Cancel task
                 </button>
               )}
@@ -327,6 +393,13 @@ function Overview({ issue, board, editable, update, reload, toast, pick, onAdd, 
       <div className="drawer-scroll" {...scroll}>
         <Description issue={issue} prefix={board.prefix} editable={editable} save={(description) => update({ description })} />
         <Files issue={issue} />
+        {mine && !issue.parent && !issue.recurring && !issue.subtasks.length && editable && !closed && (
+          <div className="subtasks-empty">
+            <button className="link-btn" onClick={() => pick("subtasks")}>
+              + Add subtasks
+            </button>
+          </div>
+        )}
         {issue.crew.length > 0 ? (
           <section className="crew-rows">
             {issue.crew.map((m) => {
@@ -363,6 +436,167 @@ function Overview({ issue, board, editable, update, reload, toast, pick, onAdd, 
         <Composer issue={issue} reload={reload} toast={toast} to={mine && assistant ? { assignee: assistant, label: `${shortName(assistant)} reads this; @name brings in someone else` } : undefined} crew={mine ? board.assignees : []} moved={moved} />
       )}
     </>
+  );
+}
+
+/**
+ * A task's subtasks (D-68): a checklist, each row with its crew. Open one to work on it; pick several
+ * to put the same agent on each, with one set of instructions.
+ */
+function Subtasks({ issue, board, editable, setIssue, onChanged, toast }: { issue: IssueView; board: Board; editable: boolean; setIssue: (v: IssueView) => void; onChanged: () => void; toast: Props["toast"] }) {
+  const subs = issue.subtasks;
+  const done = subs.filter((s) => s.status === "done").length;
+  const isOpen = (s: SubtaskView) => s.status !== "done" && s.status !== "cancelled";
+  const [title, setTitle] = useState("");
+  const [picked, setPicked] = useState<ReadonlySet<string> | null>(null);
+  const [assigning, setAssigning] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const who = (key: string) => board.assignees.find((a) => a.key === key);
+  // Rows that closed while picked drop out of the pick.
+  const chosen = picked ? subs.filter((s) => picked.has(s.id) && isOpen(s)) : [];
+
+  async function run(work: () => Promise<IssueView>, note: string) {
+    setBusy(true);
+    try {
+      setIssue(await work());
+      onChanged();
+      toast(note);
+      return true;
+    } catch (e) {
+      toast(`Couldn't do that: ${(e as Error).message}`);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+  const add = async () => {
+    const t = title.trim();
+    if (t && (await run(() => api.addSubtask(issue.id, t), `Subtask added`))) setTitle("");
+  };
+  const toggle = (s: SubtaskView) =>
+    void run(async () => (await api.update(s.id, { status: isOpen(s) ? "done" : "todo" }), api.issue(issue.id)), `${s.identifier} ${isOpen(s) ? "done" : "reopened"}`);
+
+  return (
+    <section className="subtasks">
+      <div className="subtasks-head">
+        <h3>Subtasks</h3>
+        {subs.length > 0 && (
+          <span className="muted small">
+            {done} of {subs.length} done
+          </span>
+        )}
+        <span className="spacer" />
+        {editable && subs.some(isOpen) && (
+          <button className="link-btn" onClick={() => (setPicked(picked ? null : new Set()), setAssigning(false))}>
+            {picked ? "Cancel" : "Select"}
+          </button>
+        )}
+        {picked && (
+          <button className="link-btn" onClick={() => setPicked(chosen.length === subs.filter(isOpen).length ? new Set() : new Set(subs.filter(isOpen).map((s) => s.id)))}>
+            {chosen.length === subs.filter(isOpen).length ? "None" : "All open"}
+          </button>
+        )}
+      </div>
+      <div className="subtask-list">
+        {subs.map((s) => {
+          const state = s.crew.length ? mostUrgent(s.crew.map((m) => m.state)) : null;
+          return (
+            <div key={s.id} className={`subtask-row${isOpen(s) ? "" : " closed"}${picked?.has(s.id) ? " on" : ""}`}>
+              {picked ? (
+                <input type="checkbox" aria-label={`Pick ${s.identifier}`} disabled={!isOpen(s)} checked={picked.has(s.id) && isOpen(s)} onChange={() => setPicked(new Set(picked.has(s.id) ? [...picked].filter((x) => x !== s.id) : [...picked, s.id]))} />
+              ) : (
+                <button className={`subtask-check${isOpen(s) ? "" : " done"}`} disabled={!editable || busy || s.status === "cancelled"} aria-label={isOpen(s) ? `Mark ${s.identifier} done` : `Reopen ${s.identifier}`} onClick={() => toggle(s)}>
+                  {!isOpen(s) && "✓"}
+                </button>
+              )}
+              <a className="subtask-title" href={`#/t/${s.identifier}`}>
+                {s.title}
+              </a>
+              {s.crew.map((m) => (
+                <CrewAvatar key={m.agent} member={m} assignee={who(m.agent)} size={20} />
+              ))}
+              {state && state !== "done" && <span className={`pill pill-${state}`}>{STATE_PILLS[state]}</span>}
+              {s.unread && <span className="dot inline" title="New activity" />}
+              <span className="ident">{s.identifier}</span>
+            </div>
+          );
+        })}
+      </div>
+      {picked && chosen.length > 0 && !assigning && (
+        <div className="row-end">
+          <button className="btn primary" onClick={() => setAssigning(true)}>
+            Assign {chosen.length} to…
+          </button>
+        </div>
+      )}
+      {assigning && chosen.length > 0 && (
+        <AssignSubtasks
+          count={chosen.length}
+          board={board}
+          onCancel={() => setAssigning(false)}
+          onAssign={async (agent, text, executor) => {
+            if (await run(() => api.assignSubtasks(issue.id, chosen.map((s) => s.id), agent, text, executor), `${shortName(who(agent))} is on ${chosen.length} subtask${chosen.length === 1 ? "" : "s"}`)) setPicked(null), setAssigning(false);
+          }}
+        />
+      )}
+      {editable && !picked && (
+        <div className="subtask-add">
+          <input
+            value={title}
+            autoFocus={!subs.length}
+            placeholder="Add a subtask"
+            disabled={busy}
+            onChange={(e) => setTitle(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.preventDefault(), void add();
+            }}
+          />
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** One agent and one set of instructions for every picked subtask; each gets its own part (D-68). */
+function AssignSubtasks({ count, board, onCancel, onAssign }: { count: number; board: Board; onCancel: () => void; onAssign: (agent: string, text: string, executor: Executor) => Promise<void> }) {
+  const crew = board.assignees.filter((a) => a.kind !== "me");
+  const [pick, setPick] = useState<string | null>(null);
+  const [executor, setExecutor] = useState<Executor>({});
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const chosen = crew.find((a) => a.key === pick);
+  const assign = async () => {
+    if (!pick || !text.trim()) return;
+    setBusy(true);
+    await onAssign(pick, text.trim(), executor);
+    setBusy(false);
+  };
+  return (
+    <div className="add-agent">
+      <h3>
+        Put someone on {count} subtask{count === 1 ? "" : "s"}
+      </h3>
+      <CrewPicker crew={crew} pick={pick} setPick={(k) => (setPick(k), setExecutor({}))} />
+      {chosen && <ExecutorPicker assignee={chosen} value={executor} onChange={setExecutor} />}
+      <textarea
+        autoFocus
+        value={text}
+        placeholder={pick ? `What should ${shortName(chosen)} do on each? They see the subtask, this task and its chat.` : "Pick someone first."}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.preventDefault(), void assign();
+          if (e.key === "Escape") e.stopPropagation(), onCancel();
+        }}
+      />
+      <div className="row-end">
+        <button className="btn" onClick={onCancel}>
+          Cancel
+        </button>
+        <button className="btn primary" disabled={!pick || !text.trim() || busy} onClick={() => void assign()}>
+          {pick ? `Assign ${count} to ${shortName(chosen)}` : "Assign"}
+        </button>
+      </div>
+    </div>
   );
 }
 

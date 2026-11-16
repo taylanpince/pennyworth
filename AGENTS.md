@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-62) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-68) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -39,6 +39,7 @@ host (NixOS, user taylan)
     │                        close/label/assign issues, review PRs, re-run failed CI (D-39, D-42, D-46)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
                              @-mentions in its chats go to that agent's part of the task (D-54);
+                             subtasks: the user's tasks under another of theirs, one level, folded into it with their own crews (D-68);
                              files attached as context go to Paperclip's attachments, PDFs with a text version (D-43);
                              :3121 on the LAN (pennyworth.local, paired devices from the home subnet only, D-23)
                              :3122 internal API (bearer token): scheduled moves and recurring tasks for the bridge and the runner (D-25),
@@ -163,6 +164,7 @@ scripts/backup.sh --verify                         # restore the latest off-mach
   - **Paperclip also deduplicates by title:** a new issue whose title matches an open sibling made in the last 48 hours comes back as that sibling (`deduplicated: true`, `recent_open_title`). Crew parts all carry the task's title, so the board creates them with `allowDuplicate: true` (D-45). Check `deduplicated` whenever you create issues with repeated titles.
   - **Merged tasks keep their sources as `merged-source:` (D-56).** The board's merge (and Alfred's `task_merge`) appends the duplicate verbatim and cancels it; deduplication (`findByMarker`, `keepMarkers`, `task_update`) must match both forms, and nothing may close a task on a `merged-source:` marker. Never put merging back in a prompt.
 - **A run's ending:** only `in_progress` counts as "missing disposition" when an agent's run ends; `todo` assigned to the agent is fine. Comments wake the assignee unless the issue is done or cancelled. That's why an agent's own part of a task (D-45) is handed off as `todo` and never closed by the agent.
+  - **A child assigned to the user is a subtask (D-68), one assigned to an agent a crew part (D-45).** `isSubtask` in `services/board/src/crew.ts` is the one test (parent the user's, with no parent itself): use it rather than checking assignees by hand, and never let anything nest a subtask under a subtask. A part of a subtask belongs to the subtask (its chat, its runner context), and only rolls up to the top card for display.
   - **Parts close with their task, wherever it closes.** A scout's "Answered in Telegram" or the inbox closes only the parent, and the board loads closed tasks for 48 hours, so a part left open used to land in Triage as a card of its own two days later (PEN-2613). The board closes such parts on load (`partsToClose`), unless the user took the part up again after the task closed.
 - **Codex and MCP delivery:**
   - The tool gateway **drops MCP annotations**, so Codex would refuse every write tool (approval policy "never"). MCP servers are therefore written directly into `/paperclip/.codex/config.toml` with `default_tools_approval_mode = "approve"` (by `paperclip-setup.mjs`).

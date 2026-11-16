@@ -8,8 +8,8 @@ import type { Logger } from "pino";
 import { z } from "zod";
 import { RunnerReportSchema, agentsView, runTasks, workingOn, type RunContext, type RunnerReport } from "./activity.js";
 import { RecurringSchema, RunStateSchema, ScheduleSchema, changeRecurring, claimDue, recurringView, scheduleMove } from "./automation.js";
-import { AddAgentSchema, BadRequest, CreateSchema, EFFORTS, ENGINE_ADAPTER, type Engine, HandOverSchema, PassSchema, RUNNER_MARKER, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
-import { FOR_OTHERS, crewOf, deliveredFrom, deliveredText, foldedChildren, fromMarker, handOverText, mentionedAgents, partsToClose, summaryOf, type DeliveredFrom } from "./crew.js";
+import { AddAgentSchema, AssignSubtasksSchema, BadRequest, CreateSchema, MAX_SUBTASKS, ParentSchema, SubtaskSchema, EFFORTS, ENGINE_ADAPTER, type Engine, HandOverSchema, PassSchema, RUNNER_MARKER, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
+import { FOR_OTHERS, crewOf, deliveredFrom, deliveredText, foldedChildren, fromMarker, handOverText, isSubtask, mentionedAgents, partsToClose, subtaskCount, summaryOf, type DeliveredFrom } from "./crew.js";
 import { inNetworks } from "./config.js";
 import { INLINE_TYPES, MAX_UPLOAD_BODY, UploadSchema, decode, fileType, fileViews, isPdf, pdfText, safeName } from "./files.js";
 import { MergeSchema, mergedDescription } from "./merge.js";
@@ -250,6 +250,37 @@ export function createApp(opts: AppOptions): Server {
     return parent.assigneeUserId === ctx.me ? parent : undefined;
   }
 
+  const usersOwn = (i: Issue, ctx: { me: string }) => i.assigneeUserId === ctx.me && !i.assigneeAgentId;
+  const closedIssue = (i: Issue) => i.status === "done" || i.status === "cancelled";
+
+  /** A task that can take subtasks (D-68): the user's own, open, not repeating, and not a subtask itself. */
+  async function subtaskParent(ctx: Awaited<ReturnType<typeof context>>, task: Issue) {
+    if (!usersOwn(task, ctx)) throw new HttpError(403, "subtasks go under your own tasks");
+    if (task.parentId) throw new HttpError(400, `${task.identifier} is a subtask itself: subtasks go one level deep`);
+    if (closedIssue(task)) throw new HttpError(409, `${task.identifier} is closed: reopen it first`);
+    if (store.recurring(task.id)) throw new HttpError(409, `${task.identifier} repeats: its runs can't have subtasks`);
+    const kids = await pc.children(task.id);
+    if (kids.filter((k) => isSubtask(k, task)).length >= MAX_SUBTASKS) throw new HttpError(409, `a task takes at most ${MAX_SUBTASKS} subtasks`);
+    return kids;
+  }
+
+  // Subtask counts per task (D-68), read from Paperclip: closed subtasks drop out of the board's lists after 48 hours.
+  const counts = new Map<string, { at: number; value: { open: number; total: number } | undefined }>();
+  async function subtaskCounts(tasks: Issue[]) {
+    const out = new Map<string, { open: number; total: number }>();
+    for (const t of tasks) {
+      let hit = counts.get(t.id);
+      if (!hit || Date.now() - hit.at > 30_000) {
+        const kids = await pc.children(t.id).catch(() => undefined);
+        if (!kids) continue;
+        hit = { at: Date.now(), value: subtaskCount(t, kids) };
+        counts.set(t.id, hit);
+      }
+      if (hit.value) out.set(t.id, hit.value);
+    }
+    return out;
+  }
+
   /**
    * A message of the user's for one agent on their task (D-54), from a mention or passed on by another
    * agent: it goes to that agent's part as the user's own comment, with where it came from. Its latest part
@@ -276,7 +307,11 @@ export function createApp(opts: AppOptions): Server {
       // The crew works in sub-tasks of the user's task (D-45).
       issue.assigneeUserId === ctx.me ? pc.children(issue.id).catch(() => []) : Promise.resolve([] as Issue[]),
     ]);
-    const crew = crewOf(issue, kids, { assignees: ctx.assignees, seen: (id) => store.seenAt(id), working: busy.map, jobs: latestJobs(shared.runner) });
+    const crewInput = { assignees: ctx.assignees, seen: (id: string) => store.seenAt(id), working: busy.map, jobs: latestJobs(shared.runner) };
+    const crew = crewOf(issue, kids, crewInput);
+    // Its subtasks (D-68), each with its own crew. Their parts come from the board's lists, not a read per subtask.
+    const subs = kids.filter((k) => isSubtask(k, issue) && k.status !== "cancelled").sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const subParts = subs.length ? await subtaskParts(new Set(subs.map((k) => k.id))) : [];
     // Each crew member's latest word, when there's one issue to read it from (a fan-out shows its count instead):
     // what it says while working, else its last comment.
     const said = Object.fromEntries(
@@ -309,7 +344,22 @@ export function createApp(opts: AppOptions): Server {
       // An agent's sub-task links back to the task it works on (D-45).
       parent: parent ? { identifier: parent.identifier, title: parent.title } : null,
       crew: crew.map((m) => ({ ...m, said: said[m.agent] ?? null })),
+      subtasks: subs.map((k) => ({
+        id: k.id,
+        identifier: k.identifier,
+        title: k.title,
+        status: k.status,
+        unread: toCard(k, ctx.assignees, store.seenAt(k.id)).unread,
+        crew: crewOf(k, subParts.filter((p) => p.parentId === k.id), crewInput),
+      })),
     };
+  }
+
+  /** The crew parts of these subtasks: open ones, and those closed in the last 48 hours (as the board shows them). */
+  async function subtaskParts(ids: Set<string>) {
+    const since = new Date(Date.now() - RECENT_MS).toISOString();
+    const [open, closed] = await Promise.all([pc.openIssues(), pc.closedSince(since)]);
+    return [...new Map([...closed, ...open].filter((i) => i.parentId && ids.has(i.parentId) && i.assigneeAgentId).map((i) => [i.id, i])).values()];
   }
 
   /** Attach a file to a task (D-43); a PDF also gets its text as `<name>.txt`, for the agents. */
@@ -370,6 +420,8 @@ export function createApp(opts: AppOptions): Server {
     if (closed(source)) throw new HttpError(409, `${source.identifier} is already closed`);
     if (closed(target)) throw new HttpError(409, `${target.identifier} is closed: reopen it first`);
     if (target.parentId === source.id) throw new HttpError(400, `${target.identifier} is part of ${source.identifier}`);
+    // Subtasks go one level deep (D-68): a task with subtasks doesn't merge into a subtask.
+    if (target.parentId && (await pc.children(source.id)).some((k) => isSubtask(k, source))) throw new HttpError(409, `${source.identifier} has subtasks and ${target.identifier} is a subtask: merge into ${target.identifier}'s task instead`);
     if (store.recurring(source.id)) throw new HttpError(409, `${source.identifier} repeats: stop it first`);
     const kids = await pc.children(source.id);
     const kind = (i: Issue) => ctx.assignees.find((a) => a.kind !== "me" && a.key === i.assigneeAgentId)?.kind;
@@ -721,7 +773,10 @@ export function createApp(opts: AppOptions): Server {
         store.placeNew(open.filter((i) => !folded.has(i.id)).map((i) => ({ id: i.id, createdAt: i.createdAt, status: i.status })));
         const recurring = new Map([...store.allRecurring()].map(([id, r]) => [id, { summary: recurringView(r, opts.timezone).summary, nextRun: r.nextRun, paused: r.paused }]));
         const [busy, google, telegram, glean, grafana, clickhouse, cloudflare] = await Promise.all([working(ctx), opts.google?.status(), opts.telegram?.status(), opts.glean?.status(), opts.grafana?.status(), opts.clickhouse?.status(), opts.cloudflare?.status()]);
-        const board = buildBoard({ open, closed, placements: store.placements(), seen: store.allSeen(), schedules: store.schedules(), recurring, installedAt: store.meta("installed_at")!, assignees: ctx.assignees, crew: { working: busy.map, jobs: latestJobs(shared.runner) } });
+        const byId = new Map([...open, ...closed].map((i) => [i.id, i]));
+        const withSubtasks = [...new Set([...open, ...closed].filter((i) => folded.has(i.id) && usersOwn(i, ctx)).map((i) => folded.get(i.id)!))].flatMap((id) => byId.get(id) ?? []);
+        const subtasks = await subtaskCounts(withSubtasks);
+        const board = buildBoard({ subtasks, open, closed, placements: store.placements(), seen: store.allSeen(), schedules: store.schedules(), recurring, installedAt: store.meta("installed_at")!, assignees: ctx.assignees, crew: { working: busy.map, jobs: latestJobs(shared.runner) } });
         for (const card of [...Object.values(board.buckets).flat(), ...board.recurring]) {
           const w = busy.map.get(card.identifier);
           if (w) card.working = w;
@@ -750,10 +805,17 @@ export function createApp(opts: AppOptions): Server {
         // Done or cancelled closes the crew's open parts too, except one an agent is busy with (D-45).
         if ((update.status === "done" || update.status === "cancelled") && issue.assigneeUserId === ctx.me) {
           const [kids, busy] = await Promise.all([pc.children(issue.id), working(ctx)]);
-          for (const k of kids) {
-            if (["done", "cancelled"].includes(k.status) || busy.map.has(k.identifier) || !ctx.assignees.some((a) => a.kind !== "me" && a.key === k.assigneeAgentId)) continue;
+          const isCrew = (k: Issue) => ctx.assignees.some((a) => a.kind !== "me" && a.key === k.assigneeAgentId);
+          // Open subtasks close too when the user says so (D-68), with their crew; otherwise they're cards again.
+          const subs = update.subtasks === "close" ? kids.filter((k) => isSubtask(k, issue) && !closedIssue(k)) : [];
+          const parts = [...kids.filter(isCrew), ...(await Promise.all(subs.map((k) => pc.children(k.id)))).flat().filter(isCrew)];
+          for (const k of parts) {
+            if (closedIssue(k) || busy.map.has(k.identifier)) continue;
             await pc.updateIssue(k.id, { status: update.status });
           }
+          for (const k of subs) await pc.updateIssue(k.id, { status: update.status });
+          if (subs.length) log.info({ issue: issue.identifier, subtasks: subs.length, status: update.status }, "subtasks closed with their task");
+          counts.delete(issue.id);
         }
         return issueView(issue.id);
       },
@@ -794,6 +856,80 @@ export function createApp(opts: AppOptions): Server {
         const agent = ctx.assignees.find((a) => a.key === input.agent && a.kind !== "me");
         if (!agent) throw new HttpError(400, "unknown agent");
         await addToCrew(ctx, issue, agent, input.instructions, { engine: input.engine, model: input.model, effort: input.effort });
+        return issueView(issue.id);
+      },
+    },
+    {
+      // A subtask of one of your tasks (D-68): yours, folded into the task; agents join it as they join any task.
+      method: "POST",
+      path: /^\/api\/issues\/([^/]+)\/subtasks$/,
+      handle: async (m, body) => {
+        const { ctx, issue } = await ownIssue(decodeURIComponent(m[1]!));
+        await subtaskParent(ctx, issue);
+        const input = parse(SubtaskSchema, body);
+        const todo = ctx.labels.find((l) => l.name === "todo");
+        const sub = await pc.createIssue({
+          title: input.title,
+          description: displayText(input.description),
+          status: "todo",
+          priority: issue.priority,
+          parentId: issue.id,
+          assigneeUserId: ctx.me,
+          allowDuplicate: true,
+          ...(todo ? { labelIds: [todo.id] } : {}),
+        });
+        store.markSeen(sub.id, new Date(Date.now() + 5_000).toISOString());
+        counts.delete(issue.id);
+        log.info({ issue: issue.identifier, subtask: sub.identifier }, "subtask added");
+        return issueView(issue.id);
+      },
+    },
+    {
+      // One agent, one set of instructions, on several subtasks (D-68): a part on each, as Add agent makes.
+      method: "POST",
+      path: /^\/api\/issues\/([^/]+)\/subtasks\/agents$/,
+      handle: async (m, body) => {
+        const { ctx, issue } = await ownIssue(decodeURIComponent(m[1]!));
+        if (!usersOwn(issue, ctx)) throw new HttpError(403, "agents join your own tasks");
+        const input = parse(AssignSubtasksSchema, body);
+        const agent = ctx.assignees.find((a) => a.key === input.agent && a.kind !== "me");
+        if (!agent) throw new HttpError(400, "unknown agent");
+        const open = new Map((await pc.children(issue.id)).filter((k) => isSubtask(k, issue) && !closedIssue(k)).map((k) => [k.id, k]));
+        const subs = [...new Set(input.subtasks)].map((id) => open.get(id));
+        if (subs.some((k) => !k)) throw new HttpError(400, "pick open subtasks of this task");
+        for (const k of subs) await addToCrew(ctx, k!, agent, input.instructions, { engine: input.engine, model: input.model, effort: input.effort });
+        log.info({ issue: issue.identifier, agent: agent.name, subtasks: subs.length }, "agent on subtasks");
+        return issueView(issue.id);
+      },
+    },
+    {
+      // Make a task a subtask of another, or move a subtask back to the board (D-68).
+      method: "POST",
+      path: /^\/api\/issues\/([^/]+)\/parent$/,
+      handle: async (m, body) => {
+        const { ctx, issue } = await ownIssue(decodeURIComponent(m[1]!));
+        if (!usersOwn(issue, ctx)) throw new HttpError(403, "only your own tasks");
+        const { parent } = parse(ParentSchema, body);
+        if (parent === null) {
+          const from = issue.parentId ? await pc.issue(issue.parentId) : undefined;
+          if (!from || !isSubtask(issue, from)) throw new HttpError(400, `${issue.identifier} isn't a subtask`);
+          await pc.updateIssue(issue.id, { parentId: null });
+          store.move(issue.id, "triage", "top");
+          counts.delete(from.id);
+          log.info({ issue: issue.identifier, from: from.identifier }, "subtask moved to the board");
+          return issueView(issue.id);
+        }
+        if (issue.parentId) throw new HttpError(400, `${issue.identifier} is already part of another task`);
+        if (closedIssue(issue)) throw new HttpError(409, `${issue.identifier} is closed`);
+        if (store.recurring(issue.id)) throw new HttpError(409, `${issue.identifier} repeats: stop it first`);
+        const target = await pc.issue(parent);
+        if (target.id === issue.id) throw new HttpError(400, "a task can't be its own subtask");
+        await subtaskParent(ctx, target);
+        if ((await pc.children(issue.id)).some((k) => usersOwn(k, ctx))) throw new HttpError(409, `${issue.identifier} has subtasks of its own: subtasks go one level deep`);
+        await pc.updateIssue(issue.id, { parentId: target.id });
+        store.unschedule(issue.id);
+        counts.delete(target.id);
+        log.info({ issue: issue.identifier, into: target.identifier }, "made a subtask");
         return issueView(issue.id);
       },
     },

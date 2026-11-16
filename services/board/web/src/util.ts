@@ -1,4 +1,4 @@
-import type { Assignee, Card, Executor } from "./types";
+import type { Assignee, Card, CrewState, Executor } from "./types";
 
 export function ago(iso: string, now = Date.now()): string {
   const s = Math.max(0, (now - Date.parse(iso)) / 1000);
@@ -119,3 +119,7 @@ export function snoozeOptions(today: string): { label: string; date: string }[] 
   ];
   return options.filter((o, i) => options.findIndex((x) => x.date === o.date) === i);
 }
+
+/** What needs the user most among crew states, first (the server's order in crew.ts). */
+const URGENCY: CrewState[] = ["needs", "failed", "proposed", "working", "queued", "done"];
+export const mostUrgent = (states: CrewState[]): CrewState => URGENCY.find((s) => states.includes(s)) ?? "done";

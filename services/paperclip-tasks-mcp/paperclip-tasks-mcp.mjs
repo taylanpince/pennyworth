@@ -27,6 +27,8 @@ const ADAPTER_ENGINE = { codex_local: "codex", claude_local: "claude", opencode_
 const isRole = (a) => a?.status !== "terminated" && (a?.metadata?.runnerEngine === true || /^pennyworth:engineer(-|$)/.test(a?.metadata?.setupKey ?? ""));
 const roleEngineOf = (a) => (ENGINES.includes(a?.metadata?.role?.engine) ? a.metadata.role.engine : ADAPTER_ENGINE[a?.adapterType]);
 const MAX_SUBTASKS = 40;
+// The user's own subtasks of a task (D-68): one level deep, as many as the board takes.
+const MAX_USER_SUBTASKS = 100;
 
 /** An OpenRouter model id (provider/model) for what the user named, or "" (as the runner's intake). */
 function openrouterModel(name, listed) {
@@ -110,7 +112,7 @@ async function partsOf(parentId, exceptId) {
   if (!COMPANY) return [];
   const q = new URLSearchParams({ parentId, status: `${OPEN_STATUSES},done,cancelled`, limit: "50" });
   const kids = (await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/issues?${q}`)).filter((k) => k.parentId === parentId && k.id !== exceptId);
-  return Promise.all(kids.map(async (k) => ({ identifier: k.identifier, title: k.title, status: k.status, with: k.assigneeAgentId ? (await nameOf(k.assigneeAgentId)) ?? "an agent" : "the user" })));
+  return Promise.all(kids.map(async (k) => ({ identifier: k.identifier, title: k.title, status: k.status, with: k.assigneeAgentId ? (await nameOf(k.assigneeAgentId)) ?? "an agent" : "the user", ...(k.assigneeAgentId ? {} : { subtask: true }) })));
 }
 
 const PRIORITIES = ["critical", "high", "medium", "low"];
@@ -287,7 +289,7 @@ const issueRef = (v) => {
 const TOOLS = {
   task_current: {
     description:
-      "Get the Paperclip task this run is working on (id, identifier, title, status, description). When it's your part of one of the user's tasks, `parent` is that task (identifier, title, description) for context, and `parts` are its other parts with whom each is (read any of them, or the parent, with task_comments).",
+      "Get the Paperclip task this run is working on (id, identifier, title, status, description). When it's your part of one of the user's tasks, `parent` is that task (identifier, title, description) for context, and `parts` are its other parts with whom each is, its subtasks marked `subtask` (read any of them, or the parent, with task_comments). When that task is a subtask of a bigger one, `plan` is the bigger task (identifier, title, description): read its comments too.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: false },
     run: async () => {
@@ -295,7 +297,13 @@ const TOOLS = {
       const i = await api("GET", `/api/issues/${issueRef(CURRENT_TASK)}`);
       const p = i.parentId ? await api("GET", `/api/issues/${issueRef(i.parentId)}`).catch(() => undefined) : undefined;
       const parts = p ? await partsOf(p.id, i.id).catch(() => []) : [];
-      return { task: { ...brief(i), description: i.description }, ...(p ? { parent: { identifier: p.identifier, title: p.title, description: p.description }, parts } : {}) };
+      // A part of a subtask (D-68): the task the subtask belongs to is the plan around it.
+      const plan = p?.parentId && p.assigneeUserId && !p.assigneeAgentId ? await api("GET", `/api/issues/${issueRef(p.parentId)}`).catch(() => undefined) : undefined;
+      return {
+        task: { ...brief(i), description: i.description },
+        ...(p ? { parent: { identifier: p.identifier, title: p.title, description: p.description }, parts } : {}),
+        ...(plan ? { plan: { identifier: plan.identifier, title: plan.title, description: plan.description } } : {}),
+      };
     },
   },
   task_get: {
@@ -325,7 +333,8 @@ const TOOLS = {
     },
   },
   task_list: {
-    description: "List Paperclip tasks, newest first. Defaults to open tasks (backlog, todo, in_progress, in_review, blocked). Routine run tasks are excluded.",
+    description:
+      "List Paperclip tasks, newest first. Defaults to open tasks (backlog, todo, in_progress, in_review, blocked). Routine run tasks are excluded. The user's subtasks (D-68) are left out unless include_subtasks is true; a task with some in the list carries their count as `subtasks`.",
     inputSchema: {
       type: "object",
       properties: {
@@ -333,17 +342,24 @@ const TOOLS = {
         label: { type: "string", description: "only tasks with this label name" },
         updated_since: { type: "string", description: "ISO-8601; only tasks updated after this" },
         limit: { type: "number", description: "default 100, max 200" },
+        include_subtasks: { type: "boolean", description: "also list the user's subtasks of their tasks" },
       },
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
-    run: async ({ status, label, updated_since, limit }) => {
+    run: async ({ status, label, updated_since, limit, include_subtasks }) => {
       if (!COMPANY) throw new Error("PAPERCLIP_COMPANY_ID not set");
       const q = new URLSearchParams({ status: String(status || OPEN_STATUSES), limit: String(Math.min(Number(limit) || 100, 200)), excludeRoutineExecutions: "true" });
       if (label) q.set("labelId", (await labelIds([String(label)]))[0]);
       if (updated_since) q.set("updatedSince", String(updated_since));
       const list = await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/issues?${q}`);
-      return { tasks: list.map(brief) };
+      if (include_subtasks) return { tasks: list.map(brief) };
+      // A subtask is the user's under the user's (D-68): the brief names its task, not each item.
+      const owner = await ownerUserId();
+      const subtask = (i) => Boolean(i.parentId && i.assigneeUserId && i.assigneeUserId === owner && !i.assigneeAgentId);
+      const counts = new Map();
+      for (const i of list) if (subtask(i)) counts.set(i.parentId, (counts.get(i.parentId) ?? 0) + 1);
+      return { tasks: list.filter((i) => !subtask(i)).map((i) => ({ ...brief(i), ...(counts.has(i.id) ? { subtasks: counts.get(i.id) } : {}) })) };
     },
   },
   task_create: {
@@ -432,6 +448,73 @@ const TOOLS = {
         );
       }
       return { results };
+    },
+  },
+  task_create_subtasks: {
+    description:
+      "Assistant only, and only when the user asked for it in their own comment (\"a task per item\", \"split this up\", \"track each of these\"): add subtasks to one of the user's tasks. They're the user's own todos, folded into that task on the board instead of cards of their own, and nobody works on them until the user puts an agent on one. Never make separate top-level tasks (task_create) for the items of one task. One level only: a subtask can't have subtasks. Each needs a short title and a self-contained description; an agent the user puts on it also sees the task it belongs to. From your own part of a task, they go under that task. Idempotent per parent and marker; up to 40 per call.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        parent: { type: "string", description: "the user's task, e.g. PEN-2331" },
+        subtasks: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              description: { type: "string", description: "markdown" },
+              marker: { type: "string", description: "stable key within the parent, e.g. a1" },
+            },
+            required: ["title", "description", "marker"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["parent", "subtasks"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: async ({ parent, subtasks }) => {
+      if (!COMPANY) throw new Error("PAPERCLIP_COMPANY_ID not set");
+      const me = await api("GET", "/api/agents/me");
+      if (me?.metadata?.setupKey !== "pennyworth:assistant") throw new Error("only the Assistant can add subtasks");
+      if (!Array.isArray(subtasks) || !subtasks.length) throw new Error("subtasks must be a non-empty list");
+      if (subtasks.length > 40) throw new Error("at most 40 subtasks per call");
+      let p = await api("GET", `/api/issues/${issueRef(parent)}`);
+      if (p.parentId && p.assigneeAgentId === me.id) p = await api("GET", `/api/issues/${issueRef(p.parentId)}`);
+      const owner = await ownerUserId();
+      if (!owner || p.assigneeUserId !== owner || p.assigneeAgentId) throw new Error("the parent must be one of the user's own tasks");
+      if (p.parentId) throw new Error(`${p.identifier} is a subtask itself: subtasks go one level deep, so add these to its task instead`);
+      if (!isOpen(p.status)) throw new Error(`${p.identifier} is closed`);
+      const kids = (await api("GET", `/api/companies/${encodeURIComponent(COMPANY)}/issues?${new URLSearchParams({ parentId: p.id, status: ALL_STATUSES, limit: "200" })}`)).filter((k) => k.parentId === p.id && !k.assigneeAgentId);
+      const todo = await labelIds(["todo"]).catch(() => []);
+      let room = MAX_USER_SUBTASKS - kids.length;
+      const out = [];
+      for (const s of subtasks) {
+        const key = String(s.marker ?? "").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(0, 80);
+        if (!key) throw new Error("invalid marker");
+        const m = `item:${p.identifier}:${key}`;
+        const existing = await findByMarker(m, ALL_STATUSES);
+        if (existing) {
+          out.push({ ...brief(existing), deduplicated: true });
+          continue;
+        }
+        if (room-- <= 0) throw new Error(`a task takes at most ${MAX_USER_SUBTASKS} subtasks; ${out.length} were added`);
+        const i = await api("POST", `/api/companies/${encodeURIComponent(COMPANY)}/issues`, {
+          title: String(s.title).slice(0, 200),
+          description: `${String(s.description).replace(/<!--|-->/g, "").slice(0, 60_000)}\n\n<!-- source:${m} -->`,
+          status: "todo",
+          priority: PRIORITIES.includes(p.priority) ? p.priority : "medium",
+          parentId: p.id,
+          assigneeUserId: owner,
+          labelIds: todo,
+          idempotencyKey: await idempotencyKey(m),
+          allowDuplicate: true,
+        });
+        out.push({ ...brief(i), deduplicated: Boolean(i.deduplicated) });
+      }
+      return { parent: p.identifier, subtasks: out };
     },
   },
   task_create_engineer_task: {

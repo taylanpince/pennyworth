@@ -268,6 +268,12 @@ export function App() {
   }
 
   async function markDone(card: Card) {
+    // Open subtasks (D-68): the task asks whether they close too.
+    if (card.subtasks?.open) {
+      go(`#/t/${card.identifier}`);
+      toast(`${card.identifier} has ${card.subtasks.open} open subtask${card.subtasks.open === 1 ? "" : "s"}: close it here`);
+      return;
+    }
     const cur = itemsRef.current;
     const b = bucketOf(card.id);
     if (cur && b) hold(), setItems({ ...cur, [b]: cur[b].filter((c) => c.id !== card.id) });

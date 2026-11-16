@@ -67,6 +67,10 @@ export const api = {
   recurring: (ref: string, body: { action: "set"; cadence: Cadence; time: string; repos: string[] } | { action: "pause" | "resume" | "stop" | "run_now" }) =>
     call<{ recurring: RecurringView | null }>("POST", `/api/issues/${encodeURIComponent(ref)}/recurring`, body),
   addAgent: (ref: string, agent: string, instructions: string, executor: Executor = {}) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/agents`, { agent, instructions, ...executor }),
+  addSubtask: (ref: string, title: string) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/subtasks`, { title }),
+  assignSubtasks: (ref: string, subtasks: string[], agent: string, instructions: string, executor: Executor = {}) =>
+    call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/subtasks/agents`, { subtasks, agent, instructions, ...executor }),
+  setParent: (ref: string, parent: string | null) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/parent`, { parent }),
   merge: (ref: string, into: string) => call<{ merged: string; into: string; files: number }>("POST", `/api/issues/${encodeURIComponent(ref)}/merge`, { into }),
   handOver: (ref: string, from: string, to: string) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/handover`, { from, to }),
   models: (assignee: string, engine?: Engine) => call<Models>("GET", `/api/models/${assignee}${engine ? `?engine=${engine}` : ""}`),

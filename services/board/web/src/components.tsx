@@ -159,6 +159,11 @@ export function CardView({ card, assignees, selected, overlay, closed, onOpen, o
               Carried {card.carried}d
             </span>
           ) : null}
+          {card.subtasks && (
+            <span className="tag subtasks" title={`${card.subtasks.total - card.subtasks.open} of ${card.subtasks.total} subtasks finished`}>
+              ☰ {card.subtasks.total - card.subtasks.open}/{card.subtasks.total}
+            </span>
+          )}
           {card.recurring && (
             <span className="tag when" title={card.recurring.summary}>
               ↻ {card.recurring.paused ? "Paused" : card.recurring.nextRun ? `Next ${shortDate(card.recurring.nextRun)}` : card.recurring.summary}
@@ -344,7 +349,15 @@ export function SnoozeMenu({ timezone, onPick, label }: { timezone: string; onPi
  * Merge this task into another of yours, without opening it: type to find the other task, pick it,
  * then confirm (merging cancels this one). The board does the merge in code (D-56).
  */
-export function MergeMenu({ card, targets, onPick, label }: { card: Pick<Card, "id" | "identifier">; targets: Card[]; onPick: (into: Card) => void; label?: ReactNode }) {
+/** What the task picker says: merging into another task, or becoming its subtask (D-68). */
+const PICKS = {
+  merge: { title: "Merge into another task (m)", head: "Merge {card} into…", ask: "Merge {card} into {into}?", note: "Its description and files join {into}, and {card} is cancelled.", go: "Merge" },
+  subtask: { title: "Make it a subtask of another task", head: "Make {card} a subtask of…", ask: "Make {card} a subtask of {into}?", note: "It leaves the board and opens from {into}, with its agents and chats.", go: "Make subtask" },
+};
+
+export function MergeMenu({ card, targets, onPick, label, kind = "merge" }: { card: Pick<Card, "id" | "identifier">; targets: Card[]; onPick: (into: Card) => void; label?: ReactNode; kind?: keyof typeof PICKS }) {
+  const say = (s: string, into = "") => s.replaceAll("{card}", card.identifier).replaceAll("{into}", into);
+  const words = PICKS[kind];
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [chosen, setChosen] = useState<Card | null>(null);
@@ -358,29 +371,27 @@ export function MergeMenu({ card, targets, onPick, label }: { card: Pick<Card, "
   };
   return (
     <div className={`menu-wrap${open ? " open" : ""}`}>
-      <button ref={ref} className={label ? "btn" : "icon-btn"} title="Merge into another task (m)" aria-label="Merge into" onClick={toggle}>
+      <button ref={ref} className={label ? "btn" : "icon-btn"} title={words.title} aria-label={words.head.replace("{card} ", "")} onClick={toggle}>
         {label ?? <MergeIcon />}
       </button>
       {open && (
         <Popover anchor={ref.current} onClose={() => setOpen(false)} className="merge-menu">
           {chosen ? (
             <div className="merge-confirm">
-              <p>
-                Merge <b>{card.identifier}</b> into <b>{chosen.identifier}</b>?
-              </p>
-              <p className="muted small">Its description and files join {chosen.identifier}, and {card.identifier} is cancelled.</p>
+              <p>{say(words.ask, chosen.identifier)}</p>
+              <p className="muted small">{say(words.note, chosen.identifier)}</p>
               <div className="row-end">
                 <button className="btn" onClick={() => setChosen(null)}>
                   Back
                 </button>
                 <button className="btn primary" autoFocus onClick={() => merge(chosen)}>
-                  Merge
+                  {words.go}
                 </button>
               </div>
             </div>
           ) : (
             <>
-              <div className="menu-head">Merge {card.identifier} into…</div>
+              <div className="menu-head">{say(words.head)}</div>
               <input
                 className="menu-search"
                 autoFocus
@@ -391,7 +402,7 @@ export function MergeMenu({ card, targets, onPick, label }: { card: Pick<Card, "
                   if (e.key === "ArrowDown" || e.key === "ArrowUp") e.preventDefault(), setHi((h) => Math.max(0, Math.min(found.length - 1, h + (e.key === "ArrowDown" ? 1 : -1))));
                   if (e.key === "Enter" && found[hi]) e.preventDefault(), setChosen(found[hi]!);
                 }}
-                aria-label="Task to merge into"
+                aria-label={kind === "merge" ? "Task to merge into" : "Task to put it under"}
               />
               <div className="merge-list">
                 {found.map((c, i) => (

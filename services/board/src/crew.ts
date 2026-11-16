@@ -33,22 +33,39 @@ export interface CrewInput {
 }
 
 const crewAgent = (i: Issue, list: Assignee[]) => list.find((a) => a.kind !== "me" && a.key === i.assigneeAgentId);
+const usersOwn = (i: Issue) => Boolean(i.assigneeUserId) && !i.assigneeAgentId;
+const isClosed = (i: Issue) => i.status === "done" || i.status === "cancelled";
+
+/** A subtask (D-68): one of the user's tasks under another of theirs that has no parent itself (one level only). */
+export const isSubtask = (i: Issue, parent: Issue | undefined): boolean => Boolean(parent && i.parentId === parent.id && usersOwn(i) && usersOwn(parent) && !parent.parentId);
 
 /**
- * The issues folded into another card: open or closed children of a task the board shows, assigned to a
- * crew agent, keyed to the top-most shown ancestor. Anything else (children assigned to the user, or
+ * The issues folded into another card. Subtasks fold into their task while it's open (a closed one stays
+ * with it, out of Done); an open subtask of a closed task is a card again. Crew parts fold into the
+ * top-most card above them, so a subtask's agents also show on its task's card. Anything else (children
  * whose parent isn't shown, e.g. closed long ago) stays a card of its own.
  */
 export function foldedChildren(issues: Issue[], assignees: Assignee[]): Map<string, string> {
   const byId = new Map(issues.map((i) => [i.id, i]));
   const out = new Map<string, string>();
   for (const i of issues) {
+    const parent = i.parentId ? byId.get(i.parentId) : undefined;
+    if (parent && isSubtask(i, parent) && (!isClosed(parent) || isClosed(i))) out.set(i.id, parent.id);
+  }
+  for (const i of issues) {
     if (!i.parentId || !crewAgent(i, assignees)) continue;
     let top = byId.get(i.parentId);
-    for (let n = 0; top?.parentId && byId.has(top.parentId) && n < 10; n++) top = byId.get(top.parentId);
+    // Climb through other parts and folded subtasks; a card of the user's own is where a part lands.
+    for (let n = 0; top?.parentId && byId.has(top.parentId) && (crewAgent(top, assignees) || out.has(top.id)) && n < 10; n++) top = byId.get(top.parentId);
     if (top && top.id !== i.id) out.set(i.id, top.id);
   }
   return out;
+}
+
+/** How far a task's subtasks have got: open ones, and all of them. */
+export function subtaskCount(task: Issue, kids: Issue[]): { open: number; total: number } | undefined {
+  const subs = kids.filter((k) => isSubtask(k, task) && k.status !== "cancelled");
+  return subs.length ? { open: subs.filter((k) => !isClosed(k)).length, total: subs.length } : undefined;
 }
 
 /**

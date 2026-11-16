@@ -59,6 +59,18 @@ export interface Card {
   working?: Working;
   /** The agents on the task (D-45). */
   crew?: CrewMember[];
+  /** Its subtasks (D-68): open ones, and all but the cancelled. */
+  subtasks?: { open: number; total: number };
+}
+
+/** One of a task's subtasks (D-68), with its own crew. */
+export interface SubtaskView {
+  id: string;
+  identifier: string;
+  title: string;
+  status: string;
+  unread: boolean;
+  crew: CrewMember[];
 }
 
 export type CrewState = "needs" | "failed" | "proposed" | "working" | "queued" | "done";
@@ -222,7 +234,7 @@ export interface CommentView {
   createdAt: string;
 }
 
-export interface IssueView extends Omit<Card, "scheduled" | "recurring" | "working" | "crew"> {
+export interface IssueView extends Omit<Card, "scheduled" | "recurring" | "working" | "crew" | "subtasks"> {
   working: Working | null;
   description: string;
   bucket: Bucket | null;
@@ -236,6 +248,8 @@ export interface IssueView extends Omit<Card, "scheduled" | "recurring" | "worki
   parent: TaskRef | null;
   /** The agents on this task, with each one's latest word (D-45). */
   crew: (CrewMember & { said: { text: string; at: string } | null })[];
+  /** The task's subtasks, in the order they were made (D-68). */
+  subtasks: SubtaskView[];
   /** After a reply: the agent's part a message that @-mentioned them went to, instead of this chat (D-54). */
   movedTo?: string;
 }
@@ -270,6 +284,8 @@ export interface Update {
   model?: string;
   effort?: string;
   labelIds?: string[];
+  /** Closing a task with open subtasks (D-68): close them too, or keep them open. */
+  subtasks?: "close" | "keep";
 }
 
 // ---------------------------------------------------------------- memory (D-61)

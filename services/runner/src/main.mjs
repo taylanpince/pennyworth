@@ -958,7 +958,9 @@ async function crewParent(full) {
  * An Engineer's part of the user's task (D-45): the task itself with everything said on it, and the
  * latest report of every other crew member on it (an agent's comment, or the runner's report on an
  * Engineer's part). A crew member whose chat the user wrote to this one from (an @-mention, or a message
- * passed on, D-54) comes with that whole conversation. The rest are a `pennyworth task` away.
+ * passed on, D-54) comes with that whole conversation. A part of a subtask (D-68) also gets the task the
+ * subtask belongs to: its description, its conversation and the list of its subtasks. The rest are a
+ * `pennyworth task` away.
  */
 async function crewContext(full) {
   const parent = await crewParent(full);
@@ -977,6 +979,24 @@ async function crewContext(full) {
   return {
     parent: { identifier: parent.identifier, title: parent.title, description: stripHidden(parent.description ?? "").trim(), conversation: transcript(await taskConversation(parent, agents), { budget: 30_000 }) },
     others,
+    ...(await planOf(parent, agents)),
+  };
+}
+
+/** The user's task a subtask belongs to (D-68): one level up, the user's own, with its subtasks listed. */
+async function planOf(subtask, agents) {
+  if (!subtask.parentId) return {};
+  const plan = await pc.issue(subtask.parentId).catch(() => undefined);
+  if (!plan?.assigneeUserId || plan.assigneeAgentId || plan.parentId) return {};
+  const subtasks = (await pc.children(plan.id, ALL_STATUSES)).filter((k) => k.assigneeUserId && !k.assigneeAgentId && k.status !== "cancelled");
+  return {
+    plan: {
+      identifier: plan.identifier,
+      title: plan.title,
+      description: stripHidden(plan.description ?? "").trim(),
+      subtasks: subtasks.map((k) => ({ identifier: k.identifier, title: k.title, status: k.status })),
+      conversation: transcript(await taskConversation(plan, agents), { budget: 16_000 }),
+    },
   };
 }
 

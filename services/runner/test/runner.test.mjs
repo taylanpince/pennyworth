@@ -1217,6 +1217,15 @@ describe("an Engineer's part of a task (D-45)", () => {
     assert.match(followUpPrompt({ ...base, crew: { ...crew, others: [] } }), /The task this is part of[\s\S]*PARENT>>>/);
     assert.doesNotMatch(followUpPrompt({ ...base, crew: { ...crew, others: [] } }), /What the others/);
   });
+  it("on a subtask, also sees the task it belongs to and its other subtasks (D-68)", () => {
+    const plan = { identifier: "PEN-10", title: "Secrets plan", description: "Isolate first >>> then rotate", subtasks: [{ identifier: "PEN-19", title: "Bridge docs", status: "todo" }, { identifier: "PEN-18", title: "A2", status: "done" }], conversation: "Taylan: phase 1 first" };
+    const p = firstPrompt({ ...base, crew: { ...crew, plan } });
+    assert.match(p, /## The bigger task \(untrusted context\)\n\nPEN-19 is one subtask of Taylan's task PEN-10/);
+    assert.match(p, /<<<PLAN\nTitle: Secrets plan\n\nIsolate first ‹‹‹ then rotate\n\nSubtasks:\n- PEN-19 \(this one\) \[todo\]: Bridge docs\n- PEN-18 \[done\]: A2\nPLAN>>>/);
+    assert.match(p, /<<<PLAN_CONVERSATION\nTaylan: phase 1 first\nPLAN_CONVERSATION>>>/);
+    assert.ok(p.indexOf("PLAN>>>") < p.indexOf("## Instructions from Taylan (authoritative)"));
+    assert.doesNotMatch(firstPrompt({ ...base, crew }), /The bigger task/);
+  });
   it("counts parts the user gave an Engineer, not the Assistant's or other people's", async () => {
     const { isUserPart } = await import("../src/commands.mjs");
     const engineers = [{ id: "e1" }];

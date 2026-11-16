@@ -684,6 +684,29 @@ kbd {
 .fan-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reply-to { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; }
 
+/* Subtasks (D-68): a checklist on the task's Overview, each row with its crew. */
+.subtasks { margin-bottom: 22px; }
+.subtasks-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.subtasks-head h3 { margin: 0; }
+.subtasks-empty { margin: -6px 0 16px; }
+.subtask-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.subtask-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: 13px; min-width: 0; }
+.subtask-row + .subtask-row { border-top: 1px solid var(--border); }
+.subtask-row:hover, .subtask-row.on { background: var(--surface-2); }
+.subtask-row.closed .subtask-title { color: var(--muted); text-decoration: line-through; }
+.subtask-row input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.subtask-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; text-decoration: none; }
+.subtask-title:hover { text-decoration: underline; }
+.subtask-check { flex: none; width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1.5px solid var(--border-strong); background: none; color: var(--surface); font-size: 10px; line-height: 1; cursor: pointer; }
+.subtask-check:hover:not(:disabled) { border-color: var(--accent); }
+.subtask-check.done { background: var(--accent); border-color: var(--accent); }
+.subtask-row .dot.inline { position: static; flex: none; }
+.subtask-add input { width: 100%; margin-top: 6px; padding: 7px 10px; border-radius: 9px; border: 1px dashed var(--border-strong); background: none; color: inherit; font-size: 13px; outline: none; }
+.subtask-add input:focus { border-style: solid; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.subtasks .add-agent { margin: 10px 0 0; }
+.subtasks > .row-end { margin-top: 8px; }
+.crew-banner.closing { margin: 10px 16px 0; }
+.tag.subtasks { font-variant-numeric: tabular-nums; }
 .add-agent { display: flex; flex-direction: column; gap: 10px; margin: 14px 22px 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
 .add-agent textarea, .new-task textarea { min-height: 76px; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface); outline: none; resize: vertical; }
 .add-agent textarea:focus, .new-task textarea:focus, .new-title:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }

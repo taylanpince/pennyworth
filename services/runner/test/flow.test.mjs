@@ -214,7 +214,11 @@ recurring:
       { id: "engineer-claude", name: "Engineer · Claude", status: "idle", adapterType: "claude_local", adapterConfig: {}, metadata: { setupKey: "pennyworth:engineer-claude", persona: { name: "Ada" } } },
       { id: "engineer-codex", name: "Engineer · Codex", status: "idle", adapterType: "codex_local", adapterConfig: {}, metadata: { setupKey: "pennyworth:engineer-codex", persona: { name: "Grace" } } },
     ];
-    const parent = { id: "parent", identifier: "PEN-1", title: "Drop Telos support", status: "todo", assigneeUserId: USER, createdByUserId: USER, createdByAgentId: null, labels: [], description: "Remove Telos from these repos:\n\n- acme/app\n- acme/infra\n" };
+    // The user's task is a subtask of a bigger plan (D-68): Ada sees the plan around it.
+    const plan = { id: "plan", identifier: "PEN-9", title: "Retire Telos everywhere", status: "todo", assigneeUserId: USER, createdByUserId: USER, createdByAgentId: null, labels: [], description: "Phase 1: the app and infra. Phase 2: the docs." };
+    const planChat = [{ id: "plan-1", authorType: "agent", authorAgentId: "assistant", body: "Added the subtasks: PEN-1 and PEN-8.", createdAt: new Date(Date.now() - 70_000).toISOString() }];
+    const sibling = { id: "sibling", identifier: "PEN-8", title: "Telos docs", status: "todo", parentId: "plan", assigneeUserId: USER, assigneeAgentId: null, createdByUserId: USER, createdByAgentId: null, labels: [], description: "Update the docs." };
+    const parent = { id: "parent", identifier: "PEN-1", title: "Drop Telos support", status: "todo", parentId: "plan", assigneeUserId: USER, createdByUserId: USER, createdByAgentId: null, labels: [], description: "Remove Telos from these repos:\n\n- acme/app\n- acme/infra\n" };
     const part = { id: "part", identifier: "PEN-2", title: "Drop Telos support", status: "todo", parentId: "parent", assigneeAgentId: "engineer-claude", assigneeUserId: null, createdByUserId: USER, createdByAgentId: null, labels: [], description: "Ada, go ahead and start this on dev please" };
     // PEN-3155: Alfred's report is a comment on the user's task, and the user asks Ada to take it over.
     const alfred = { id: "assistant", name: "Assistant", status: "idle", adapterType: "codex_local", adapterConfig: {}, metadata: { setupKey: "pennyworth:assistant", persona: { name: "Alfred" } } };
@@ -225,7 +229,7 @@ recurring:
       { id: "alfred-1", authorType: "user", authorUserId: USER, body: "Draft the changelog entry", createdAt: new Date(Date.now() - 50_000).toISOString() },
       { id: "alfred-2", authorType: "agent", authorAgentId: "assistant", body: "Draft: Telos support is removed from the app and the alerts.", createdAt: new Date(Date.now() - 40_000).toISOString() },
     ];
-    paperclip = fakePaperclip({ parent, part, engineers: [...engineers, alfred], parentComments, others: [{ issue: alfredPart, comments: alfredChat }] });
+    paperclip = fakePaperclip({ parent, part, engineers: [...engineers, alfred], parentComments, others: [{ issue: alfredPart, comments: alfredChat }, { issue: plan, comments: planChat }, { issue: sibling, comments: [] }] });
     await new Promise((r) => paperclip.server.listen(0, "127.0.0.1", r));
     const url = `http://127.0.0.1:${paperclip.server.address().port}`;
 
@@ -266,6 +270,8 @@ recurring:
     assert.match(prompt, /acme\/app[\s\S]*acme\/infra|acme\/infra[\s\S]*acme\/app/);
     assert.match(prompt, /The task this is part of[\s\S]*Drop Telos support/);
     assert.match(prompt, /<<<PARENT_CONVERSATION\n### Alfred · [^\n]*\n\n## Telos usage — preliminary\n\nTelos is still read by the infra alerts\./, "Alfred's report on the user's task");
+    assert.match(prompt, /## The bigger task \(untrusted context\)\n\nPEN-1 is one subtask of Taylan's task PEN-9[\s\S]*<<<PLAN\nTitle: Retire Telos everywhere\n\nPhase 1: the app and infra\. Phase 2: the docs\.\n\nSubtasks:\n(- PEN-1 \(this one\) \[todo\]: Drop Telos support\n- PEN-8 \[todo\]: Telos docs|- PEN-8 \[todo\]: Telos docs\n- PEN-1 \(this one\) \[todo\]: Drop Telos support)\nPLAN>>>/, "the plan the user's task belongs to (D-68)");
+    assert.match(prompt, /<<<PLAN_CONVERSATION\n### Alfred · [^\n]*\n\nAdded the subtasks: PEN-1 and PEN-8\./);
     assert.match(prompt, /`pennyworth task PEN-N` prints one in full/);
     assert.match(prompt, /## Instructions from Taylan \(authoritative\)[\s\S]*Ada, go ahead and start this on dev please/);
     assert.match(prompt, /The crew, by name:\n  - Charles\n  - Grace\n  - Alfred\n/);

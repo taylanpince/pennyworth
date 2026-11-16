@@ -212,8 +212,9 @@ agents:
       # Read scopes only: Cloudflare refuses every change (D-64).
       cloudflare: [search, execute, docs, whoami]
       # task_create_engineer_task: Engineer sub-tasks that wait for the user's go-ahead (D-24).
+      # task_create_subtasks: the user's own subtasks of one of their tasks, folded into it on the board (D-68).
       # task_schedule, task_recurring: board moves on a date and recurring tasks (D-25). task_merge: merging tasks (D-56).
-      paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status, task_create_engineer_task, task_schedule, task_recurring, task_pass_on, task_merge, memory_recall, memory_search, memory_remember, memory_propose]
+      paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status, task_create_engineer_task, task_create_subtasks, task_schedule, task_recurring, task_pass_on, task_merge, memory_recall, memory_search, memory_remember, memory_propose]
 
   # The writer (D-60): drafts in the user's voice, Slack drafts, Primer documents and agendas. A woken
   # Codex agent like the Assistant, with the Assistant's reading tools and only its writing ones.

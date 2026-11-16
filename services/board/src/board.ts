@@ -1,7 +1,7 @@
 // Board logic: which tasks show where, who they're assigned to, and how edits map onto Paperclip.
 // Pure functions (unit-tested); I/O is in app.ts.
 import { z } from "zod";
-import { crewOf, foldedChildren, type CrewInput, type CrewMember } from "./crew.js";
+import { crewOf, foldedChildren, subtaskCount, type CrewInput, type CrewMember } from "./crew.js";
 import type { Agent, Comment, Issue, Label } from "./paperclip.js";
 import { BUCKETS, type Bucket, type Placement } from "./store.js";
 
@@ -171,8 +171,10 @@ export interface Card {
   recurring?: { summary: string; nextRun: string | null; paused: boolean };
   /** An agent is working on it now, or the runner has it queued. */
   working?: { agent: string; since: string | null; queued: boolean };
-  /** The agents on the task (D-45): its own agent, and those working in its sub-tasks. */
+  /** The agents on the task (D-45): its own agent, and those working in its sub-tasks and its subtasks' parts. */
   crew?: CrewMember[];
+  /** Its subtasks (D-68): open ones, and all but the cancelled. */
+  subtasks?: { open: number; total: number };
 }
 
 export function toCard(issue: Issue, list: Assignee[], seenAt: string): Card {
@@ -205,6 +207,8 @@ export interface BoardInput {
   assignees: Assignee[];
   /** Activity and runner results for the crew on each card (D-45); without it, cards have no crew. */
   crew?: Omit<CrewInput, "assignees" | "seen">;
+  /** Subtask counts read from Paperclip (D-68), for tasks whose closed subtasks are older than the board's lists. */
+  subtasks?: Map<string, { open: number; total: number }>;
 }
 
 export interface Board {
@@ -223,7 +227,7 @@ export function buildBoard(input: BoardInput): Board {
   const unique = new Map(input.open.map((i) => [i.id, i]));
   const briefs = [...unique.values()].filter(isBrief).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const recurring: Card[] = [];
-  // Agents' sub-tasks fold into the card they work on (D-45).
+  // Agents' sub-tasks fold into the card they work on (D-45), and subtasks into their task (D-68).
   const all = [...new Map([...input.closed, ...input.open].map((i) => [i.id, i])).values()];
   const folded = foldedChildren(all, input.assignees);
   const children = new Map<string, Issue[]>();
@@ -232,6 +236,8 @@ export function buildBoard(input: BoardInput): Board {
   const withCrew = (card: Card, issue: Issue) => {
     const crew = crewInput ? crewOf(issue, children.get(issue.id) ?? [], crewInput) : [];
     if (crew.length) card.crew = crew;
+    const subtasks = input.subtasks?.get(issue.id) ?? subtaskCount(issue, children.get(issue.id) ?? []);
+    if (subtasks) card.subtasks = subtasks;
     return card;
   };
   for (const issue of unique.values()) {
@@ -320,6 +326,8 @@ export const UpdateSchema = z
     model: z.string().trim().max(120).regex(/^[A-Za-z0-9._:/\[\]-]*$/),
     effort: z.string().max(10),
     labelIds: z.array(id).max(20),
+    /** Closing a task with open subtasks (D-68): close them too, or leave them open as cards. */
+    subtasks: z.enum(["close", "keep"]),
   })
   .partial()
   .strict();
@@ -386,6 +394,15 @@ export const AddAgentSchema = z
     effort: z.string().trim().max(20).optional(),
   })
   .strict();
+
+/** A subtask of one of your tasks (D-68). */
+export const SubtaskSchema = z.object({ title: z.string().trim().min(1).max(300), description: z.string().max(60_000).default("") }).strict();
+/** The same agent and instructions on several subtasks at once (D-68): a part on each. */
+export const AssignSubtasksSchema = AddAgentSchema.extend({ subtasks: z.array(id).min(1).max(100) }).strict();
+/** Make a task a subtask of another, or move a subtask back to the board (`null`) (D-68). */
+export const ParentSchema = z.object({ parent: z.union([z.string().regex(/^(?:[0-9a-f-]{36}|[A-Z][A-Z0-9]{1,9}-\d{1,7})$/), z.null()]) }).strict();
+/** The most subtasks one task takes. */
+export const MAX_SUBTASKS = 100;
 
 /** Give a stuck agent's part of a task to another agent (D-45). */
 export const HandOverSchema = z.object({ from: z.string().min(1).max(64), to: z.string().min(1).max(64) }).strict();

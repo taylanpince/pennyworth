@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assignees, buildBoard } from "../src/board.js";
-import { crewOf, foldedChildren, handOverText, issueState, mostUrgent, partsToClose, summaryOf, type CrewInput } from "../src/crew.js";
+import { crewOf, foldedChildren, handOverText, isSubtask, issueState, mostUrgent, partsToClose, subtaskCount, summaryOf, type CrewInput } from "../src/crew.js";
 import type { Agent, Issue } from "../src/paperclip.js";
 
 const ME = "user-1";
@@ -26,15 +26,14 @@ describe("folding sub-tasks into their card (D-45)", () => {
   const mine = issue({ parentId: parent.id, assigneeUserId: ME });
   const orphan = issue({ parentId: "i-gone", assigneeAgentId: "a-grace" });
 
-  it("folds agents' sub-tasks into the top-most task the board shows, and nothing else", () => {
+  it("folds agents' sub-tasks into the top-most task the board shows, and the user's subtasks into their task", () => {
     const f = foldedChildren([parent, grace, deeper, mine, orphan], list);
-    expect([...f]).toEqual([[grace.id, parent.id], [deeper.id, parent.id]]);
+    expect([...f]).toEqual([[mine.id, parent.id], [grace.id, parent.id], [deeper.id, parent.id]]);
   });
 
   it("shows one card with its crew, the sub-tasks gone from the columns", () => {
     const board = buildBoard({ open: [parent, grace, deeper, mine, orphan], closed: [], placements: new Map(), seen: new Map(), installedAt: SEEN, assignees: list, crew: { working: new Map([[grace.identifier, { since: "2026-10-26T11:30:00Z", queued: false }]]), jobs: new Map() } });
-    expect(board.buckets.triage.map((c) => c.identifier)).toEqual(expect.arrayContaining([parent.identifier, mine.identifier, orphan.identifier]));
-    expect(board.buckets.triage.map((c) => c.identifier)).not.toContain(grace.identifier);
+    expect(board.buckets.triage.map((c) => c.identifier).sort()).toEqual([parent.identifier, orphan.identifier].sort());
     const card = board.buckets.triage.find((c) => c.id === parent.id)!;
     expect(card.crew!.map((m) => [m.agent, m.state])).toEqual([["a-grace", "working"], ["a-ada", "queued"]]);
     expect(card.crew![0]!.since).toBe("2026-10-26T11:30:00Z");
@@ -45,6 +44,51 @@ describe("folding sub-tasks into their card (D-45)", () => {
     const board = buildBoard({ open: [parent], closed: [done], placements: new Map(), seen: new Map(), installedAt: SEEN, assignees: list, crew: { working: new Map(), jobs: new Map() } });
     expect(board.done).toEqual([]);
     expect(board.buckets.triage[0]!.crew).toEqual([{ agent: "a-ada", state: "done", issues: [{ id: done.id, identifier: done.identifier, title: "t", state: "done" }] }]);
+  });
+});
+
+describe("subtasks (D-68)", () => {
+  const task = issue({ assigneeUserId: ME });
+  const a1 = issue({ parentId: task.id, assigneeUserId: ME });
+  const a2 = issue({ parentId: task.id, assigneeUserId: ME, status: "done" });
+  const a3 = issue({ parentId: task.id, assigneeUserId: ME, status: "cancelled" });
+  const ada = issue({ parentId: a1.id, assigneeAgentId: "a-ada" });
+  const alfred = issue({ parentId: task.id, assigneeAgentId: "a-alfred" });
+  const crew = { working: new Map(), jobs: new Map() };
+
+  it("are one level deep: a child of a subtask, or of an agent's part, isn't one", () => {
+    expect(isSubtask(a1, task)).toBe(true);
+    expect(isSubtask(issue({ parentId: a1.id, assigneeUserId: ME }), a1)).toBe(false);
+    expect(isSubtask(issue({ parentId: alfred.id, assigneeUserId: ME }), alfred)).toBe(false);
+    expect(isSubtask(ada, a1)).toBe(false);
+  });
+
+  it("fold into their task with their crew's parts, which also show on the task's card", () => {
+    const board = buildBoard({ open: [task, a1, ada, alfred], closed: [a2, a3], placements: new Map(), seen: new Map(), installedAt: SEEN, assignees: list, crew });
+    expect(board.buckets.triage.map((c) => c.identifier)).toEqual([task.identifier]);
+    expect(board.done).toEqual([]);
+    const card = board.buckets.triage[0]!;
+    expect(card.subtasks).toEqual({ open: 1, total: 2 });
+    expect(card.crew!.map((m) => m.agent)).toEqual(["a-alfred", "a-ada"]);
+    expect(foldedChildren([task, a1, ada], list).get(ada.id)).toBe(task.id);
+  });
+
+  it("take Paperclip's count over the board's 48-hour lists", () => {
+    const board = buildBoard({ open: [task, a1], closed: [], placements: new Map(), seen: new Map(), installedAt: SEEN, assignees: list, crew, subtasks: new Map([[task.id, { open: 1, total: 9 }]]) });
+    expect(board.buckets.triage[0]!.subtasks).toEqual({ open: 1, total: 9 });
+  });
+
+  it("left open on a closed task are cards again, their parts with them", () => {
+    const shut = { ...task, status: "done", completedAt: "2026-10-26T12:00:00Z" };
+    const board = buildBoard({ open: [a1, ada], closed: [shut, a2], placements: new Map(), seen: new Map(), installedAt: SEEN, assignees: list, crew });
+    expect(board.buckets.triage.map((c) => c.identifier)).toEqual([a1.identifier]);
+    expect(board.buckets.triage[0]!.crew!.map((m) => m.agent)).toEqual(["a-ada"]);
+    expect(board.done.map((c) => c.identifier)).toEqual([task.identifier]);
+  });
+
+  it("count without the cancelled", () => {
+    expect(subtaskCount(task, [a1, a2, a3, alfred])).toEqual({ open: 1, total: 2 });
+    expect(subtaskCount(task, [alfred])).toBeUndefined();
   });
 });
 
