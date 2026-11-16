@@ -107,7 +107,7 @@ export function SettingsPage({ canConnect }: { canConnect: boolean }) {
             {list
               .filter((c) => c.group === "board")
               .map((c) => (
-                <ConnectionCard key={c.id} c={c} canConnect={canConnect} onChange={() => void load()} />
+                <ConnectionCard key={c.id} c={c} canConnect={canConnect} bannerHidden={Boolean(data.hiddenBanners?.[c.id])} onChange={() => void load()} />
               ))}
           </div>
           <h2 className="conn-group">Signed in on this laptop</h2>
@@ -119,7 +119,7 @@ export function SettingsPage({ canConnect }: { canConnect: boolean }) {
             {list
               .filter((c) => c.group === "laptop")
               .map((c) => (
-                <ConnectionCard key={c.id} c={c} canConnect={canConnect} onChange={() => void load()} />
+                <ConnectionCard key={c.id} c={c} canConnect={canConnect} bannerHidden={Boolean(data.hiddenBanners?.[c.id])} onChange={() => void load()} />
               ))}
           </div>
         </>
@@ -130,7 +130,7 @@ export function SettingsPage({ canConnect }: { canConnect: boolean }) {
 
 const laptopCheckedAt = (d: Connections) => d.connections.find((c) => c.group === "laptop" && c.checkedAt)?.checkedAt;
 
-function ConnectionCard({ c, canConnect, onChange }: { c: Connection; canConnect: boolean; onChange: () => void }) {
+function ConnectionCard({ c, canConnect, bannerHidden, onChange }: { c: Connection; canConnect: boolean; bannerHidden: boolean; onChange: () => void }) {
   const [open, setOpen] = useState(false);
   const a = c.action;
   const verb = c.state === "ok" || c.state === "attention" ? "Reconnect" : "Connect";
@@ -175,6 +175,14 @@ function ConnectionCard({ c, canConnect, onChange }: { c: Connection; canConnect
                 </li>
               ))}
             </ul>
+          )}
+          {bannerHidden && c.state !== "ok" && (
+            <p className="conn-note">
+              Its banner on the board is hidden until this changes.{" "}
+              <button className="link-btn" onClick={() => void api.showBanner(c.id).then(onChange, () => undefined)}>
+                Show it again
+              </button>
+            </p>
           )}
           {c.detail && c.state !== "ok" && <p className={`conn-detail${c.state === "unset" || c.state === "off" || c.state === "unknown" ? " muted" : ""}`}>{c.detail}</p>}
           <p className="conn-purpose">

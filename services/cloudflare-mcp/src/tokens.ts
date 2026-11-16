@@ -117,7 +117,9 @@ export class TokenStore {
       next = parseTokenResponse(json);
     } catch (err) {
       // A refusal (invalid_grant and the like) needs the user; a 5xx is Cloudflare's problem and may pass.
-      if (res.status < 500) this.mark("expired", String((err as Error).message));
+      // OAuth's own "try again later" (Cloudflare answered temporarily_unavailable on 2026-11-16) isn't a refusal either.
+      const transient = res.status >= 500 || /^(temporarily_unavailable|server_error|slow_down)$/.test(String(json.error ?? ""));
+      if (!transient) this.mark("expired", String((err as Error).message));
       throw err;
     }
     this.save({ ...t, ...next, refresh_token: next.refresh_token ?? t.refresh_token });

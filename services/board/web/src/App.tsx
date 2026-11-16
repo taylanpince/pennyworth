@@ -23,7 +23,7 @@ import { CrewView } from "./Agents";
 import { MemoryView, useMemoryPending } from "./Memory";
 import { StatsView } from "./Stats";
 import { PairRequired, api, type Session } from "./api";
-import { BackupBanner, CardView, ClickHouseBanner, CloudflareBanner, ExecutorPicker, GleanBanner, GoogleBanner, GrafanaBanner, PhoneIcon, PlusIcon, SortableCard, TelegramBanner, memberIssue } from "./components";
+import { BackupBanner, CardView, ClickHouseBanner, CloudflareBanner, ExecutorPicker, GleanBanner, GoogleBanner, GrafanaBanner, Hideable, PhoneIcon, bannerSince, PlusIcon, SortableCard, TelegramBanner, googleBannerKey, memberIssue } from "./components";
 import { CrewPicker, Drawer } from "./Drawer";
 import { Markdown, setSlackTeams } from "./markdown";
 import { PairScreen, PhonePanel } from "./Pairing";
@@ -176,6 +176,15 @@ export function App() {
       else setError((e as Error).message);
     }
   }, []);
+
+  // Hide a connection banner while its state lasts (D-67); Settings brings it back.
+  const hideBanner = useCallback((id: string, since: string) => {
+    setBoard((b) => (b ? { ...b, hiddenBanners: { ...(b.hiddenBanners ?? {}), [id]: since } } : b));
+    api.hideBanner(id, since).then(
+      () => toast("Hidden until it changes. Settings still shows it."),
+      (e) => (toast(`Couldn't hide it: ${(e as Error).message}`), void refresh()),
+    );
+  }, [toast, refresh]);
 
   useEffect(() => {
     api.session().then(setSession, () => {});
@@ -579,12 +588,24 @@ export function App() {
       {route.kind === "settings" && <SettingsPage canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />}
       {error && <div className="offline">Offline: {error}. Retrying…</div>}
       {route.kind !== "settings" && <>
-      <GoogleBanner google={board.google} canReconnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
-      <TelegramBanner telegram={board.telegram} canSignIn={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
-      <GleanBanner glean={board.glean} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
-      <GrafanaBanner grafana={board.grafana} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
-      <ClickHouseBanner clickhouse={board.clickhouse} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
-      <CloudflareBanner cloudflare={board.cloudflare} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
+      <Hideable id="google" since={googleBannerKey(board.google)} hidden={board.hiddenBanners} onHide={hideBanner}>
+        <GoogleBanner google={board.google} canReconnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
+      </Hideable>
+      <Hideable id="telegram" since={bannerSince(board.telegram, ["missing", "ended"])} hidden={board.hiddenBanners} onHide={hideBanner}>
+        <TelegramBanner telegram={board.telegram} canSignIn={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
+      </Hideable>
+      <Hideable id="glean" since={bannerSince(board.glean, ["missing", "expired"])} hidden={board.hiddenBanners} onHide={hideBanner}>
+        <GleanBanner glean={board.glean} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
+      </Hideable>
+      <Hideable id="grafana" since={bannerSince(board.grafana, ["missing", "expired"])} hidden={board.hiddenBanners} onHide={hideBanner}>
+        <GrafanaBanner grafana={board.grafana} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
+      </Hideable>
+      <Hideable id="clickhouse" since={bannerSince(board.clickhouse, ["missing", "expired"])} hidden={board.hiddenBanners} onHide={hideBanner}>
+        <ClickHouseBanner clickhouse={board.clickhouse} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
+      </Hideable>
+      <Hideable id="cloudflare" since={bannerSince(board.cloudflare, ["missing", "expired"])} hidden={board.hiddenBanners} onHide={hideBanner}>
+        <CloudflareBanner cloudflare={board.cloudflare} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
+      </Hideable>
       <BackupBanner backup={board.backup} />
 
       {mobile && <div className="sections-row">{sections}</div>}

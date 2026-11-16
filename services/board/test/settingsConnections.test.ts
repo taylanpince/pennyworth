@@ -130,3 +130,19 @@ describe("Settings: before the runner's first check", () => {
     expect(v.slack!.detail).toBeUndefined();
   });
 });
+
+describe("hidden connection banners (D-67)", () => {
+  it("stay hidden for the state they were hidden in, and come back when asked", () => {
+    const store = new Store(":memory:");
+    try {
+      expect(store.hiddenBanners()).toEqual({});
+      store.hideBanner("cloudflare", "2026-11-16T12:54:25.666Z");
+      store.hideBanner("grafana", "2026-11-16T09:00:00.000Z");
+      expect(store.hiddenBanners()).toEqual({ cloudflare: "2026-11-16T12:54:25.666Z", grafana: "2026-11-16T09:00:00.000Z" });
+      store.hideBanner("cloudflare", null);
+      expect(store.hiddenBanners()).toEqual({ grafana: "2026-11-16T09:00:00.000Z" });
+    } finally {
+      store.close();
+    }
+  });
+});

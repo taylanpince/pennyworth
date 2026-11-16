@@ -123,6 +123,25 @@ export class Store {
     this.db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
   }
 
+  /**
+   * Connection banners the user hid (Settings, D-67): the service and the moment its state began
+   * (`since`). A banner stays hidden only while that same state lasts.
+   */
+  hiddenBanners(): Record<string, string> {
+    try {
+      return JSON.parse(this.meta("hidden_banners") ?? "{}") as Record<string, string>;
+    } catch {
+      return {};
+    }
+  }
+
+  hideBanner(id: string, since: string | null): void {
+    const all = this.hiddenBanners();
+    if (since === null) delete all[id];
+    else all[id] = since;
+    this.setMeta("hidden_banners", JSON.stringify(all));
+  }
+
   placements(): Map<string, Placement> {
     const rows = this.db.prepare("SELECT issue_id, bucket, rank, carried FROM placements").all() as { issue_id: string; bucket: string; rank: number; carried: number }[];
     return new Map(rows.filter((r) => isBucket(r.bucket)).map((r) => [r.issue_id, { bucket: r.bucket as Bucket, rank: r.rank, carried: r.carried }]));

@@ -454,6 +454,31 @@ export const PlusIcon = () => (
  * Google accounts whose sign-in Google refused (D-36): what's paused, and a way back. Reconnecting
  * works only on the laptop's loopback address, where Google can send the sign-in back.
  */
+/**
+ * A connection banner you can hide (D-67): hidden while the state it reports lasts (`since`), back
+ * when that changes. Settings still shows the connection and can bring the banner back.
+ */
+export function Hideable({ id, since, hidden, onHide, children }: { id: string; since: string | undefined; hidden: Record<string, string> | undefined; onHide: (id: string, since: string) => void; children: React.ReactNode }) {
+  if (since && hidden?.[id] === since) return null;
+  return (
+    <div className="banner-wrap">
+      {children}
+      {since && (
+        <button className="btn banner-hide" title="Hide this until it changes. Settings still shows it." onClick={() => onHide(id, since)}>
+          Hide
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The `since` of a sign-in whose banner is showing (one of `states`), else nothing: no banner, no Hide. */
+export const bannerSince = (s: { configured?: boolean; state: string; since: string } | null | undefined, states: string[]) => (s?.configured && states.includes(s.state) ? s.since : undefined);
+
+/** What a Google banner is about, for hiding it: the accounts that stopped working and since when. */
+export const googleBannerKey = (google: Board["google"]) =>
+  google ? [...google.accounts.filter((a) => a.state === "expired").map((a) => `${a.email}@${a.since}`), ...(google.error && !google.accounts.length ? ["not-connected"] : [])].join(",") || undefined : undefined;
+
 export function GoogleBanner({ google, canReconnect }: { google: Board["google"]; canReconnect: boolean }) {
   if (!google) return null;
   const expired = google.accounts.filter((a) => a.state === "expired");

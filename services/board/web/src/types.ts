@@ -175,6 +175,8 @@ export interface Board {
   cloudflare: SignInStatus | null;
   /** The off-machine backup of tasks and board (D-58); null when the board can't tell. */
   backup: BackupStatus | null;
+  /** Connection banners hidden while a state lasts: service → the `since` it was hidden at (D-67). */
+  hiddenBanners?: Record<string, string>;
 }
 
 export interface BackupStatus {
@@ -452,6 +454,7 @@ export interface Connection {
 }
 export interface Connections {
   connections: Connection[];
+  hiddenBanners?: Record<string, string>;
   /** Settings asked the runner for a fresh check of the laptop's sign-ins, and it hasn't answered yet. */
   checking: boolean;
   /** When the runner last reported in (null: not since the board started). */

@@ -103,3 +103,19 @@ describe("sign-in", () => {
     expect(existsSync(join(dir, "client.json"))).toBe(false);
   });
 });
+
+describe("token refresh", () => {
+  it("treats OAuth's try-again-later answers as a passing failure, not a lost sign-in", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const dir = tmp();
+    const path = join(dir, "token.json");
+    writeFileSync(path, JSON.stringify({ access_token: "old", refresh_token: "rt", expires_at: 1, client_id: "c", token_endpoint: "https://mcp.cloudflare.com/token" }));
+    let answer: { status: number; body: Record<string, unknown> } = { status: 400, body: { error: "temporarily_unavailable" } };
+    const store = new TokenStore(path, (async () => Response.json(answer.body, { status: answer.status })) as unknown as typeof fetch);
+    await expect(store.refresh()).rejects.toThrow(/temporarily_unavailable/);
+    expect(store.status().state).not.toBe("expired");
+    answer = { status: 400, body: { error: "invalid_grant" } };
+    await expect(store.refresh()).rejects.toThrow(/invalid_grant/);
+    expect(store.status().state).toBe("expired");
+  });
+});

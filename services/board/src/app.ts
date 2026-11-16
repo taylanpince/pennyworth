@@ -592,6 +592,7 @@ export function createApp(opts: AppOptions): Server {
     // After a board restart there's no report from the laptop yet: ask for one (the runner answers within 30 seconds).
     if (!shared.host) shared.checkHost = true;
     return {
+      hiddenBanners: store.hiddenBanners(),
       connections: connectionsView({ google, googleEnabled: Boolean(opts.google), telegram, telegramEnabled: Boolean(opts.telegram), slack, slackEnabled: Boolean(opts.slackAuth), whatsapp, whatsappEnabled: Boolean(opts.whatsapp), proxies, host: shared.host }),
       checking: Boolean(shared.checkHost),
       runnerSeenAt: shared.runner?.at ?? null,
@@ -629,6 +630,15 @@ export function createApp(opts: AppOptions): Server {
     {
       method: "POST", path: new RegExp(`^/api/connections/signin/(${SIGNIN_PROVIDERS.join("|")})/cancel$`),
       handle: async (m) => ({ session: signins.cancel(m[1] as SignInProvider) ?? null }),
+    },
+    {
+      // Hide a connection's banner while its state lasts, or show it again (D-67).
+      method: "POST", path: /^\/api\/banners\/(google|telegram|glean|grafana|clickhouse|cloudflare|primer)\/(hide|show)$/,
+      handle: async (m, body) => {
+        if (m[2] === "show") store.hideBanner(m[1]!, null);
+        else store.hideBanner(m[1]!, parse(z.object({ since: z.string().min(1).max(4000) }).strict(), body).since);
+        return { hiddenBanners: store.hiddenBanners() };
+      },
     },
     {
       method: "POST", path: /^\/api\/connections\/check$/,
@@ -722,7 +732,7 @@ export function createApp(opts: AppOptions): Server {
         // When Tomorrow next rolls into Today: the next calendar day, except before days off.
         const today = localDate(opts.timezone);
         const rollsOn = nextWorkday(today, opts.workdays ?? WORKWEEK);
-        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, slackTeams: opts.slackTeams ?? {}, rollsOn, rollsTomorrow: rollsOn === addDays(today, 1), buckets: board.buckets, agentsActive: busy.active, google: google ?? null, telegram: telegram ?? null, glean: glean ?? null, grafana: grafana ?? null, clickhouse: clickhouse ?? null, cloudflare: cloudflare ?? null, backup: opts.backupStatus ? readBackup(opts.backupStatus) : null };
+        return { ...board, assignees: ctx.assignees, labels: ctx.labels, prefix: ctx.prefix, timezone: opts.timezone, slackTeams: opts.slackTeams ?? {}, rollsOn, rollsTomorrow: rollsOn === addDays(today, 1), buckets: board.buckets, agentsActive: busy.active, google: google ?? null, telegram: telegram ?? null, glean: glean ?? null, grafana: grafana ?? null, clickhouse: clickhouse ?? null, cloudflare: cloudflare ?? null, hiddenBanners: store.hiddenBanners(), backup: opts.backupStatus ? readBackup(opts.backupStatus) : null };
       },
     },
     { method: "GET", path: /^\/api\/issues\/([^/]+)$/, handle: async (m) => issueView(decodeURIComponent(m[1]!)) },

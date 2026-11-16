@@ -71,6 +71,8 @@ export const api = {
   handOver: (ref: string, from: string, to: string) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/handover`, { from, to }),
   models: (assignee: string, engine?: Engine) => call<Models>("GET", `/api/models/${assignee}${engine ? `?engine=${engine}` : ""}`),
   connections: () => call<Connections>("GET", "/api/connections"),
+  hideBanner: (id: string, since: string) => call<{ hiddenBanners: Record<string, string> }>("POST", `/api/banners/${id}/hide`, { since }),
+  showBanner: (id: string) => call<{ hiddenBanners: Record<string, string> }>("POST", `/api/banners/${id}/show`, {}),
   checkConnections: () => call<Connections>("POST", "/api/connections/check", {}),
   signIn: (provider: string) => call<{ session: SignInSession | null; runnerOnline: boolean }>("GET", `/api/connections/signin/${provider}`),
   startSignIn: (provider: string) => call<{ session: SignInSession }>("POST", `/api/connections/signin/${provider}`, {}),
