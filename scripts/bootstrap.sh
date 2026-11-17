@@ -116,7 +116,7 @@ IFS=',' read -r -a bases <<< "${KNOWLEDGE_BASES:-}"
   done
   # Reference docs for the Assistant, read-only (name=path; see .env.example).
   n=0
-  for raw in "${bases[@]}"; do
+  for raw in ${bases[@]+"${bases[@]}"}; do
     [ -n "$raw" ] || continue
     name="${raw%%=*}"; path="${raw#*=}"
     echo "$name" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' && [ "$name" != "$raw" ] || die "invalid KNOWLEDGE_BASES entry: $raw (expected name=/path)"
