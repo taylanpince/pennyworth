@@ -104,6 +104,7 @@ export function loadConfig() {
     },
     workDir: expand(cfg.work_dir ?? "~/pennyworth"),
     stateDir: expand(cfg.state_dir ?? "~/.local/state/pennyworth-runner"),
+    codexHome: expand(cfg.engines?.codex?.config_dir ?? join(cfg.state_dir ?? "~/.local/state/pennyworth-runner", "codex")),
     devshells: { ...cfg.devshells, flake: expand(cfg.devshells.flake) },
     ghWrapperDir: join(REPO_ROOT, "services/runner/bin"),
   };

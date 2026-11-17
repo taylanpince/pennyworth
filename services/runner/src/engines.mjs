@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -12,7 +12,7 @@ const expand = (p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
 function permissionProfile(cfg, worktree, stateRoots, network, native = false) {
   const filesystem = { ":root": "read", ":slash_tmp": "write", ":tmpdir": "write" };
   const roots = [worktree, ...stateRoots, ...(cfg.sandbox?.extra_writable_roots ?? []).map(expand)];
-  const hidden = [...(cfg.gcp?.hidden ?? []), ...(cfg.aws?.hidden ?? [])];
+  const hidden = [...(cfg.gcp?.hidden ?? []), ...(cfg.aws?.hidden ?? []), ...(cfg.sandbox?.hide ?? []).map(expand)];
   for (const root of roots) {
     if (hidden.some((d) => root === d || root.startsWith(`${d}/`))) throw new Error("A sandbox writable root overlaps a hidden credential directory");
     filesystem[root] = "write";
@@ -139,7 +139,7 @@ export function privateReads(cfg) {
  */
 function hiding(cfg, argv) {
   if (cfg.sandbox?.credential_isolation === "permissions") return argv;
-  const dirs = [...(cfg.gcp?.hidden ?? []), ...(cfg.aws?.hidden ?? [])].filter((d) => existsSync(d));
+  const dirs = [...(cfg.gcp?.hidden ?? []), ...(cfg.aws?.hidden ?? []), ...(cfg.sandbox?.hide ?? []).map(expand)].filter((d) => existsSync(d));
   return dirs.length ? ["bwrap", "--dev-bind", "/", "/", ...dirs.flatMap((d) => ["--tmpfs", d]), "--die-with-parent", "--", ...argv] : argv;
 }
 
@@ -183,7 +183,16 @@ function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp,
     if (engine.model) args.push("-m", engine.model);
     if (engine.effort) args.push("-c", `model_reasoning_effort="${engine.effort}"`);
     args.push("-");
-    return { argv: args, env: mcpEnv };
+    // Runner-owned Codex home: only the ChatGPT auth, none of the user's MCP servers or project config.
+    let codexHome;
+    if (cfg.codexHome) {
+      codexHome = cfg.codexHome;
+      mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+      const src = join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "auth.json");
+      const dst = join(codexHome, "auth.json");
+      if (existsSync(src) && (!existsSync(dst) || statSync(src).mtimeMs > statSync(dst).mtimeMs)) copyFileSync(src, dst);
+    }
+    return { argv: args, env: { ...mcpEnv, ...(codexHome ? { CODEX_HOME: codexHome } : {}) } };
   }
   if (engine.kind === "openrouter") {
     const key = readFileSync(cfg.openrouterKeyFile, "utf8").trim();
