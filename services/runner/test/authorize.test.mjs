@@ -25,6 +25,15 @@ describe("the user's words around the agent's reply", () => {
     assert.equal(w.recent.length, 1);
     assert.equal(w.lastReply, "");
   });
+
+  it("can retain an unfulfilled command by id while excluding attempted and legacy commands", () => {
+    const comments = [reply(1, "Ready to publish."), ...[2, 3, 4].map((n) => ({ ...user(n, "pr"), id: String(n) })), user(5, "Why didn't that work?")];
+    const outcomes = new Map([["2", "attempted"], ["3", "pending"]]);
+    const options = { isCommand: (body, c) => Boolean(parseCommand(body)) && outcomes.get(c.id) !== "pending" };
+    assert.deepEqual(wordsAround(comments, options).recent.map((c) => c.body), ["pr", "Why didn't that work?"]);
+    outcomes.set("3", "attempted");
+    assert.deepEqual(wordsAround(comments, options).recent.map((c) => c.body), ["Why didn't that work?"]);
+  });
 });
 
 describe("checking a write against the user's words", () => {

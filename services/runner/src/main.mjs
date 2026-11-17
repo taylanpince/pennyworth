@@ -358,7 +358,14 @@ async function handleIssue(issue, engineerIds) {
     state.markHandled(c.id, issue.id);
     const command = parseCommand(c.body); // exactly "push" or "pr"
     if (command) {
-      await runCommand(issue, state.task(issue.id), command);
+      const publishing = command === "push" || command === "pr";
+      const key = `publish-command:${c.id}`;
+      // Handling a comment is not the same as carrying it out. Keep a request that stops
+      // before publishing available to the agent's authorization check on its next turn.
+      if (publishing) state.set(key, "pending");
+      await runCommand(issue, state.task(issue.id), command, {
+        onPublish: () => { if (publishing) state.set(key, "attempted"); },
+      });
       continue;
     }
     const text = stripHidden(c.body).trim();
@@ -743,8 +750,15 @@ async function conversation(issue, workspace, { instructions, resumed, persona }
     thread: threadSection(cfg.selfName, entries, { resumed }),
     stand: await liveState(issue, workspace),
     // What the user said around the agent's last reply: what its GitHub writes are checked against.
-    words: wordsAround(comments, { isCommand: (body) => Boolean(parseCommand(body)) }),
+    words: writeWords(comments),
   };
+}
+
+function writeWords(comments) {
+  return wordsAround(comments, {
+    // Old commands have no outcome recorded: exclude them rather than replaying a write.
+    isCommand: (body, comment) => Boolean(parseCommand(body)) && state.get(`publish-command:${comment.id}`) !== "pending",
+  });
 }
 
 /** Where the task's work stands, read now: branches, their PRs on GitHub, and the merge queue. */
@@ -778,10 +792,13 @@ async function allowWrite(ctx, action, targets, extra = {}) {
   if (ctx.allowed?.has(key)) return;
   // The user's words as they are now: a comment they added while the agent works counts too.
   const comments = await pc.comments(ctx.issue.id).catch(() => undefined);
-  const words = comments ? wordsAround(comments, { isCommand: (body) => Boolean(parseCommand(body)) }) : ctx.words;
+  const words = comments ? writeWords(comments) : ctx.words;
   const verdict = await authorize({ cfg, user: cfg.selfName, action, targets, words, ...extra });
   log("write checked", { issue: ctx.issue.identifier, action, targets: targets.length, allowed: verdict.allowed, how: verdict.how, reason: verdict.reason.slice(0, 200) });
   if (!verdict.allowed) throw new UserError(`Not done: this needs ${cfg.selfName}'s go-ahead (${verdict.reason}). Say exactly what you'd ${action === "merge" ? "merge" : action === "aws" ? "run" : "publish"} and ask them; don't try again in this turn.`);
+  for (const c of words.recent) {
+    if (state.get(`publish-command:${c.id}`) === "pending") state.set(`publish-command:${c.id}`, "attempted");
+  }
   (ctx.allowed ??= new Set()).add(key);
 }
 
@@ -1378,7 +1395,7 @@ async function reportToParent(issue) {
 
 // ------------------------------------------------------------------ commands
 
-async function runCommand(issue, task, command) {
+async function runCommand(issue, task, command, { onPublish = () => {} } = {}) {
   if (command === "stop") {
     const r = running.get(issue.id);
     if (!r) return void (await pc.comment(issue.id, "Nothing is running on this task."));
@@ -1412,7 +1429,7 @@ async function runCommand(issue, task, command) {
     state.updateTask(issue.id, { session_id: null });
     return void (await pc.comment(issue.id, "Session cleared: the next run starts a fresh agent conversation (the workspace and its branches are kept)."));
   }
-  if ((!task?.repo && command !== "cleanup") || (!task?.workspace && !task?.worktree)) {
+  if (!task?.workspace && !task?.worktree) {
     return void (await pc.comment(issue.id, `There's nothing to ${command === "pr" ? "open a PR for" : command} yet: no work has been done on this task. Tell me what to build and I'll start; ${command === "pr" ? "**pr**" : "**push**"} works once there are commits.`));
   }
   if (running.has(issue.id)) return void (await pc.comment(issue.id, `Can't ${command} while a run is in progress. Comment **stop** first, or wait for it to finish.`));
@@ -1439,7 +1456,9 @@ async function runCommand(issue, task, command) {
   running.set(issue.id, { controller, identifier: issue.identifier, startedAt: new Date().toISOString(), info: { mode: command === "pr" ? "opening PRs" : "pushing branches", repo: repos, ...(task.engine ? { engine: engineLabel(task.engine) } : {}) } });
   reportActivity();
   try {
-    await publish(issue, workspace, command, controller.signal);
+    const result = await publish(issue, workspace, command, controller.signal, { check: onPublish });
+    // An existing, already-published branch also fulfils the request. No commits yet doesn't.
+    if (result.ok && !result.empty) onPublish();
   } finally {
     running.delete(issue.id);
     reportActivity();
@@ -1475,7 +1494,7 @@ async function publish(issue, workspace, command, signal, { only = [], text, che
     // GitHub already has everything: as good as published.
     const said = [...notes, rows.length ? (open.length ? `Nothing new to publish: GitHub already has every commit${command === "pr" ? `, and the PRs are open: ${open.map((r) => r.prUrl).join(", ")}` : ""}.` : "Nothing new to publish.") : "There are no commits to publish."].join("\n\n");
     await pc.comment(issue.id, said);
-    return { ok: true, text: said };
+    return { ok: true, empty: !rows.length, text: said };
   }
   // Parents before the branches stacked on them: a stacked PR needs its base on GitHub first.
   const ordered = [];

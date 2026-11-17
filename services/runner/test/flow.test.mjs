@@ -305,6 +305,10 @@ recurring:
   });
 
   it("keeps the exact word pr as a shortcut, shown on the board while it publishes", async () => {
+    // Workspaces can have repositories without the legacy primary-repository field (MAN-655).
+    const state = new State(join(dir, "state"));
+    const repo = state.task("part").repo;
+    state.updateTask("part", { repo: null });
     const reported = paperclip.activity.length;
     const n = partComments().length;
     say("pr");
@@ -315,6 +319,8 @@ recurring:
     assert.deepEqual(paperclip.activity.at(-1).running, []);
     assert.ok(git(dir, "--git-dir", join(dir, "github/acme/app.git"), "branch", "--list", "fix/remove-telos"), "pushed");
     assert.equal(claudeRuns().length, 1, "no agent turn for the shortcut");
+    state.updateTask("part", { repo });
+    state.db.close();
   });
 
   // PEN-2714: a list of PRs, then "fix the conflict by rebasing, then start merging them as I listed".
@@ -594,6 +600,40 @@ recurring:
     assert.match(prompt, /could not prepare these repositories: acme\/missing/);
     assert.match(prompt, /Repo is acme\/backend/);
     assert.ok(existsSync(join(dir, "work/tasks/PEN-2/backend/.git")), "the corrected repository was cloned");
+  });
+
+  it("keeps a pr that stopped before publishing for the next turn, then consumes it", async () => {
+    const issue = { id: "late-repo", identifier: "PEN-5", title: "Inspect the site", status: "todo", assigneeAgentId: "engineer-claude", createdByUserId: USER, labels: [], description: "Inspect the site; no repository yet." };
+    const comments = () => paperclip.comments.get(issue.id);
+    const replies = () => paperclip.patches.filter((p) => p.issue === issue.identifier && p.status === "in_review");
+    step("none");
+    paperclip.comments.set(issue.id, []);
+    paperclip.issues.set(issue.id, issue);
+    await waitFor("the inspection", () => replies().length === 1);
+    paperclip.addComment(issue.id, "pr");
+    const request = comments().at(-1);
+    await waitFor("no commits yet", () => comments().some((c) => c.body.includes("There are no commits to publish")));
+    const state = new State(join(dir, "state"));
+    assert.equal(state.get(`publish-command:${request.id}`), "pending");
+
+    // The agent discovers the repository itself, then retries the user's unfulfilled PR request.
+    step("clone-commit\npennyworth pr acme/app fix/late-clone");
+    paperclip.addComment(issue.id, "Finish the change.");
+    await waitFor("the completed PR", () => replies().length === 2);
+    assert.equal(state.task(issue.id).repo, null, "cloning mid-run doesn't set the legacy field");
+    const published = toolRuns().at(-1);
+    assert.equal(published.code, 0, published.out);
+    assert.ok(git(dir, "--git-dir", join(dir, "github/acme/app.git"), "branch", "--list", "fix/late-clone"));
+    const check = fakeLog().filter((e) => e.kind === "authorize").at(-1).data;
+    assert.match(check, /RECENT_COMMENTS_FROM_TAYLAN\n[^\n]*pr\n/);
+    assert.equal(state.get(`publish-command:${request.id}`), "attempted");
+
+    step("none\npennyworth pr acme/app fix/late-clone --title Updated");
+    paperclip.addComment(issue.id, "What changed?");
+    await waitFor("the next reply", () => replies().length === 3);
+    assert.notEqual(toolRuns().at(-1).code, 0, "the old pr cannot authorize another write");
+    assert.match(toolRuns().at(-1).out, /go-ahead/);
+    state.db.close();
   });
 
   it("runs a CAD role without a repository or service connections and attaches successive revisions", async () => {

@@ -50,7 +50,7 @@ const isReply = (c) => c.authorType !== "agent" && String(c.body ?? "").includes
  */
 export function wordsAround(comments, { isCommand = () => false } = {}) {
   const last = comments.findLastIndex(isReply);
-  const own = (c) => c.authorType === "user" && !String(c.body ?? "").includes(RUNNER_MARKER) && stripHidden(c.body).trim() && !isCommand(c.body);
+  const own = (c) => c.authorType === "user" && !String(c.body ?? "").includes(RUNNER_MARKER) && stripHidden(c.body).trim() && !isCommand(c.body, c);
   return {
     earlier: comments.slice(0, Math.max(last, 0)).filter(own),
     recent: comments.slice(last + 1).filter(own),

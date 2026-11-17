@@ -1,8 +1,8 @@
 // Whether the user's own words ask for a write an Engineer wants to make (GitHub, Primer, AWS) (stage 2 of
 // docs/design/conversational-engineers.md): a short no-tools call that sees only the user's comments
 // and the agent's previous reply, never code, logs, PR text or documents, so instructions hidden there
-// can't authorize a write. The exact words "push" and "pr" never get here: the runner carries them out
-// itself, and they are left out of the words (they were done, so they can't allow anything again).
+// can't authorize a write. Exact "push" and "pr" commands are left out once publishing was attempted.
+// A command that stopped before any write remains available on the next turn, checked like any request.
 import { stripHidden } from "./commands.mjs";
 import { askCodex } from "./intake.mjs";
 

@@ -81,6 +81,14 @@ Today the only thing that keeps a misread comment from becoming a push is the ex
    It answers whether these words ask for or approve this action on these targets. It never sees code, logs, PR text or documents, so instructions hidden there can't reach it. If it isn't sure, it says no.
 3. **A refusal goes back to Ada** as the tool's error, with the reason. She then asks in plain words ("I've fixed the conflict. Shall I push it and start the merges in your order?"), and the user's "yes" authorizes the next attempt.
 
+The runner records whether an exact `push` or `pr` reached publishing, separately from
+whether its comment was handled. If it stops before any write (for example, no commits
+yet), that comment remains available to the next turn's authorization check. Once a
+write is attempted, or existing published branches already satisfy the request, it is
+excluded. Partial publishes and commands from before outcome tracking remain excluded
+to avoid replaying a write. Branch discovery uses the workspace, including repositories
+cloned during an agent run; it does not require the old primary-repository field.
+
 Everything else stays in code as it is now:
 - own branches only, and the lease on rewritten ones (D-49);
 - allowed orgs, and the leak checks on branch names, commits and PR text;

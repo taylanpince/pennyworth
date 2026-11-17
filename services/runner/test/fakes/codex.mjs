@@ -15,7 +15,7 @@ if (prompt.includes("<<<RECENT_COMMENTS_FROM_")) {
   // Allowed only when the user's recent words ask in so many words.
   const recent = /<<<RECENT_COMMENTS_FROM_\w+\n([\s\S]*?)\nRECENT_COMMENTS_FROM_/.exec(prompt)?.[1] ?? "";
   log("authorize", prompt);
-  const yes = /go ahead|start merging|then merge|push it/i.test(recent);
+  const yes = /go ahead|start merging|then merge|push it|\] pr(?:\n|$)/i.test(recent);
   answer({ allowed: yes, reason: yes ? "asked" : "not asked" });
 }
 if (prompt.includes("<<<WORK")) {
