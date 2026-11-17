@@ -43,7 +43,9 @@ const logsDir = join(cfg.stateDir, "logs");
 mkdirSync(logsDir, { recursive: true, mode: 0o700 });
 
 const running = new Map(); // issueId → { controller, jobId, identifier, startedAt, info }
-const queue = []; // { issue, instructions, read, candidates }
+const queue = JSON.parse(state.get("queue") || "[]"); // { issue, instructions }
+const saveQueue = () => state.set("queue", JSON.stringify(queue));
+let stopping = false;
 const log = (msg, extra = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), msg, ...extra }));
 const engineLabel = (e) => {
   const details = [e.model, e.effort && `${e.effort} effort`].filter(Boolean).join(", ");
@@ -421,6 +423,7 @@ async function whileBusy(issue, latest, instructions) {
     if (r) {
       r.controller.abort();
       for (let i = queue.length - 1; i >= 0; i--) if (queue[i].issue.id === issue.id) queue.splice(i, 1);
+      saveQueue();
       return;
     }
     return stopMerges(issue, "you asked me to stop");
@@ -469,16 +472,17 @@ async function dispatch(job) {
   const waiting = queue.find((j) => j.issue.id === issue.id);
   if (waiting) {
     waiting.instructions = `${waiting.instructions}\n\n${job.instructions}`;
+    saveQueue();
     return;
   }
+  queue.push(job);
+  saveQueue();
   if (running.has(issue.id)) {
-    queue.push(job);
     await pc.comment(issue.id, "Noted: I'll read this as soon as the current run on this task finishes.");
   } else if (running.size >= (cfg.max_concurrent ?? 2)) {
-    queue.push(job);
     await pc.comment(issue.id, `Queued: ${running.size} job(s) already running.`);
   } else {
-    void startJob(job);
+    drainQueue();
   }
 }
 
@@ -675,10 +679,11 @@ async function handleGoAhead(parent, fresh) {
 }
 
 function drainQueue() {
-  while (running.size < (cfg.max_concurrent ?? 2)) {
+  while (!stopping && running.size < (cfg.max_concurrent ?? 2)) {
     const i = queue.findIndex((j) => !running.has(j.issue.id));
     if (i < 0) return;
     void startJob(queue.splice(i, 1)[0]);
+    saveQueue();
   }
 }
 
@@ -1097,6 +1102,8 @@ async function startJob({ issue, instructions }) {
   const retry = isRetry(instructions); // "try again" and the like, for the Stats view (D-62)
   try {
     const full = await pc.issue(issue.id);
+    // A queued request may outlive its assignment or be closed while the runner is down.
+    if (["done", "cancelled"].includes(full.status) || full.assigneeAgentId !== issue.assigneeAgentId) return;
     // A Paperclip hiccup here mustn't fail the job: without the list, it's an ordinary role.
     const cad = isCadRole((await pc.engineerAgents().catch(() => [])).find((a) => a.id === full.assigneeAgentId));
     const runtime = cad ? cadRuntime(cfg) : undefined;
@@ -1214,8 +1221,11 @@ async function startJob({ issue, instructions }) {
     }
 
     if (result.cancelled) {
-      state.finishJob(jobId, "cancelled");
-      await pc.setStatus(issue.id, "in_review", "Stopped on request. Whatever the run had changed is still in the workspace.");
+      const interrupted = controller.signal.reason === "runner-shutdown";
+      state.finishJob(jobId, interrupted ? "interrupted" : "cancelled");
+      await pc.setStatus(issue.id, "in_review", interrupted
+        ? "Interrupted because the runner shut down. Whatever the run had changed is still in the workspace. Reply **continue** to resume."
+        : "Stopped on request. Whatever the run had changed is still in the workspace.");
       return;
     }
 
@@ -1260,7 +1270,7 @@ async function startJob({ issue, instructions }) {
     aws?.done();
     running.delete(issue.id);
     if (jobId) await recordUsage(jobId);
-    await afterTurn(issue, tools).catch((err) => reportError(issue, err));
+    if (!stopping) await afterTurn(issue, tools).catch((err) => reportError(issue, err));
     drainQueue();
     reportActivity();
     void reportUsage();
@@ -1958,7 +1968,6 @@ if (interrupted.length) log("marked interrupted jobs from a previous run", { int
 for (const job of interrupted) await recordUsage(job.id);
 log("runner started", { config: cfg.file, label: cfg.label, orgs: cfg.allowed_orgs, poll_seconds: cfg.poll_seconds });
 
-let stopping = false;
 async function loop() {
   while (!stopping) {
     try {
@@ -1972,7 +1981,7 @@ async function loop() {
 for (const sig of ["SIGTERM", "SIGINT"]) {
   process.on(sig, () => {
     stopping = true;
-    for (const { controller } of running.values()) controller.abort();
+    for (const { controller } of running.values()) controller.abort("runner-shutdown");
     setTimeout(() => process.exit(0), 3000);
   });
 }

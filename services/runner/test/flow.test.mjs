@@ -110,7 +110,12 @@ function fakePaperclip({ parent, part, engineers, parentComments = [], others = 
 }
 
 describe("talking to an Engineer, end to end", () => {
-  let dir, runner, paperclip, output = "";
+  let dir, runner, runnerOptions, paperclip, output = "";
+  const launch = () => {
+    runner = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", RUNNER], runnerOptions);
+    runner.stdout.on("data", (d) => (output += d));
+    runner.stderr.on("data", (d) => (output += d));
+  };
   const fakeLog = () => (existsSync(join(dir, "fake.log")) ? readFileSync(join(dir, "fake.log"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
   const partComments = () => paperclip.comments.get("part").map((c) => c.body);
   const claudeRuns = () => fakeLog().filter((e) => e.kind === "claude").map((e) => e.data);
@@ -234,7 +239,7 @@ recurring:
     const url = `http://127.0.0.1:${paperclip.server.address().port}`;
 
     step("commit");
-    runner = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", RUNNER], {
+    runnerOptions = {
       env: {
         PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin:${process.env.PATH}`,
         HOME: home,
@@ -249,9 +254,8 @@ recurring:
         FAKE_STEP: join(dir, "claude-step"),
       },
       stdio: ["ignore", "pipe", "pipe"],
-    });
-    runner.stdout.on("data", (d) => (output += d));
-    runner.stderr.on("data", (d) => (output += d));
+    };
+    launch();
   });
 
   after(() => {
@@ -664,6 +668,45 @@ recurring:
     assert.equal(attached().length, 10);
     assert.ok(attached().includes("bracket-v002.step"));
     assert.ok(!existsSync(join(dir, "work/tasks/PEN-4/app")));
+  });
+
+  it("keeps queued requests through shutdown, without starting them during shutdown or calling it a user stop", async () => {
+    const state = new State(join(dir, "state"));
+    const add = (id, number) => {
+      const issue = { id, identifier: `PEN-${number}`, title: id, status: "todo", assigneeAgentId: "engineer-claude", assigneeUserId: null, createdByUserId: USER, createdByAgentId: null, labels: [], description: `Inspect ${id}; no repository needed.` };
+      paperclip.comments.set(id, []);
+      paperclip.issues.set(id, issue);
+      return issue;
+    };
+    step("hold");
+    const active = add("restart-active", 70);
+    await waitFor("the active engine", () => claudeRuns().at(-1).prompt.includes("Inspect restart-active"));
+    const queued = add("restart-queued", 71);
+    const closed = add("restart-closed", 72);
+    const reassigned = add("restart-reassigned", 73);
+    await waitFor("three durable queued requests", () => JSON.parse(state.get("queue") || "[]").length === 3);
+    paperclip.addComment(queued.id, "Also check the deployment settings.");
+    await waitFor("the added instruction saved in the queue", () => state.get("queue").includes("Also check the deployment settings."));
+    const exited = new Promise((resolve) => runner.once("exit", resolve));
+    runner.kill("SIGTERM");
+    await exited;
+    assert.equal(state.lastJob(active.id).status, "interrupted");
+    const comments = paperclip.comments.get(active.id).map((c) => c.body).join("\n");
+    assert.match(comments, /Interrupted because the runner shut down/);
+    assert.doesNotMatch(comments, /Stopped on request/);
+    assert.equal(JSON.parse(state.get("queue")).length, 3, "shutdown must not drain the waiting jobs");
+    assert.equal(state.lastJob(queued.id), undefined);
+    closed.status = "done";
+    reassigned.assigneeAgentId = "assistant";
+    step("none");
+    launch();
+    await waitFor("the queued request finishing after restart", () => state.lastJob(queued.id)?.status === "done");
+    await waitFor("the stale queued requests discarded", () => state.get("queue") === "[]");
+    assert.match(claudeRuns().at(-1).prompt, /Inspect restart-queued[\s\S]*Also check the deployment settings/);
+    assert.equal(state.lastJob(closed.id), undefined);
+    assert.equal(state.lastJob(reassigned.id), undefined);
+    assert.equal(claudeRuns().filter((r) => r.prompt.includes("Inspect restart-queued")).length, 1);
+    state.db.close();
   });
 
   it("never errors or asks for a repository along the way", () => {

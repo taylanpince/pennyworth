@@ -89,6 +89,8 @@ if (step === "commit" || step === "clone-commit") {
   for (const ext of ["glb", "step", "stl", "py", "json"]) writeFileSync(join(process.cwd(), `.pennyworth/out/bracket-${step.slice(4)}.${ext}`), "CAD fixture");
 } else if (step === "slow") {
   await new Promise((r) => setTimeout(r, 6000));
+} else if (step === "hold") {
+  await new Promise((r) => setTimeout(r, 60_000));
 }
 for (const line of tools) {
   const [cmd, ...cmdArgs] = line.split(" ");
