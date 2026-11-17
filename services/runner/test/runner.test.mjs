@@ -201,6 +201,25 @@ describe("engines, modes and shells", () => {
     assert.doesNotMatch(observeSection("Taylan", { cloudflare: false, grafana: true }), /Cloudflare/);
   });
 
+  // D-69: Jira and Confluence reads, with jira-mcp's read token, for Claude Code and Codex only.
+  it("gives Claude Code and Codex Jira's read endpoint, never OpenRouter", () => {
+    const dir = mkdtempSync(join(tmpdir(), "reads-"));
+    for (const f of ["claude", "or", "jira"]) writeFileSync(join(dir, f), `${f}-token\n`);
+    const c = { ...cfg, claudeTokenFile: join(dir, "claude"), claudeConfigDir: join(dir, "home"), openrouterKeyFile: join(dir, "or"), primerTokenFile: join(dir, "missing"), jiraMcpUrl: "http://127.0.0.1:3129/mcp/read", jiraTokenFile: join(dir, "jira"), sandbox: { extra_writable_roots: [] } };
+    const claude = buildCommand({ cfg: c, engine: { kind: "claude" }, worktree: "/w" });
+    const servers = JSON.parse(claude.argv[claude.argv.indexOf("--mcp-config") + 1]).mcpServers;
+    assert.deepEqual(servers, { jira: { type: "http", url: "http://127.0.0.1:3129/mcp/read", headers: { Authorization: "Bearer ${JIRA_MCP_TOKEN}" } } });
+    assert.equal(claude.env.JIRA_MCP_TOKEN, "jira-token");
+    assert.ok(!claude.argv.join(" ").includes("jira-token"), "tokens only in the environment");
+    const codex = buildCommand({ cfg: c, engine: { kind: "codex" }, worktree: "/w", lastMessageFile: "/x" }).argv;
+    assert.ok(codex.includes('mcp_servers.jira.url="http://127.0.0.1:3129/mcp/read"'));
+    const or = buildCommand({ cfg: c, engine: { kind: "openrouter", model: "z-ai/glm" }, worktree: "/w" });
+    assert.equal(or.env.JIRA_MCP_TOKEN, undefined);
+    assert.doesNotMatch(or.env.OPENCODE_CONFIG_CONTENT, /jira|3129/);
+    assert.match(observeSection("Taylan", { jira: true }), /\*\*Jira and Confluence\*\*.*cloudId.*Alfred/);
+    assert.doesNotMatch(observeSection("Taylan", { jira: false, grafana: true }), /Jira and Confluence/);
+  });
+
 
   it("puts the engine shell outermost, detects languages and adds pulumi for gcloud", () => {
     assert.deepEqual(resolveShells({}, ["go"], "check the gcloud logs for errors", cfg), ["llm", "go", "pulumi"]);

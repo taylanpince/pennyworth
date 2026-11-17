@@ -116,6 +116,14 @@ for c in $containers; do
       [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
         && pass "cloudflare-mcp: only its own token directory mounted" || fail "cloudflare-mcp has unexpected mounts: $mounts"
       ;;
+    *jira-mcp*)
+      # Loopback only, for the runner's Engineer jobs: /mcp/read with its own token, reads only (D-51, D-69).
+      [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = '{"8092/tcp":[{"HostIp":"127.0.0.1","HostPort":"3129"}]}' ] \
+        && pass "jira-mcp: published on 127.0.0.1:3129 only" || fail "jira-mcp ports are not loopback 3129 only"
+      read_split jira 3129
+      [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
+        && pass "jira-mcp: only its own token directory mounted" || fail "jira-mcp has unexpected mounts: $mounts"
+      ;;
     *github-mcp*)
       [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "github-mcp: no published ports" || fail "github-mcp publishes ports"
       ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -q . \
@@ -184,6 +192,10 @@ for a in config/paperclip.yaml config/paperclip.example.yaml; do
   # Cloudflare (D-64): every account and zone, for the Assistant only, never the scouts.
   cf_agents="$(node -e 'const fs=require("node:fs"),yaml=require("./services/ops-mcp/node_modules/yaml"); const c=yaml.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(Object.entries(c.agents??{}).filter(([,a])=>(a.mcp_servers??[]).includes("cloudflare")).map(([k])=>k+": ").sort().join(""))' "$a")"
   { [ -z "$cf_agents" ] || [ "$cf_agents" = "assistant: " ]; } && pass "$a: Cloudflare is disabled or limited to the Assistant" || fail "$a: Cloudflare given to: $cf_agents"
+  # Jira (D-69): the Assistant (reads and Jira writes) and the Writer (reads only), never the scouts; every agent
+  # with it lists its tools, and only the Assistant's list has writes.
+  jira_agents="$(node -e 'const fs=require("node:fs"),yaml=require("./services/ops-mcp/node_modules/yaml"); const c=yaml.parse(fs.readFileSync(process.argv[1],"utf8")); const W=/^(createJiraIssue|editJiraIssue|addCommentToJiraIssue|transitionJiraIssue|createIssueLink)$/; process.stdout.write(Object.entries(c.agents??{}).filter(([,a])=>(a.mcp_servers??[]).includes("jira")).map(([k,a])=>{const t=a.enabled_tools?.jira; return k+(Array.isArray(t)?(t.some(n=>W.test(n))?"=writes":"=reads"):"=all")+" "}).sort().join(""))' "$a")"
+  { [ -z "$jira_agents" ] || [ "$jira_agents" = "assistant=writes writer=reads " ] || [ "$jira_agents" = "assistant=writes " ]; } && pass "$a: Jira is disabled, or the Assistant's (with writes) and the Writer's (reads only)" || fail "$a: Jira given to: $jira_agents"
   # Memory (D-61): only crew agents (with a persona) write memories; the scouts read the global rules only.
   mem_writers="$(awk '/^  [a-z0-9-]+:$/{agent=$1} /memory_(remember|propose)/{print agent}' "$a" | sort -u | tr '\n' ' ')"
   personas="$(awk '/^  [a-z0-9-]+:$/{agent=$1} /^    persona:/{print agent}' "$a" | sort -u | tr '\n' ' ')"
@@ -234,6 +246,16 @@ grep -qF '.refine((u) => u.startsWith("https://"), "https links only")' services
   && grep -qF 'export const RunnerPollSchema = z.object({ updates: z.array(Update).max(20), wait: z.boolean().optional() }).strict();' services/board/src/signins.ts \
   && grep -qF 'const home = mkdtempSync(join(tmpdir(), "pennyworth-codex-login-"));' services/runner/src/signins.mjs \
   && pass "board: the sign-in relay takes only https links and plain codes; Codex sign-ins can't remove the current one (D-66)" || fail "sign-in relay schema or Codex's fresh-home sign-in changed"
+# Jira (D-69): the sign-in asks for Jira read, search and write and Confluence reads only, and refuses one granted
+# more; deletes, worklogs and Confluence writes are never exposed; /mcp/read serves the reads only.
+[ "$(sed -n '/^export const SCOPES = \[/,/^\];/p' services/jira-mcp/src/policy.ts | grep -oE '"[^"]+"' | tr -d '"' | tr '\n' ' ')" = "read:me read:account offline_access read:jira:agent-interface search:jira:agent-interface write:jira:agent-interface read:confluence:agent-interface search:confluence:agent-interface search:rovo:agent-interface " ] \
+  && grep -q 'const extra = granted ? extraScopes(granted) : \[\];' services/jira-mcp/src/signin.ts \
+  && [ "$(sed -n 's/^export const WRITE_TOOLS = \[\(.*\)\];/\1/p' services/jira-mcp/src/policy.ts | tr -d '" ')" = "createJiraIssue,editJiraIssue,addCommentToJiraIssue,transitionJiraIssue,createIssueLink" ] \
+  && ! sed -n '/^export const READ_TOOLS = \[/,/^\];/p' services/jira-mcp/src/policy.ts | grep -qE '"(create|edit|add|update|delete|transition|archive)|worklog' \
+  && grep -q 'const NEVER = /(delete|remove|worklog|' services/jira-mcp/src/policy.ts \
+  && grep -q 'const server = buildServer(read ? readOnly(allowlist) : allowlist);' services/jira-mcp/src/main.ts \
+  && grep -q 'jiraTokenFile: join(secrets, "jira_mcp_read_token")' services/runner/src/config.mjs \
+  && pass "jira-mcp asks for Jira read/search/write and Confluence reads only, never exposes deletes, worklogs or Confluence writes, and jobs get reads only (services/jira-mcp/src/policy.ts)" || fail "jira-mcp: scopes, the sign-in check, the tool lists or the read split changed"
 # Engineer jobs' Google Cloud (D-53): the user's own access, read-only by the prompt's rule; jobs get a
 # one-hour access token only, never the sign-in's refresh token.
 grep -q '\*\*Read only:\*\* describe, list, get, read and get-iam-policy commands' services/runner/src/prompt.mjs \

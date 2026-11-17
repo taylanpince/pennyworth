@@ -4,7 +4,7 @@ import pino from "pino";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { connectionsView, type ConnectionInputs } from "../src/connections.js";
-import { CloudflareAuth, GleanAuth } from "../src/mcpauth.js";
+import { CloudflareAuth, GleanAuth, JiraAuth } from "../src/mcpauth.js";
 import type { Paperclip } from "../src/paperclip.js";
 import { Store } from "../src/store.js";
 
@@ -142,6 +142,72 @@ describe("hidden connection banners (D-67)", () => {
       store.hideBanner("cloudflare", null);
       expect(store.hiddenBanners()).toEqual({ grafana: "2026-11-16T09:00:00.000Z" });
     } finally {
+      store.close();
+    }
+  });
+});
+
+describe("Jira: one sign-in per Atlassian account (D-69)", () => {
+  const accounts = [
+    { id: "a1b2c3d4", label: "taylan@polygon.technology · polygon.atlassian.net", state: "ok" as const, since: "t" },
+    { id: "e5f6a7b8", label: "taylan@coinme.com · coinme.atlassian.net", state: "expired" as const, since: "t2", detail: "invalid_grant" },
+  ];
+
+  it("lists every account with its own state, to add more and remove one", () => {
+    const v = byId({ ...base, proxies: { jira: { state: "expired", configured: true, since: "t2", accounts } } });
+    expect(v.jira).toMatchObject({ name: "Jira and Confluence", state: "attention", action: { kind: "connect", href: "/jira/connect", multiple: true } });
+    expect(v.jira!.accounts).toEqual([
+      { id: "a1b2c3d4", label: accounts[0]!.label, state: "ok" },
+      { id: "e5f6a7b8", label: accounts[1]!.label, state: "attention", detail: "invalid_grant" },
+    ]);
+    expect(byId({ ...base, proxies: { jira: { state: "missing", configured: true, since: "t", accounts: [] } } }).jira).toMatchObject({ state: "off", accounts: [] });
+    // Only Jira adds accounts one by one.
+    expect(byId({ ...base, proxies: { cloudflare: { state: "ok", configured: true, since: "t" } } }).cloudflare!.action).toEqual({ kind: "connect", href: "/cloudflare/connect" });
+  });
+
+  it("signs in with its own callback and removes an account from the laptop only", async () => {
+    const seen: { path: string; body: unknown }[] = [];
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    const jira = new JiraAuth("http://jira", "t", undefined, (async (u: string | URL, init?: RequestInit) => {
+      const path = new URL(String(u)).pathname;
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      seen.push({ path, body });
+      if (path === "/auth/start") return json({ url: "https://auth.atlassian.com/authorize?state=s" });
+      if (path === "/auth/finish") return json({ ok: true, account: "a1b2c3d4" });
+      if (path === "/auth/remove") return body.account === "a1b2c3d4" ? json({ ok: true }) : json({ error: "no such account" }, 404);
+      return json({}, 404);
+    }) as typeof fetch);
+    const store = new Store(":memory:");
+    const opts = { paperclip: {} as Paperclip, store, log: pino({ level: "silent" }), staticDir: "/nonexistent", timezone: "UTC", jira };
+    const app = createApp({ ...opts, allowedHosts: ["localhost:3120"], mode: "local" });
+    const lan = createApp({ ...opts, allowedHosts: ["pennyworth.local:3121"], mode: "lan", lan: { url: "http://pennyworth.local:3121", hosts: ["pennyworth.local:3121"], clients: ["127.0.0.0/8"] } as never });
+    await new Promise<void>((r) => app.listen(0, "127.0.0.1", r));
+    await new Promise<void>((r) => lan.listen(0, "127.0.0.1", r));
+    const call = (s: typeof app, method: string, path: string, headers: Record<string, string>, body?: unknown) =>
+      new Promise<{ status: number; location?: string }>((resolve, reject) => {
+        const req = request({ host: "127.0.0.1", port: (s.address() as AddressInfo).port, method, path, headers }, (res) => {
+          res.resume();
+          res.on("end", () => resolve({ status: res.statusCode!, location: res.headers.location }));
+        });
+        req.on("error", reject);
+        req.end(body === undefined ? undefined : JSON.stringify(body));
+      });
+    const headers = { host: "localhost:3120", "content-type": "application/json", "x-pennyworth-board": "1" };
+    try {
+      expect(await call(app, "GET", "/jira/connect", { host: "localhost:3120" })).toMatchObject({ status: 302, location: expect.stringMatching(/^https:\/\/auth\.atlassian\.com\//) });
+      expect(seen.at(-1)).toEqual({ path: "/auth/start", body: { redirect_uri: "http://localhost:3120/jira/callback" } });
+      expect(await call(app, "GET", "/jira/callback?state=s&code=good", { host: "localhost:3120" })).toMatchObject({ status: 302, location: "/" });
+      expect(seen.at(-1)).toEqual({ path: "/auth/finish", body: { state: "s", code: "good" } });
+
+      expect((await call(app, "DELETE", "/api/connections/jira/accounts/a1b2c3d4", headers)).status).toBe(200);
+      expect(seen.at(-1)).toEqual({ path: "/auth/remove", body: { account: "a1b2c3d4" } });
+      expect((await call(app, "DELETE", "/api/connections/jira/accounts/ffffffff", headers)).status).toBe(404);
+      const before = seen.length;
+      expect((await call(lan, "DELETE", "/api/connections/jira/accounts/a1b2c3d4", { ...headers, host: "pennyworth.local:3121" })).status).toBe(403);
+      expect(seen.length).toBe(before);
+    } finally {
+      app.close();
+      lan.close();
       store.close();
     }
   });

@@ -14,6 +14,8 @@ import type { TelegramStatus } from "./telegram.js";
 export type ConnectionState = "ok" | "attention" | "off" | "unset" | "unknown";
 
 export interface ConnectionAccount {
+  /** The proxy's id for the sign-in, where accounts are added and removed one by one (Jira, D-69). */
+  id?: string;
   label: string;
   state: ConnectionState;
   detail?: string;
@@ -21,8 +23,11 @@ export interface ConnectionAccount {
 }
 
 export type ConnectionAction =
-  /** A sign-in on the board's own page (/<service>/connect), on the laptop's loopback address only. */
-  | { kind: "connect"; href: string }
+  /**
+   * A sign-in on the board's own page (/<service>/connect), on the laptop's loopback address only. With `multiple`,
+   * each sign-in adds an account (or reconnects that account), and an account can be removed (Jira, D-69).
+   */
+  | { kind: "connect"; href: string; multiple?: true }
   /** A sign-in form on the Settings page itself. */
   | { kind: "panel"; panel: "google" | "slack" | "telegram" | "whatsapp" }
   /** A sign-in the runner makes on the laptop, driven from Settings (D-66), with the terminal command as a fallback. */
@@ -73,7 +78,7 @@ export interface ConnectionInputs {
   whatsapp?: { state?: string } | null;
   whatsappEnabled: boolean;
   /** The OAuth proxies the board can sign in (D-38, D-48, D-57, D-64): null when set up but not answering. */
-  proxies: Partial<Record<"glean" | "grafana" | "clickhouse" | "cloudflare" | "primer", McpAuthStatus | null>>;
+  proxies: Partial<Record<"glean" | "grafana" | "clickhouse" | "cloudflare" | "jira" | "primer", McpAuthStatus | null>>;
   host?: HostReport;
 }
 
@@ -88,11 +93,17 @@ const worst = (states: ConnectionState[], empty: ConnectionState): ConnectionSta
 
 function mcpProxy(id: string, s: McpAuthStatus | null | undefined, env: string): Pick<Connection, "state" | "detail" | "since" | "accounts" | "action"> {
   if (s === undefined) return { state: "unset", accounts: [], action: { kind: "setup", note: `Set ${env} in .env and recreate ${id}-mcp and the board.` } };
-  const action: ConnectionAction = { kind: "connect", href: `/${id}/connect` };
+  const action: ConnectionAction = { kind: "connect", href: `/${id}/connect`, ...(id === "jira" ? { multiple: true as const } : {}) };
   if (!s) return { state: "unknown", detail: `${id}-mcp didn't answer`, accounts: [], action };
   if (!s.configured) return { state: "unset", accounts: [], action: { kind: "setup", note: `Set ${env} in .env and recreate ${id}-mcp.` } };
-  const state: ConnectionState = s.state === "ok" ? "ok" : s.state === "expired" ? "attention" : s.state === "missing" ? "off" : "unknown";
-  return { state, ...(s.detail ? { detail: s.detail } : {}), since: s.since, accounts: s.account ? [{ label: s.account, state }] : [], action };
+  const toState = (x: McpAuthStatus["state"]): ConnectionState => (x === "ok" ? "ok" : x === "expired" ? "attention" : x === "missing" ? "off" : "unknown");
+  const state = toState(s.state);
+  const accounts: ConnectionAccount[] = s.accounts
+    ? s.accounts.map((a) => ({ id: a.id, label: a.label, state: toState(a.state), ...(a.detail ? { detail: a.detail } : {}) }))
+    : s.account
+      ? [{ label: s.account, state }]
+      : [];
+  return { state, ...(s.detail ? { detail: s.detail } : {}), since: s.since, accounts, action };
 }
 
 function fromHost(host: HostReport | undefined, id: HostCheck["id"]): Pick<Connection, "state" | "detail" | "accounts" | "checkedAt"> {
@@ -170,12 +181,13 @@ export function connectionsView(i: ConnectionInputs): Connection[] {
     });
   }
 
-  const proxies: ["glean" | "grafana" | "clickhouse" | "cloudflare" | "primer", string, string, string, string][] = [
+  const proxies: ["glean" | "grafana" | "clickhouse" | "cloudflare" | "jira" | "primer", string, string, string, string][] = [
     ["primer", "Primer", "PRIMER_MCP_URL", "The org's documents: reading, and publishing when you ask.", "Alfred, Ursula and the Engineers"],
     ["glean", "Glean", "GLEAN_MCP_URL", "The company's search across Slack, Drive, Confluence, Jira, GitHub and people.", "Alfred, Ursula and the Engineers"],
     ["grafana", "Grafana", "GRAFANA_URL", "Logs, metrics, traces, dashboards and alerts, with read and query scopes only.", "the Engineers"],
     ["clickhouse", "ClickHouse", "CLICKHOUSE_MCP_URL", "ClickHouse Cloud: services, schemas and checked SELECT queries.", "Alfred and the Engineers"],
     ["cloudflare", "Cloudflare", "CLOUDFLARE_MCP_URL", "Every Cloudflare account and zone you can see, with read scopes only.", "Alfred and the Engineers"],
+    ["jira", "Jira and Confluence", "JIRA_MCP_URL", "Every Atlassian account you add, a client's own Jira too: reads, and Jira issues opened, edited, commented on or moved when you ask Alfred. Never deletes.", "Alfred, Ursula and the Engineers"],
   ];
   for (const [id, name, env, purpose, usedBy] of proxies) out.push({ id, name, group: "board", purpose, usedBy, ...mcpProxy(id, id in i.proxies ? i.proxies[id] : undefined, env) });
 

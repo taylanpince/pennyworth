@@ -8,10 +8,13 @@ export interface McpAuthStatus {
   detail?: string;
   /** Who the sign-in is for, when the proxy knows (Cloudflare's email, Grafana's stack). */
   account?: string;
+  /** A proxy with several sign-ins (jira-mcp, D-69): each one, by the proxy's id for it; `state` is the worst. */
+  accounts?: { id: string; label: string; state: "ok" | "expired" | "unknown"; since: string; detail?: string }[];
 }
 
 /**
- * Sign-in state from an MCP proxy that signs in with OAuth (glean-mcp, D-38; grafana-mcp; clickhouse-mcp, D-57; cloudflare-mcp, D-64), and
+ * Sign-in state from an MCP proxy that signs in with OAuth (glean-mcp, D-38; grafana-mcp; clickhouse-mcp, D-57; cloudflare-mcp, D-64;
+ * jira-mcp, one sign-in per Atlassian account, D-69), and
  * signing in through it, like Google's Reconnect (D-36): the board sends the browser to the
  * service's sign-in, which sends it back to the board's callback, and the proxy exchanges the code
  * and keeps the token. The board holds only the proxy's auth token; it never sees a service token.
@@ -63,6 +66,12 @@ export class McpAuth {
     await this.call<{ ok: true }>("POST", "/auth/finish", { state, code });
     this.cached = undefined;
   }
+
+  /** Sign one account out, on a proxy with several (D-69). */
+  async remove(account: string): Promise<void> {
+    await this.call<{ ok: true }>("POST", "/auth/remove", { account });
+    this.cached = undefined;
+  }
 }
 
 export class McpAuthFailed extends Error {}
@@ -92,6 +101,13 @@ export class ClickHouseAuth extends McpAuth {
 export class CloudflareAuth extends McpAuth {
   constructor(baseUrl: string, token: string, log?: Logger, fetchImpl?: typeof fetch) {
     super("Cloudflare", "cloudflare-mcp", baseUrl, token, log, fetchImpl);
+  }
+}
+
+/** Jira and Confluence on every Atlassian account the user adds (D-69): reads for everyone, Jira writes for Alfred. */
+export class JiraAuth extends McpAuth {
+  constructor(baseUrl: string, token: string, log?: Logger, fetchImpl?: typeof fetch) {
+    super("Jira", "jira-mcp", baseUrl, token, log, fetchImpl);
   }
 }
 

@@ -78,6 +78,7 @@ export const api = {
   hideBanner: (id: string, since: string) => call<{ hiddenBanners: Record<string, string> }>("POST", `/api/banners/${id}/hide`, { since }),
   showBanner: (id: string) => call<{ hiddenBanners: Record<string, string> }>("POST", `/api/banners/${id}/show`, {}),
   checkConnections: () => call<Connections>("POST", "/api/connections/check", {}),
+  removeJiraAccount: (id: string) => call<{ ok: true }>("DELETE", `/api/connections/jira/accounts/${id}`),
   signIn: (provider: string) => call<{ session: SignInSession | null; runnerOnline: boolean }>("GET", `/api/connections/signin/${provider}`),
   startSignIn: (provider: string) => call<{ session: SignInSession }>("POST", `/api/connections/signin/${provider}`, {}),
   answerSignIn: (provider: string, text: string) => call<{ session: SignInSession }>("POST", `/api/connections/signin/${provider}/input`, { text }),

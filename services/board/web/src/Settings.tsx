@@ -128,6 +128,17 @@ export function SettingsPage({ canConnect }: { canConnect: boolean }) {
   );
 }
 
+/** Sign one Jira account out (D-69), after asking: its sites stop working for every agent. */
+async function removeAccount(c: Connection, id: string, label: string, onChange: () => void) {
+  if (c.id !== "jira" || !confirm(`Remove ${label}? Alfred, Ursula and the Engineers stop reaching its sites until you add it again.`)) return;
+  try {
+    await api.removeJiraAccount(id);
+  } catch (err) {
+    alert(`Couldn't remove it: ${(err as Error).message}`);
+  }
+  onChange();
+}
+
 const laptopCheckedAt = (d: Connections) => d.connections.find((c) => c.group === "laptop" && c.checkedAt)?.checkedAt;
 
 function ConnectionCard({ c, canConnect, bannerHidden, onChange }: { c: Connection; canConnect: boolean; bannerHidden: boolean; onChange: () => void }) {
@@ -138,7 +149,7 @@ function ConnectionCard({ c, canConnect, bannerHidden, onChange }: { c: Connecti
   if (a.kind === "connect") {
     side = canConnect ? (
       <a className={`btn${c.state === "attention" || c.state === "off" ? " primary" : ""}`} href={a.href}>
-        {verb}
+        {a.multiple && c.accounts.length ? "Add account" : verb}
       </a>
     ) : (
       <span className="conn-note">Connect from the laptop</span>
@@ -172,6 +183,18 @@ function ConnectionCard({ c, canConnect, bannerHidden, onChange }: { c: Connecti
                   {x.primary && <span className="muted">· primary</span>}
                   {(x.state !== "ok" || accountsAttention) && x.state !== c.state && <span>· {STATE_LABEL[x.state].toLowerCase()}</span>}
                   {x.detail && x.state !== "ok" && <span className="muted">· {x.detail}</span>}
+                  {a.kind === "connect" && a.multiple && x.id && canConnect && (
+                    <>
+                      {x.state === "attention" && (
+                        <a className="link-btn" href={a.href} title="Sign in as this account again">
+                          Reconnect
+                        </a>
+                      )}
+                      <button className="link-btn" onClick={() => void removeAccount(c, x.id!, x.label, onChange)}>
+                        Remove
+                      </button>
+                    </>
+                  )}
                 </li>
               ))}
             </ul>

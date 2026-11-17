@@ -40,6 +40,7 @@ host (Linux, systemd user services)
     ├── grafana-mcp            proxy to Grafana Cloud's MCP server, read/query scopes only, for Engineer jobs (127.0.0.1:3124)
     ├── clickhouse-mcp         proxy to ClickHouse Cloud's MCP server, checked SELECT queries only, for Engineer jobs (127.0.0.1:3127) and the Assistant
     ├── cloudflare-mcp         proxy to Cloudflare's API MCP server, read scopes only, for Engineer jobs (127.0.0.1:3128) and the Assistant
+    ├── jira-mcp               proxy to Atlassian's Rovo MCP server on every Atlassian account you add: Jira and Confluence reads, Jira writes for the Assistant (reads for Engineer jobs on 127.0.0.1:3129)
     └── board                  127.0.0.1:3120 task board, crew, memory and stats (optional LAN listener for paired phones)
 services/paperclip-tasks-mcp   stdio bridge, mounted into paperclip, for agents' task updates
 ```
@@ -135,7 +136,7 @@ Then drop a transcript into your transcripts folder, or have a Meet call that pr
 | Slack Scout | every 30 min in work hours | Slack read/search; Paperclip task search/create/update/close |
 | Telegram Scout | every 30 min in work hours | Telegram read (your chats) and mention candidates; Paperclip task search/create/update/close |
 | Inbox Agent | every 30 min in work hours: one task per Gmail thread labelled `pennyworth` (archived or not), closed when the label is removed | Gmail read/search; Paperclip task search/create/update/close |
-| Assistant (Alfred) | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; Glean search; reference docs; Primer read + publish when asked; GitHub issues/PRs read + comment and open issues when asked; ClickHouse SELECT queries; Cloudflare read; notes read + meeting-note corrections; your writing voice guide, with lessons added when you ask; cached web search; Paperclip tasks |
+| Assistant (Alfred) | when assigned, and on your task replies | Slack/Telegram/Docs/Drive/Calendar read; Glean search; reference docs; Primer read + publish when asked; GitHub issues/PRs read + comment and open issues when asked; Jira and Confluence read + Jira issues opened, edited, commented on and moved when asked; ClickHouse SELECT queries; Cloudflare read; notes read + meeting-note corrections; your writing voice guide, with lessons added when you ask; cached web search; Paperclip tasks |
 | Writer (Ursula) | drafts, Slack drafts, Primer documents and agendas | Alfred's reading tools; Slack drafts and Primer publishing only |
 | Engineer (Ada), Reviewer (Linus), Security (Whit), SRE (Grace) | never woken: roles the runner works as, on the engine you pick | none (the runner does the work) |
 
@@ -278,6 +279,7 @@ Repositories outside your orgs are read-only (D-35): their branches are listed b
   - **Optional IAM user authentication:** SSO remains the default (`aws.auth: sso`). For an account without Identity Center, set `aws.auth: iam`, list its `name`, quoted `id`, `region`, and `read_role: ReadOnlyAccess` under `aws.accounts`, and run `scripts/aws-auth.sh`. It prompts locally for a dedicated read-only IAM user's access key ID and secret, saving them in Pennyworth's hidden AWS home with mode 0600. Never put keys in YAML or task comments. In IAM mode, `read_role` documents the user's policy; it does not assume a role or reduce permissions. Attach a read-only policy to that dedicated user before entering its keys. The runner checks the account and rejects root credentials, then issues one-hour STS session credentials for jobs and refreshes them while running; the long-lived keys stay hidden. IAM mode rejects `write_role` and supports reads only. Restart `pennyworth-runner` after changing configuration. Re-run the script to replace or rotate keys.
 - **ClickHouse:** set `CLICKHOUSE_MCP_URL=https://mcp.clickhouse.cloud/mcp` in `.env`, `docker compose up -d clickhouse-mcp board`, and press **Connect** in the ClickHouse banner on the board. Alfred, Ada and Grace see the organization's services, databases and tables, and run SELECT queries ([D-57](docs/DECISIONS.md)). The sign-in carries your own access, so clickhouse-mcp checks every query itself: one read statement, nothing that reaches outside the database (`url()`, `s3()`, `remote()`…), no `SETTINGS`, at most two minutes.
 - **Cloudflare:** set `CLOUDFLARE_MCP_URL=https://mcp.cloudflare.com/mcp` in `.env`, `docker compose up -d cloudflare-mcp board`, and press **Connect** in the Cloudflare banner on the board. Alfred and the Engineers (Claude Code and Codex) read every Cloudflare account and zone you can see: DNS, Workers and their code, R2, Zero Trust, rulesets, analytics and the rest, through the whole API ([D-64](docs/DECISIONS.md)). The sign-in asks Cloudflare for its read scopes only, so Cloudflare itself refuses every change, and a sign-in granted more is refused.
+- **Jira and Confluence:** set `JIRA_MCP_URL=https://mcp.atlassian.com/v2/mcp` in `.env`, `docker compose up -d jira-mcp board`, and press **Connect** on Jira in Settings; **Add account** connects another Atlassian account (a client's own Jira, say), and each account can be removed there ([D-69](docs/DECISIONS.md)). Alfred, Ursula and the Engineers (Claude Code and Codex) read issues, JQL searches and Confluence pages on every connected site; Alfred opens, edits, comments on, moves and links Jira issues when you ask. Calls go to the account that reaches the site; nothing can be deleted, time isn't logged and Confluence isn't changed. The sign-in asks Atlassian for exactly those permissions, and one granted more is refused.
 
 **Merging PRs:** ask the Engineer to merge a list of PRs ("merge these one by one, at least 15 minutes apart, watch CI on master"); it queues them, and the runner merges them in code when its run ends ([D-46](docs/DECISIONS.md)). Before each merge, the PR must be approved with green checks, mergeable, and its base branch green. An approved draft is marked ready first. After each merge it waits for the base branch's CI and the gap, and comments as it goes. Anything red, unapproved, conflicting or stuck for 90 minutes stops the queue with a comment; "carry on" resumes, "stop" stops. Settings: `merges.gap_minutes` and `merges.timeout_minutes` in `config/runner.yaml`.
 
@@ -357,7 +359,7 @@ If Workspace policy blocks consent, nothing else breaks: matching reports "calen
 
 | File | Purpose | In git |
 |---|---|---|
-| `.env` | host paths, user IDs, vault folders, reference doc folders, board LAN settings, Slack client ID, Telegram aliases and excluded chats, Primer, Glean, Grafana, ClickHouse and Cloudflare endpoints, GitHub comment organizations | no (`.env.example`) |
+| `.env` | host paths, user IDs, vault folders, reference doc folders, board LAN settings, Slack client ID, Telegram aliases and excluded chats, Primer, Glean, Grafana, ClickHouse, Cloudflare and Jira endpoints, GitHub comment organizations | no (`.env.example`) |
 | `config/system.yaml` | ops-mcp: timezone, your names and emails, transcript roots, cutoff, vault roots, thresholds | no (`system.example.yaml`) |
 | `config/routing.yaml` | meeting → note rules | no (`routing.example.yaml`) |
 | `config/paperclip.yaml` | company, labels, agents, routines and schedules, MCP servers, Codex hardening | no (`paperclip.example.yaml`) |
@@ -394,7 +396,7 @@ To recover: `docker compose down`, `systemctl --user stop pennyworth-runner`, th
 - Paperclip has no vault, transcript or home mounts and no Docker socket, and listens on loopback only.
 - ops-mcp is the only vault writer. It sees only the configured vault folders, can't delete or replace notes, and has no Internet route.
 - Agents run Codex with its read-only sandbox; shell, browser, computer-use and app connectors are disabled, and live web search is never combined with private-data tools. Agents act only through ops-mcp, read-only Google and Slack tools, and Paperclip task updates.
-- No component can send email or Slack messages, or write to Calendar, Drive or Docs. Writes to GitHub (pushes, PRs, merges, comments, issues, reviews), Primer publishing and Slack drafts happen only when you ask, and code checks an Engineer's push, PR, merge and Primer publish against your own words ([D-46](docs/DECISIONS.md)).
+- No component can send email or Slack messages, or write to Calendar, Drive or Docs. Writes to GitHub (pushes, PRs, merges, comments, issues, reviews), Jira issues (opened, edited, commented on, moved, never deleted), Primer publishing and Slack drafts happen only when you ask, and code checks an Engineer's push, PR, merge and Primer publish against your own words ([D-46](docs/DECISIONS.md)).
 - Engineer jobs read Grafana and Google Cloud with read-only OAuth scopes (Grafana and Google refuse writes themselves), and can't read either gcloud sign-in ([D-48](docs/DECISIONS.md)). They read AWS with read-only roles; an AWS change is one command the runner runs with the write role, on your word, and they can't read either AWS sign-in ([D-59](docs/DECISIONS.md)). Alfred and Engineer jobs read Cloudflare with its read scopes only, so Cloudflare refuses writes itself ([D-64](docs/DECISIONS.md)).
 - Source content is untrusted: every agent prompt says so, and model output is schema-validated and escaped before it reaches markdown, so it can't forge markers or headings.
 
@@ -415,6 +417,7 @@ services/github-mcp/            GitHub issues and PRs with your gh token, guarde
 services/grafana-mcp/           proxy to Grafana Cloud's MCP server, read/query only
 services/clickhouse-mcp/        proxy to ClickHouse Cloud's MCP server, checked SELECTs only
 services/cloudflare-mcp/        proxy to Cloudflare's API MCP server, read scopes only
+services/jira-mcp/              proxy to Atlassian's Rovo MCP server, several accounts, no deletes
 services/board/                 task board, crew, memory and stats: server + web app
 services/runner/                host service for coding jobs, replies and review-request tasks
 services/paperclip-tasks-mcp/   stdio bridge so sandboxed agents can update Paperclip tasks

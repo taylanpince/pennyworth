@@ -185,6 +185,8 @@ export interface Board {
   clickhouse: SignInStatus | null;
   /** Cloudflare sign-in, for the Engineers and Alfred (D-64); null when the board can't ask. */
   cloudflare: SignInStatus | null;
+  /** Jira and Confluence, one sign-in per Atlassian account (D-69); null when the board can't ask. */
+  jira: SignInStatus | null;
   /** The off-machine backup of tasks and board (D-58); null when the board can't tell. */
   backup: BackupStatus | null;
   /** Connection banners hidden while a state lasts: service → the `since` it was hidden at (D-67). */
@@ -199,13 +201,15 @@ export interface BackupStatus {
   stale: boolean;
 }
 
-/** A sign-in through an MCP proxy (Glean, Grafana, ClickHouse, Cloudflare). */
+/** A sign-in through an MCP proxy (Glean, Grafana, ClickHouse, Cloudflare, Jira). */
 export interface SignInStatus {
   state: "missing" | "ok" | "expired" | "unknown";
   /** Whether the service is set up (GLEAN_MCP_URL, GRAFANA_URL, CLICKHOUSE_MCP_URL, CLOUDFLARE_MCP_URL): without it there's no banner. */
   configured: boolean;
   since: string;
   detail?: string;
+  /** Jira's accounts (D-69), each with its own state; `state` is the worst. */
+  accounts?: { id: string; label: string; state: "ok" | "expired" | "unknown"; since: string; detail?: string }[];
 }
 
 export interface TelegramStatus {
@@ -460,9 +464,9 @@ export interface Connection {
   detail?: string;
   since?: string;
   checkedAt?: string;
-  accounts: { label: string; state: ConnectionState; detail?: string; primary?: boolean }[];
+  accounts: { id?: string; label: string; state: ConnectionState; detail?: string; primary?: boolean }[];
   action:
-    | { kind: "connect"; href: string }
+    | { kind: "connect"; href: string; multiple?: true }
     | { kind: "panel"; panel: "google" | "slack" | "telegram" | "whatsapp" }
     | { kind: "signin"; provider: string; command: string; note?: string }
     | { kind: "command"; command: string; note?: string }

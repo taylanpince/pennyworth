@@ -54,6 +54,10 @@ clickhouse:
 # never OpenRouter. cloudflare-mcp on loopback (token: $PENNYWORTH_SECRETS_DIR/cloudflare_mcp_token).
 cloudflare:
   url: http://127.0.0.1:3128/mcp
+# Jira and Confluence on every Atlassian account added in Settings, reads only, for Claude Code and Codex jobs only (D-69);
+# never OpenRouter. jira-mcp's /mcp/read on loopback (token: $PENNYWORTH_SECRETS_DIR/jira_mcp_read_token).
+jira:
+  url: http://127.0.0.1:3129/mcp/read
 gcp:
   credentials: ~/.config/pennyworth/gcloud/application_default_credentials.json
   # Projects jobs are told to start with; the first is gcloud's default.

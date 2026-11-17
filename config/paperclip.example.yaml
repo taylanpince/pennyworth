@@ -54,6 +54,10 @@ mcp_servers:
   cloudflare:
     url: http://cloudflare-mcp:8091/mcp
     bearer_token_env_var: PENNYWORTH_CLOUDFLARE_MCP_TOKEN
+  # Jira and Confluence on every Atlassian account signed in from Settings (D-69): reads, and Jira writes (no deletes).
+  jira:
+    url: http://jira-mcp:8092/mcp
+    bearer_token_env_var: PENNYWORTH_JIRA_MCP_TOKEN
   paperclip_tasks:
     command: node
     args: [/opt/pennyworth/paperclip-tasks-mcp.mjs]
@@ -185,7 +189,7 @@ agents:
     # avatar bundled with the board (services/board/web/public/crew/<avatar>.svg).
     persona: { name: Alfred, voice: "Measured and dry; leads with the answer, then the sources.", avatar: alfred }
     # The role in one line (D-60): shown when you assign work, and the agent's own reminder of its job.
-    role: "Research, catch-ups, GitHub tickets and comments, scheduling, and getting work to the right crew member."
+    role: "Research, catch-ups, GitHub and Jira tickets and comments, scheduling, and getting work to the right crew member."
     title: Research, drafts and acting on your task replies
     instructions: config/agents/assistant.md
     adapter: codex_local
@@ -195,7 +199,7 @@ agents:
     timeout_sec: 3600
     # Public web pages and search via OpenAI's cached index only (D-19).
     web_search: cached
-    mcp_servers: [slack, telegram, google_workspace, primer, glean, github, clickhouse, cloudflare, paperclip_tasks, ops_mcp]
+    mcp_servers: [slack, telegram, google_workspace, primer, glean, github, clickhouse, cloudflare, jira, paperclip_tasks, ops_mcp]
     enabled_tools:
       # Reads only, on request (D-29); the scout tools stay with the Telegram Scout.
       telegram: [list_allowed_chats, read_chat_history, search_chat_history, get_new_messages]
@@ -211,6 +215,8 @@ agents:
       clickhouse: [get_organizations, get_services_list, get_service_details, list_databases, list_tables, run_select_query]
       # Read scopes only: Cloudflare refuses every change (D-64).
       cloudflare: [search, execute, docs, whoami]
+      # Reads, and Jira issues opened, edited, commented on, moved and linked, only when asked (D-69). Never deletes.
+      jira: [getAccessibleAtlassianResources, atlassianUserInfo, search, fetch, getContentFormatGuide, getJiraIssue, searchJiraIssuesUsingJql, getVisibleJiraProjects, getJiraProjectIssueTypesMetadata, getJiraIssueTypeMetaWithFields, getTransitionsForJiraIssue, getJiraIssueRemoteIssueLinks, getIssueLinkTypes, lookupJiraAccountId, getConfluencePage, getConfluenceSpaces, getPagesInConfluenceSpace, getConfluencePageDescendants, getConfluencePageFooterComments, getConfluencePageInlineComments, getConfluenceCommentChildren, searchConfluenceUsingCql, createJiraIssue, editJiraIssue, addCommentToJiraIssue, transitionJiraIssue, createIssueLink]
       # task_create_engineer_task: Engineer sub-tasks that wait for the user's go-ahead (D-24).
       # task_create_subtasks: the user's own subtasks of one of their tasks, folded into it on the board (D-68).
       # task_schedule, task_recurring: board moves on a date and recurring tasks (D-25). task_merge: merging tasks (D-56).
@@ -229,7 +235,7 @@ agents:
     reasoning_effort: medium
     timeout_sec: 3600
     web_search: cached
-    mcp_servers: [slack, telegram, google_workspace, primer, glean, github, paperclip_tasks, ops_mcp]
+    mcp_servers: [slack, telegram, google_workspace, primer, glean, github, jira, paperclip_tasks, ops_mcp]
     enabled_tools:
       telegram: [list_allowed_chats, read_chat_history, search_chat_history, get_new_messages]
       ops_mcp: [obsidian_search, obsidian_read, obsidian_read_document_map, voice_note_read, voice_note_add, knowledge_list, knowledge_index, knowledge_search, knowledge_read]
@@ -238,6 +244,8 @@ agents:
       slack: [slack_search_public, slack_search_public_and_private, slack_search_channels, slack_search_users, slack_read_channel, slack_read_thread, slack_read_user_profile, slack_list_user_channels, slack_send_message_draft]
       # Reads only: comments, issues and reviews stay with the Assistant.
       github: [github_whoami, github_issue_read, github_search_issues]
+      # Reads only: Jira changes stay with the Assistant (D-69).
+      jira: [getAccessibleAtlassianResources, atlassianUserInfo, search, fetch, getContentFormatGuide, getJiraIssue, searchJiraIssuesUsingJql, getVisibleJiraProjects, getJiraProjectIssueTypesMetadata, getJiraIssueTypeMetaWithFields, getTransitionsForJiraIssue, getJiraIssueRemoteIssueLinks, getIssueLinkTypes, lookupJiraAccountId, getConfluencePage, getConfluenceSpaces, getPagesInConfluenceSpace, getConfluencePageDescendants, getConfluencePageFooterComments, getConfluencePageInlineComments, getConfluenceCommentChildren, searchConfluenceUsingCql]
       google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
       paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_comment, task_handoff, task_set_status, task_pass_on, memory_recall, memory_search, memory_remember, memory_propose]
 

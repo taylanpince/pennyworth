@@ -753,6 +753,39 @@ export function CloudflareBanner({ cloudflare, canConnect }: { cloudflare: Board
 }
 
 /**
+ * Jira sign-in (D-69): a banner when no Atlassian account is connected yet, or one of them stopped
+ * working, naming it. Reconnecting signs in as that account again (Settings lists them all).
+ */
+export function JiraBanner({ jira, canConnect }: { jira: Board["jira"]; canConnect: boolean }) {
+  if (!jira?.configured || (jira.state !== "missing" && jira.state !== "expired")) return null;
+  const since = new Date(jira.since);
+  const expired = (jira.accounts ?? []).filter((a) => a.state === "expired").map((a) => a.label.split(" · ")[0]);
+  return (
+    <div className="alert" role="alert">
+      <div className="alert-row">
+        <span>
+          {jira.state === "missing" ? (
+            <>Jira isn't connected yet. Alfred, Ursula and the Engineers can't read it until it is.</>
+          ) : (
+            <>
+              Jira sign-in{expired.length ? ` for ${expired.join(", ")}` : ""} stopped working on {since.toLocaleDateString(undefined, { weekday: "long" })} at{" "}
+              {since.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}. Its sites can't be read or updated until you sign in as that account again.
+            </>
+          )}
+        </span>
+        {canConnect ? (
+          <a className="btn" href="/jira/connect">
+            {jira.state === "missing" ? "Connect" : "Reconnect"}
+          </a>
+        ) : (
+          <span className="alert-hint">Connect from the board on your computer.</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * ClickHouse sign-in (D-57): a banner when Pennyworth isn't signed in to ClickHouse Cloud yet, or it
  * stopped accepting the sign-in, with Connect / Reconnect on the laptop (it returns to its loopback address).
  */

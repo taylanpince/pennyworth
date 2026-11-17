@@ -82,6 +82,9 @@ export function loadConfig() {
     // Cloudflare reads for Claude Code and Codex jobs (D-64): cloudflare-mcp's loopback port.
     cloudflareMcpUrl: env.CLOUDFLARE_RUNNER_URL ?? cfg.cloudflare?.url ?? "http://127.0.0.1:3128/mcp",
     cloudflareTokenFile: join(secrets, "cloudflare_mcp_token"),
+    // Jira and Confluence reads for Claude Code and Codex jobs (D-69): jira-mcp's /mcp/read, with a token of its own.
+    jiraMcpUrl: env.JIRA_RUNNER_URL ?? cfg.jira?.url ?? "http://127.0.0.1:3129/mcp/read",
+    jiraTokenFile: join(secrets, "jira_mcp_read_token"),
     gcp: {
       credentialsFile: gcpCredentials,
       projects: (cfg.gcp?.projects ?? []).filter(Boolean),

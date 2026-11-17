@@ -23,7 +23,7 @@ import { CrewView } from "./Agents";
 import { MemoryView, useMemoryPending } from "./Memory";
 import { StatsView } from "./Stats";
 import { PairRequired, api, type Session } from "./api";
-import { BackupBanner, CardView, ClickHouseBanner, CloudflareBanner, ExecutorPicker, GleanBanner, GoogleBanner, GrafanaBanner, Hideable, PhoneIcon, bannerSince, PlusIcon, SortableCard, TelegramBanner, googleBannerKey, memberIssue } from "./components";
+import { BackupBanner, CardView, ClickHouseBanner, CloudflareBanner, ExecutorPicker, GleanBanner, GoogleBanner, GrafanaBanner, Hideable, JiraBanner, PhoneIcon, bannerSince, PlusIcon, SortableCard, TelegramBanner, googleBannerKey, memberIssue } from "./components";
 import { CrewPicker, Drawer } from "./Drawer";
 import { Markdown, setSlackTeams } from "./markdown";
 import { PairScreen, PhonePanel } from "./Pairing";
@@ -611,6 +611,9 @@ export function App() {
       </Hideable>
       <Hideable id="cloudflare" since={bannerSince(board.cloudflare, ["missing", "expired"])} hidden={board.hiddenBanners} onHide={hideBanner}>
         <CloudflareBanner cloudflare={board.cloudflare} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
+      </Hideable>
+      <Hideable id="jira" since={bannerSince(board.jira, ["missing", "expired"])} hidden={board.hiddenBanners} onHide={hideBanner}>
+        <JiraBanner jira={board.jira} canConnect={session?.mode === "local" && ["localhost", "127.0.0.1"].includes(location.hostname)} />
       </Hideable>
       <BackupBanner backup={board.backup} />
 
