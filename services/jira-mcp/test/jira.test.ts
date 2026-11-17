@@ -11,19 +11,28 @@ const tool = (name: string) => ({ name, inputSchema: { type: "object" as const }
 const tmp = () => mkdtempSync(join(tmpdir(), "jira-mcp-"));
 // The scopes mcp.atlassian.com/v2/mcp offered on 2026-11-17.
 const SUPPORTED = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures/scopes.json"), "utf8")) as string[];
-// Tool names of the Rovo MCP server (v1, 2026-11-17), writes and other products included.
+// The v2 server's tools as Pennyworth's sign-in saw them on 2026-11-17, and some of v1's writes.
 const UPSTREAM_TOOLS = [
-  ...READ_TOOLS,
-  ...WRITE_TOOLS,
+  "getAccessibleAtlassianResources",
+  "atlassianUserInfo",
+  "getConfluenceContent",
+  "searchConfluence",
+  "getJiraIssue",
+  "listJiraIssueComments",
+  "searchJiraIssuesUsingJql",
+  "createJiraIssue",
+  "editJiraIssue",
+  "transitionJiraIssue",
+  "addOrEditJiraIssueComment",
+  "discover",
+  "executeRead",
+  "executeWrite",
+  "executeDestructive",
+  "search",
   "addWorklogToJiraIssue",
   "createConfluencePage",
   "updateConfluencePage",
-  "createConfluenceFooterComment",
-  "createConfluenceInlineComment",
   "createCompassComponent",
-  "createCompassComponentRelationship",
-  "getTeamworkGraphContext",
-  "addTeamworkGraphContext",
 ];
 
 describe("jira-mcp policy", () => {
@@ -35,17 +44,18 @@ describe("jira-mcp policy", () => {
     expect(extraScopes("read:jira:agent-interface delete:jira:agent-interface write:confluence:agent-interface")).toEqual(["delete:jira:agent-interface", "write:confluence:agent-interface"]);
   });
 
-  it("exposes the reads and the Jira writes on /mcp, the reads only on /mcp/read, and never worklogs or Confluence writes", () => {
+  it("exposes every upstream tool on one list or the other, the reads only on /mcp/read, and never the generic writes, worklogs or Confluence writes", () => {
     const all = allowedTools(UPSTREAM_TOOLS.map(tool), new Set(DEFAULT_ALLOWLIST));
     expect(all.map((t) => t.name).sort()).toEqual([...READ_TOOLS, ...WRITE_TOOLS].sort());
     for (const t of all) expect(t.annotations).toMatchObject({ readOnlyHint: !WRITE_TOOLS.includes(t.name), destructiveHint: false, openWorldHint: false });
     const reads = allowedTools(UPSTREAM_TOOLS.map(tool), readOnly(new Set(DEFAULT_ALLOWLIST)));
     expect(reads.map((t) => t.name).sort()).toEqual([...READ_TOOLS].sort());
-    for (const name of ["addWorklogToJiraIssue", "createConfluencePage", "updateConfluencePage", "deleteJiraIssue", "createCompassComponent"]) expect(isAllowed(name, new Set([name])), name).toBe(false);
+    for (const name of ["executeWrite", "executeDestructive", "addWorklogToJiraIssue", "createConfluencePage", "updateConfluencePage", "deleteJiraIssue", "createCompassComponent"]) expect(isAllowed(name, new Set([name])), name).toBe(false);
   });
 
-  it("finds the site a call is for: cloudId, or the cloud id in an ARI", () => {
+  it("finds the site a call is for: cloudId, the execute tools' inputs.cloudId, or the cloud id in an ARI", () => {
     expect(siteOf({ cloudId: "coinme.atlassian.net", issueIdOrKey: "OPS-1" })).toBe("coinme.atlassian.net");
+    expect(siteOf({ name: "listJiraIssueTransitions", inputs: { cloudId: "polygon.atlassian.net" } })).toBe("polygon.atlassian.net");
     expect(siteOf({ id: "ari:cloud:jira:0a1b2c3d-0000-4000-8000-123456789abc:issue/10001" })).toBe("0a1b2c3d-0000-4000-8000-123456789abc");
     expect(siteOf({ query: "x" })).toBeUndefined();
     const site = { id: "0a1b2c3d-0000-4000-8000-123456789abc", url: "https://polygon.atlassian.net" };
@@ -106,12 +116,16 @@ describe("sign-in", () => {
 });
 
 describe("accounts", () => {
-  const POLYGON = { id: "11111111-1111-4111-8111-111111111111", url: "https://polygon.atlassian.net", name: "polygon" };
-  const COINME = { id: "22222222-2222-4222-8222-222222222222", url: "https://coinme.atlassian.net", name: "coinme" };
-  const people: Record<string, { user: object; sites: object[] }> = {
-    polygon: { user: { account_id: "acc-1", email: "taylan@polygon.technology", name: "Taylan" }, sites: [POLYGON] },
-    polygon2: { user: { account_id: "acc-1", email: "taylan@polygon.technology", name: "Taylan" }, sites: [POLYGON] },
-    coinme: { user: { account_id: "acc-2", email: "taylan@coinme.com", name: "Taylan" }, sites: [COINME] },
+  const POLYGON = { id: "fdd75846-56ec-4027-b459-6af5a0baed22", url: "https://polygon.atlassian.net" };
+  const COINME = { id: "deb9021a-ab5c-4e4a-ab21-1f1c198c8254", url: "https://coinme.atlassian.net" };
+  // Shaped like the v2 server's answers on 2026-11-17: one person, one site per sign-in, no email.
+  const ME = "712020:bf782fbc-ee71-4cdb-90f2-b2e4fce2615f";
+  const resources = (s: { id: string; url: string }) => ({ data: { resources: [{ cloudId: s.id, url: s.url, products: [{ id: "jira", access: "read-write" }] }] } });
+  const people: Record<string, { user: object; sites: object }> = {
+    polygon: { user: { data: { accountId: ME } }, sites: resources(POLYGON) },
+    polygon2: { user: { data: { accountId: ME } }, sites: resources(POLYGON) },
+    coinme: { user: { data: { accountId: ME } }, sites: resources(COINME) },
+    broken: { user: { data: { accountId: ME } }, sites: { data: { surprise: true } } },
   };
   const text = (v: unknown): CallResult => ({ content: [{ type: "text", text: JSON.stringify(v) }] });
   function fake() {
@@ -132,32 +146,39 @@ describe("accounts", () => {
   const token = (t: string): StoredToken => ({ access_token: t, refresh_token: `r-${t}`, expires_at: Date.now() + 3600_000, client_id: "c", token_endpoint: "https://auth.atlassian.com/oauth/token" });
   const answer = (r: CallResult) => (r.content ?? []).map((c) => c.text).join("\n");
 
-  it("reads who a sign-in is and its sites from Atlassian's answers", () => {
-    expect(parseSites(text([POLYGON, { id: 1 }]))).toEqual([POLYGON]);
-    expect(parseUser(text(people.coinme!.user))).toEqual({ accountId: "acc-2", email: "taylan@coinme.com", name: "Taylan" });
+  it("reads who a sign-in is and its sites, from v2's answers and v1's", () => {
+    expect(parseSites(text(resources(COINME)))).toEqual([COINME]);
+    expect(parseSites(text([{ id: POLYGON.id, url: POLYGON.url, name: "polygon" }, { id: 1 }]))).toEqual([{ ...POLYGON, name: "polygon" }]);
+    expect(parseUser(text({ data: { accountId: ME } }))).toEqual({ accountId: ME });
+    expect(parseUser(text({ account_id: "acc-2", email: "x@y.com", name: "X" }))).toEqual({ accountId: "acc-2", email: "x@y.com", name: "X" });
+    expect(label({ id: "a", sites: [POLYGON], addedAt: "" })).toBe("polygon.atlassian.net");
     expect(label({ id: "a", email: "x@y", sites: [POLYGON, COINME], addedAt: "" })).toBe("x@y · polygon.atlassian.net, coinme.atlassian.net");
   });
 
-  it("keeps each account, sends a call to the account reaching its site, and survives a restart", async () => {
+  it("keeps one person's sign-ins for two sites apart, routes each call by site, and survives a restart", async () => {
     const dir = tmp();
     const { calls, connector } = fake();
     const a = new Accounts(dir, connector);
     await a.add(token("polygon"));
     await a.add(token("coinme"));
-    expect(a.list().map((x) => x.email).sort()).toEqual(["taylan@coinme.com", "taylan@polygon.technology"]);
+    expect(a.list().map((x) => label(x)).sort()).toEqual(["coinme.atlassian.net", "polygon.atlassian.net"]);
     for (const f of readdirSync(dir)) expect(statSync(join(dir, f)).mode & 0o777, f).toBe(0o600);
 
     expect(answer(await a.call("getJiraIssue", { cloudId: "coinme.atlassian.net", issueIdOrKey: "OPS-1" }))).toContain('"ok":"coinme"');
     expect(answer(await a.call("createJiraIssue", { cloudId: POLYGON.id, projectKey: "PT" }))).toContain('"ok":"polygon"');
-    expect(answer(await a.call("fetch", { id: `ari:cloud:confluence:${COINME.id}:page/1` }))).toContain('"ok":"coinme"');
+    expect(answer(await a.call("addOrEditJiraIssueComment", { cloudId: "https://polygon.atlassian.net/browse/PT-1", issueIdOrKey: "PT-1" }))).toContain('"ok":"polygon"');
+    expect(answer(await a.call("executeRead", { name: "listJiraIssueTransitions", inputs: { cloudId: "coinme.atlassian.net", issueIdOrKey: "OPS-1" } }))).toContain('"ok":"coinme"');
     await expect(a.call("getJiraIssue", { cloudId: "globex.atlassian.net" })).rejects.toThrow(RouteError);
     await expect(a.call("getJiraIssue", { cloudId: "globex.atlassian.net" })).rejects.toThrow(/polygon\.atlassian\.net, coinme\.atlassian\.net|coinme\.atlassian\.net, polygon\.atlassian\.net/);
 
-    // No site named: reads go to every account under each one's name; writes must say which.
-    const both = answer(await a.call("search", { query: "wallet" }));
-    expect(both).toMatch(/Account: taylan@polygon\.technology · polygon\.atlassian\.net/);
-    expect(both).toMatch(/Account: taylan@coinme\.com · coinme\.atlassian\.net/);
+    // No site named: reads go to every account under each one's name; writes must say which; discover asks one.
+    const both = answer(await a.call("searchJiraIssuesUsingJql", { jql: "assignee = currentUser()" }));
+    expect(both).toMatch(/Account: polygon\.atlassian\.net/);
+    expect(both).toMatch(/Account: coinme\.atlassian\.net/);
     await expect(a.call("editJiraIssue", { issueIdOrKey: "PT-1" })).rejects.toThrow(/pass cloudId/);
+    calls.length = 0;
+    await a.call("discover", { query: "issue transitions" });
+    expect(calls.filter((c) => c.name === "discover")).toHaveLength(1);
 
     const again = new Accounts(dir, connector);
     expect(again.list()).toHaveLength(2);
@@ -166,7 +187,7 @@ describe("accounts", () => {
     expect(calls.filter((c) => c.name === "getJiraIssue").map((c) => c.token)).toEqual(["polygon"]);
   });
 
-  it("replaces an account when the same person signs in again, and forgets a removed one", async () => {
+  it("replaces an account only when the same person signs in again for its site, and forgets a removed one", async () => {
     const dir = tmp();
     const { connector } = fake();
     const a = new Accounts(dir, connector);
@@ -176,7 +197,12 @@ describe("accounts", () => {
     expect(a.list()).toHaveLength(1);
     expect(JSON.parse(readFileSync(join(dir, `${first.id}.json`), "utf8")).access_token).toBe("polygon2");
     expect(answer(await a.call("getJiraIssue", { issueIdOrKey: "PT-1" }))).toContain('"ok":"polygon2"');
+    // Sites it couldn't read: a new account, never a replaced one.
+    const unknown = await a.add(token("broken"));
+    expect(unknown.id).not.toBe(first.id);
+    expect(a.list()).toHaveLength(2);
 
+    expect(await a.remove(unknown.id)).toBe(true);
     expect(await a.remove(first.id)).toBe(true);
     expect(a.list()).toEqual([]);
     expect(existsSync(join(dir, `${first.id}.json`))).toBe(false);

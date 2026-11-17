@@ -32,6 +32,8 @@ export type Connector = (token: string) => Promise<Upstream>;
 
 /** Tools about the sign-ins themselves: asked of every account, answers joined. */
 const EVERY_ACCOUNT = new Set(["atlassianUserInfo", "getAccessibleAtlassianResources"]);
+/** Tools whose answer is the same for every account (discover searches Atlassian's operation catalog): asked of one. */
+const ANY_ACCOUNT = new Set(["discover"]);
 
 export class RouteError extends Error {}
 
@@ -52,16 +54,26 @@ function jsonOf(r: CallResult): unknown {
   }
 }
 
+/** The answer's payload: v2 wraps it in `data` (`{"data":{"resources":[…]}}`), v1 didn't. */
+function payload(r: CallResult): unknown {
+  const j = jsonOf(r) as { data?: unknown } | undefined;
+  return j && typeof j === "object" && !Array.isArray(j) && "data" in j ? j.data : j;
+}
+
 export function parseSites(r: CallResult): Site[] {
-  const j = jsonOf(r) as unknown;
+  const j = payload(r) as unknown;
   const list = Array.isArray(j) ? j : Array.isArray((j as { resources?: unknown })?.resources) ? (j as { resources: unknown[] }).resources : [];
-  return list
-    .filter((s): s is { id: string; url: string; name?: string } => typeof (s as Site)?.id === "string" && typeof (s as Site)?.url === "string")
-    .map((s) => ({ id: s.id, url: s.url, ...(typeof s.name === "string" ? { name: s.name } : {}) }));
+  return list.flatMap((s) => {
+    const o = (s ?? {}) as Record<string, unknown>;
+    // v2 names the id `cloudId`, v1 `id`.
+    const id = typeof o.cloudId === "string" ? o.cloudId : o.id;
+    if (typeof id !== "string" || typeof o.url !== "string") return [];
+    return [{ id, url: o.url, ...(typeof o.name === "string" ? { name: o.name } : {}) }];
+  });
 }
 
 export function parseUser(r: CallResult): Pick<AccountInfo, "accountId" | "email" | "name"> {
-  const j = (jsonOf(r) ?? {}) as Record<string, unknown>;
+  const j = (payload(r) ?? {}) as Record<string, unknown>;
   const str = (...keys: string[]) => keys.map((k) => j[k]).find((v): v is string => typeof v === "string" && v.length > 0 && v.length < 300);
   const accountId = str("account_id", "accountId");
   const email = str("email");
@@ -69,11 +81,15 @@ export function parseUser(r: CallResult): Pick<AccountInfo, "accountId" | "email
   return { ...(accountId ? { accountId } : {}), ...(email ? { email } : {}), ...(name ? { name } : {}) };
 }
 
-/** "you@x.com · polygon.atlassian.net, coinme.atlassian.net", for Settings and for joined answers. */
+/**
+ * "polygon.atlassian.net", or "you@x.com · polygon.atlassian.net" where Atlassian says who (v2 gives only
+ * an account id, and one person's sign-ins differ by site), for Settings and for joined answers.
+ */
 export function label(info: AccountInfo): string {
-  const who = info.email ?? info.name ?? `Atlassian account ${info.id}`;
+  const who = info.email ?? info.name;
   const sites = info.sites.map((s) => s.url.replace(/^https?:\/\//, "").replace(/\/$/, ""));
-  return sites.length ? `${who} · ${sites.join(", ")}` : who;
+  if (!sites.length) return who ?? `Atlassian account ${info.id}`;
+  return who ? `${who} · ${sites.join(", ")}` : sites.join(", ");
 }
 
 class Account {
@@ -135,11 +151,13 @@ export class Accounts {
     const conn = await this.connector(await a.tokens.accessToken());
     a.upstream = { conn, at: Date.now() };
     a.tokens.mark("ok");
-    // Sites come and go (an invitation accepted, access removed): keep the routing current.
+    // Sites come and go (an invitation accepted, access removed): keep the routing current, and fill in who
+    // the account is if the sign-in couldn't tell.
     try {
       const sites = parseSites(await conn.call("getAccessibleAtlassianResources", {}, 20_000));
-      if (sites.length && JSON.stringify(sites) !== JSON.stringify(a.info.sites)) {
-        a.info = { ...a.info, sites };
+      const user = a.info.accountId ? {} : parseUser(await conn.call("atlassianUserInfo", {}, 20_000));
+      if ((sites.length && JSON.stringify(sites) !== JSON.stringify(a.info.sites)) || Object.keys(user).length) {
+        a.info = { ...a.info, ...user, ...(sites.length ? { sites } : {}) };
         this.saveInfo(a.info);
       }
     } catch (err) {
@@ -197,6 +215,7 @@ export class Accounts {
     const all = [...this.accounts.values()];
     if (!all.length) throw new AtlassianAuthError("no Atlassian account is connected (Connect in Settings)");
     if (EVERY_ACCOUNT.has(name)) return all;
+    if (ANY_ACCOUNT.has(name)) return [all.find((a) => a.tokens.status().state !== "expired") ?? all[0]!];
     const ref = siteOf(args);
     if (ref) {
       const hit = all.find((a) => a.info.sites.some((s) => matchesSite(ref, s)));
@@ -229,8 +248,10 @@ export class Accounts {
   }
 
   /**
-   * Keep a new sign-in: find out whose it is and which sites it reaches. The same person signing in
-   * again for sites they already had replaces that account (a Reconnect); anything else is added.
+   * Keep a new sign-in: find out whose it is and which sites it reaches. Atlassian grants one site per
+   * sign-in, so one person has an account per site: only the same person signing in again for a site an
+   * account already has replaces it (a Reconnect). Anything else, or anything unknown, is added: a spare
+   * account can be removed in Settings, a replaced one would lose its site without a word.
    */
   async add(token: StoredToken): Promise<AccountInfo> {
     const conn = await this.connector(token.access_token);
@@ -243,7 +264,7 @@ export class Accounts {
       await conn.close().catch(() => undefined);
     }
     const same = [...this.accounts.values()].find(
-      (a) => (user.accountId ? a.info.accountId === user.accountId : Boolean(user.email) && a.info.email === user.email) && (!sites.length || !a.info.sites.length || a.info.sites.some((s) => sites.some((n) => n.id === s.id))),
+      (a) => (user.accountId ? a.info.accountId === user.accountId : Boolean(user.email) && a.info.email === user.email) && a.info.sites.some((s) => sites.some((n) => n.id === s.id)),
     );
     const id = same?.info.id ?? randomBytes(4).toString("hex");
     const info: AccountInfo = { id, ...user, sites, addedAt: same?.info.addedAt ?? new Date().toISOString() };

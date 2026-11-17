@@ -215,8 +215,8 @@ agents:
       clickhouse: [get_organizations, get_services_list, get_service_details, list_databases, list_tables, run_select_query]
       # Read scopes only: Cloudflare refuses every change (D-64).
       cloudflare: [search, execute, docs, whoami]
-      # Reads, and Jira issues opened, edited, commented on, moved and linked, only when asked (D-69). Never deletes.
-      jira: [getAccessibleAtlassianResources, atlassianUserInfo, search, fetch, getContentFormatGuide, getJiraIssue, searchJiraIssuesUsingJql, getVisibleJiraProjects, getJiraProjectIssueTypesMetadata, getJiraIssueTypeMetaWithFields, getTransitionsForJiraIssue, getJiraIssueRemoteIssueLinks, getIssueLinkTypes, lookupJiraAccountId, getConfluencePage, getConfluenceSpaces, getPagesInConfluenceSpace, getConfluencePageDescendants, getConfluencePageFooterComments, getConfluencePageInlineComments, getConfluenceCommentChildren, searchConfluenceUsingCql, createJiraIssue, editJiraIssue, addCommentToJiraIssue, transitionJiraIssue, createIssueLink]
+      # Reads, and Jira issues opened, edited, moved and commented on, only when asked (D-69). Never deletes.
+      jira: [getAccessibleAtlassianResources, atlassianUserInfo, search, getJiraIssue, listJiraIssueComments, searchJiraIssuesUsingJql, getConfluenceContent, searchConfluence, discover, executeRead, createJiraIssue, editJiraIssue, transitionJiraIssue, addOrEditJiraIssueComment]
       # task_create_engineer_task: Engineer sub-tasks that wait for the user's go-ahead (D-24).
       # task_create_subtasks: the user's own subtasks of one of their tasks, folded into it on the board (D-68).
       # task_schedule, task_recurring: board moves on a date and recurring tasks (D-25). task_merge: merging tasks (D-56).
@@ -245,7 +245,7 @@ agents:
       # Reads only: comments, issues and reviews stay with the Assistant.
       github: [github_whoami, github_issue_read, github_search_issues]
       # Reads only: Jira changes stay with the Assistant (D-69).
-      jira: [getAccessibleAtlassianResources, atlassianUserInfo, search, fetch, getContentFormatGuide, getJiraIssue, searchJiraIssuesUsingJql, getVisibleJiraProjects, getJiraProjectIssueTypesMetadata, getJiraIssueTypeMetaWithFields, getTransitionsForJiraIssue, getJiraIssueRemoteIssueLinks, getIssueLinkTypes, lookupJiraAccountId, getConfluencePage, getConfluenceSpaces, getPagesInConfluenceSpace, getConfluencePageDescendants, getConfluencePageFooterComments, getConfluencePageInlineComments, getConfluenceCommentChildren, searchConfluenceUsingCql]
+      jira: [getAccessibleAtlassianResources, atlassianUserInfo, search, getJiraIssue, listJiraIssueComments, searchJiraIssuesUsingJql, getConfluenceContent, searchConfluence, discover, executeRead]
       google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
       paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_comment, task_handoff, task_set_status, task_pass_on, memory_recall, memory_search, memory_remember, memory_propose]
 

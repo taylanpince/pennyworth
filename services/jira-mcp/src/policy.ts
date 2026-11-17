@@ -24,37 +24,31 @@ export function extraScopes(granted: string): string[] {
 }
 
 /**
- * Reads: Jira issues, JQL search, projects, issue types and fields, transitions, links and people;
- * Confluence pages, spaces, comments and CQL search; Rovo's search and fetch across both; and the
- * accounts and sites the sign-ins reach.
+ * Reads (the v2 server's names, 2026-11-17): Jira issues, their comments and JQL search; Confluence
+ * content and CQL search; Rovo's search; the sign-in's user and sites; and Atlassian's generic read
+ * runner: `discover` finds an operation (projects, issue types, transitions, link types, people, sprints…)
+ * and `executeRead` runs it. Atlassian files every operation under read, write or destructive and runs only
+ * reads through executeRead; the scopes keep them to Jira and Confluence.
  */
 export const READ_TOOLS = [
   "atlassianUserInfo",
   "getAccessibleAtlassianResources",
   "search",
-  "fetch",
-  "getContentFormatGuide",
   "getJiraIssue",
+  "listJiraIssueComments",
   "searchJiraIssuesUsingJql",
-  "getVisibleJiraProjects",
-  "getJiraProjectIssueTypesMetadata",
-  "getJiraIssueTypeMetaWithFields",
-  "getTransitionsForJiraIssue",
-  "getJiraIssueRemoteIssueLinks",
-  "getIssueLinkTypes",
-  "lookupJiraAccountId",
-  "getConfluencePage",
-  "getConfluenceSpaces",
-  "getPagesInConfluenceSpace",
-  "getConfluencePageDescendants",
-  "getConfluencePageFooterComments",
-  "getConfluencePageInlineComments",
-  "getConfluenceCommentChildren",
-  "searchConfluenceUsingCql",
+  "getConfluenceContent",
+  "searchConfluence",
+  "discover",
+  "executeRead",
 ];
 
-/** Jira writes, for the Assistant on the user's word (D-69): open, edit, comment, move and link issues. */
-export const WRITE_TOOLS = ["createJiraIssue", "editJiraIssue", "addCommentToJiraIssue", "transitionJiraIssue", "createIssueLink"];
+/**
+ * Jira writes, for the Assistant on the user's word (D-69): open, edit, move and comment on issues.
+ * Not executeWrite: it runs any non-destructive write operation (worklogs, boards, sprints, other
+ * products), so it would need its own list of operations, checked in code.
+ */
+export const WRITE_TOOLS = ["createJiraIssue", "editJiraIssue", "transitionJiraIssue", "addOrEditJiraIssueComment"];
 
 /** Tools exposed on /mcp by default. Anything not listed is hidden and refused. */
 export const DEFAULT_ALLOWLIST = [...READ_TOOLS, ...WRITE_TOOLS];
@@ -65,8 +59,9 @@ export function readOnly(allowlist: Set<string>): Set<string> {
 }
 
 // Defense in depth: even if an operator adds one of these to the allowlist, it is never exposed. Deleting,
-// worklogs (time booked as the user), Confluence and the other products' writes are the user's to do.
-const NEVER = /(delete|remove|worklog|archive|permission|admin|compass|confluence.*(create|update)|(create|update).*confluence|bitbucket|jsm|servicedesk|goal|teamwork)/i;
+// worklogs (time booked as the user), Confluence and the other products' writes are the user's to do, and the
+// generic write and destructive runners would reach all of them.
+const NEVER = /(delete|remove|destructive|executeWrite|worklog|archive|permission|admin|compass|confluence.*(create|update)|(create|update).*confluence|bitbucket|jsm|servicedesk|goal|teamwork)/i;
 
 export function isAllowed(name: string, allowlist: Set<string>): boolean {
   return allowlist.has(name) && !NEVER.test(name);
@@ -92,11 +87,12 @@ export interface Site {
 }
 
 /**
- * The site a call is for: its `cloudId` (Atlassian accepts the site's id, URL or host name), or the
- * cloud id inside an ARI (`ari:cloud:jira:<cloudId>:issue/…`, what Rovo's search returns for fetch).
+ * The site a call is for: its `cloudId` (Atlassian accepts the site's id, URL or host name), the
+ * execute tools' fallback `inputs.cloudId`, or the cloud id inside an ARI (`ari:cloud:jira:<cloudId>:issue/…`).
  */
 export function siteOf(args: Record<string, unknown>): string | undefined {
-  if (typeof args.cloudId === "string" && args.cloudId.trim()) return args.cloudId.trim();
+  const inputs = (args.inputs && typeof args.inputs === "object" ? args.inputs : {}) as Record<string, unknown>;
+  for (const v of [args.cloudId, inputs.cloudId]) if (typeof v === "string" && v.trim()) return v.trim();
   for (const v of [args.id, args.ari]) {
     const m = typeof v === "string" ? /^ari:cloud:[a-z-]+:([0-9a-f-]{36}):/i.exec(v) : null;
     if (m) return m[1];
