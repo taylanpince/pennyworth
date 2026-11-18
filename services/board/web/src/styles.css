@@ -308,7 +308,7 @@ kbd {
 
 /* ------------------------------------------------------------ drawer */
 .drawer-backdrop { position: fixed; inset: 0; z-index: 40; background: rgba(20, 19, 17, 0.28); display: flex; justify-content: flex-end; animation: fade 0.15s ease-out; }
-.drawer-backdrop.center { justify-content: center; align-items: center; }
+.drawer-backdrop.center { justify-content: center; align-items: center; overflow-y: auto; overscroll-behavior: contain; }
 @keyframes fade { from { opacity: 0; } }
 .drawer {
   width: min(760px, 100%); height: 100%;
@@ -708,6 +708,10 @@ kbd {
 .crew-banner.closing { margin: 10px 16px 0; }
 .tag.subtasks { font-variant-numeric: tabular-nums; }
 .add-agent { display: flex; flex-direction: column; gap: 10px; margin: 14px 22px 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.add-agent > * { flex: none; }
+/* Above the task's own scroll: on a phone it's taller than the screen, so it scrolls by itself. */
+.task-main > .add-agent { flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.app.mobile .task-main > .add-agent { margin: 10px 16px 0; }
 .add-agent textarea, .new-task textarea { min-height: 76px; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface); outline: none; resize: vertical; }
 .add-agent textarea:focus, .new-task textarea:focus, .new-title:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .crew-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
@@ -718,7 +722,8 @@ kbd {
 .pick.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .pick:disabled { opacity: 0.45; cursor: default; }
 .pick-me { width: 40px; height: 40px; font-size: 15px; }
-.new-task { width: min(560px, calc(100% - 32px)); background: var(--surface); border-radius: 14px; padding: 18px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 12px; align-self: flex-start; margin-top: 10vh; }
+.new-task { width: min(560px, calc(100% - 32px)); background: var(--surface); border-radius: 14px; padding: 18px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 12px; flex: none; align-self: flex-start; margin: 10vh 0 24px; }
+.app.mobile .new-task { margin-top: max(16px, env(safe-area-inset-top)); }
 .new-task h2 { margin: 0; font-size: 15px; }
 .new-title { font-size: 16px; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); outline: none; }
 .new-where { margin-right: auto; }
