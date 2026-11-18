@@ -56,7 +56,7 @@ dc cp scripts/dev/mcp-call.mjs paperclip:/tmp/mcp-call.mjs >/dev/null 2>&1
 s_health="$(dc exec -T paperclip node -e "fetch('http://slack-mcp:8082/healthz').then(r=>r.text()).then(console.log).catch(e=>{console.log(e.message);process.exit(1)})" 2>/dev/null)"
 if echo "$s_health" | grep -q '"ok":true'; then
   stoken="$(cat "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/slack_mcp_token" 2>/dev/null)"
-  check "slack read (own profile)" sh -c "docker compose --env-file '$env_file' exec -T paperclip node /tmp/mcp-call.mjs http://slack-mcp:8082/mcp slack_read_user_profile '{\"response_format\":\"concise\"}' '$stoken' >/dev/null"
+  check "slack read (channel list)" sh -c "docker compose --env-file '$env_file' exec -T paperclip node /tmp/mcp-call.mjs http://slack-mcp:8082/mcp slack_list_user_channels '{\"limit\":1,\"format\":\"ids_only\"}' '$stoken' >/dev/null"
 else
   printf '  skip  slack (not connected: %s)\n' "$(echo "$s_health" | cut -c1-80)"
 fi

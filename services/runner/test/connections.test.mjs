@@ -47,6 +47,41 @@ function fakeFetch(seen, { githubStatus = 200, openrouterLabel = "work" } = {}) 
 }
 
 describe("connection checks for Settings", () => {
+  it("checks channel reads when Slack's profile tool lacks scopes, without leaking channel data", async () => {
+    const { secrets, home, cfg } = setup();
+    writeFileSync(join(secrets, "slack_mcp_read_token"), "secret-value");
+    for (const channelFails of [false, true]) {
+      const calls = [];
+      const checks = await checkConnections(cfg, {
+        home,
+        exec: async () => "octo",
+        fetchImpl: async (url, init) => {
+          if (!String(url).startsWith("http://slack")) throw new Error("not configured");
+          const { method, params } = JSON.parse(init.body);
+          if (method === "initialize") return Response.json({ result: {} });
+          calls.push(params);
+          const failed = params.name === "slack_read_user_profile" || channelFails;
+          return Response.json({ result: { isError: failed, content: [{ type: "text", text: failed ? "missing_scopes" : "private-channel-id" }] } });
+        },
+      });
+      const slack = checks.find((c) => c.id === "slack");
+      assert.equal(slack.state, channelFails ? "error" : "ok");
+      assert.equal(slack.accounts, undefined);
+      assert.ok(!JSON.stringify(slack).includes("private-channel-id"));
+      assert.deepEqual(calls[1], { name: "slack_list_user_channels", arguments: { limit: 1, format: "ids_only" } });
+    }
+  });
+
+  it("reports explicitly disabled Slack reads without calling the endpoint", async () => {
+    const { secrets, home, cfg } = setup();
+    writeFileSync(join(secrets, "slack_mcp_read_token"), "secret-value");
+    cfg.slackMcpUrl = "";
+    const seen = [];
+    const checks = await checkConnections(cfg, { home, exec: async () => "octo", fetchImpl: fakeFetch(seen) });
+    assert.deepEqual(checks.find((c) => c.id === "slack"), { id: "slack", state: "unset", detail: "Slack reads disabled for jobs" });
+    assert.ok(!seen.some((url) => url.startsWith("http://slack")));
+  });
+
   it("reports who each sign-in is, with every AWS account and no credentials", async () => {
     const { secrets, home, cfg } = setup();
     for (const f of ["github_token", "primer_mcp_read_token", "slack_mcp_read_token", "claude_oauth_token", "openrouter_key", "gcloud.json"]) writeFileSync(join(secrets, f), "secret-value\n");

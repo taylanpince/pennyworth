@@ -91,8 +91,17 @@ export async function checkConnections(cfg, { fetchImpl = fetch, exec = run, aws
     }),
     add("slack", async () => {
       const token = read(cfg.slackTokenFile);
-      if (!token) return { state: "unset", detail: "no read token for jobs" };
-      const text = await mcpTool(cfg.slackMcpUrl, token, "slack_read_user_profile", { response_format: "concise" }, fetchImpl);
+      if (!cfg.slackMcpUrl || !token) return { state: "unset", detail: !cfg.slackMcpUrl ? "Slack reads disabled for jobs" : "no read token for jobs" };
+      let text;
+      try {
+        text = await mcpTool(cfg.slackMcpUrl, token, "slack_read_user_profile", { response_format: "concise" }, fetchImpl);
+      } catch (err) {
+        // Some read-only Slack apps can read messages but lack the profile tool's scopes.
+        // Prove a real read works without treating channel names as the account's identity.
+        if (!/missing_scopes|unknown tool|tool.*not found/i.test(short(err))) throw err;
+        await mcpTool(cfg.slackMcpUrl, token, "slack_list_user_channels", { limit: 1, format: "ids_only" }, fetchImpl);
+        return { state: "ok" };
+      }
       // The concise profile is lines of text: "name (handle)", then the workspace.
       let profile = text;
       try {
