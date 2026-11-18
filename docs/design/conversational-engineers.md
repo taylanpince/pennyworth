@@ -81,6 +81,8 @@ Today the only thing that keeps a misread comment from becoming a push is the ex
    It answers whether these words ask for or approve this action on these targets. It never sees code, logs, PR text or documents, so instructions hidden there can't reach it. If it isn't sure, it says no.
 3. **A refusal goes back to Ada** as the tool's error, with the reason. She then asks in plain words ("I've fixed the conflict. Shall I push it and start the merges in your order?"), and the user's "yes" authorizes the next attempt.
 
+Since D-70, draft PRs of Ada's own work (new branches, PRs the task opened) and her own Primer documents skip the check: she opens them herself once the change is committed, without asking.
+
 The runner records whether an exact `push` or `pr` reached publishing, separately from
 whether its comment was handled. If it stops before any write (for example, no commits
 yet), that comment remains available to the next turn's authorization check. Once a

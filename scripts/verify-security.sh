@@ -319,18 +319,21 @@ gh_mutations="$(sed -n '/^export const GRAPHQL/,/^} as const;/p' services/github
 [ "$gh_mutations" = "addProjectV2ItemById updateProjectV2ItemFieldValue " ] && grep -q 'GRAPHQL_DOCS.has(' services/github-mcp/src/github.ts \
   && pass "github-mcp: GraphQL limited to fixed documents whose only mutations add an issue to a project and set its status" || fail "github-mcp: unexpected GraphQL mutations: $gh_mutations"
 # The runner merges the PRs a task lists (D-46): its only GitHub writes are merge and update-branch (REST, checked
-# against merges.WRITES) and marking a draft ready (one fixed GraphQL mutation). Pushes and draft PRs stay on the exact word.
+# against merges.WRITES) and marking a draft ready (one fixed GraphQL mutation). Pushes and draft PRs go through publish().
 merge_writes="$(sed -n '/^export const WRITES/,/^\];/p' services/runner/src/merges.mjs | grep -oE 'method: "[A-Z]+", path: /[^ ]+/' | tr '\n' ' ')"
 [ "$merge_writes" = 'method: "PUT", path: /^repos\/[\w.-]+\/[\w.-]+\/pulls\/\d+\/merge$/ method: "PUT", path: /^repos\/[\w.-]+\/[\w.-]+\/pulls\/\d+\/update-branch$/ ' ] \
   && [ "$(grep -o 'mutation([^)]*) { [A-Za-z]*' services/runner/src/merges.mjs | awk '{print $NF}' | tr '\n' ' ')" = "markPullRequestReadyForReview " ] \
   && [ "$(grep -c '"-X"' services/runner/src/main.mjs)" = 1 ] && grep -q 'merges.WRITES.some(' services/runner/src/main.mjs \
   && pass "runner: merge queue writes only merges, branch updates and ready-for-review (services/runner/src/merges.mjs)" || fail "runner: unexpected merge-queue writes: $merge_writes"
 # The Engineer's own tools (docs/design/conversational-engineers.md): a fixed command list on the per-run
-# loopback endpoint, every write checked against the user's words, and the check given nothing else.
+# loopback endpoint, every write checked against the user's words, and the check given nothing else. Draft PRs and
+# Primer documents of the agent's own work skip it (D-70): a PR counts as its own only where the runner opened it.
 tools="$(grep -oE '^export const TOOLS = \[[^]]*\]' services/runner/src/repohelper.mjs)"
 [ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "pass", "aws", "reset", "cleanup", "task", "tasks", "remember", "propose", "memory"]' ] \
   && [ "$(awk '/^async function agentTasks?\(/,/^}/' services/runner/src/main.mjs | grep -c '^  requireTaskReads(ctx);')" = 2 ] \
-  && grep -q 'check: (ordered) => allowWrite(ctx, command,' services/runner/src/main.mjs \
+  && grep -q 'check: (ordered) => (command === "pr" ? allowPr(ctx, ordered) : allowWrite(ctx, command,' services/runner/src/main.mjs \
+  && grep -q '^  if (!ownWork(rows)) return allowWrite(ctx, "pr",' services/runner/src/main.mjs \
+  && [ "$(grep -c 'own-pr:' services/runner/src/main.mjs)" = 2 ] && [ "$(grep -c 'state.set(`own-pr:${prUrl}`, issue.id);' services/runner/src/main.mjs)" = 1 ] \
   && [ "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "merge"' | cut -d: -f1)" -lt "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'ctx.merge = ' | cut -d: -f1)" ] \
   && [ "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "primer"' | cut -d: -f1)" -lt "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'savePrimer(' | head -1 | cut -d: -f1)" ] \
   && grep -q '^export function authorizePrompt({ user, action, aws = false, earlier = \[\], recent = \[\], lastReply = "" })' services/runner/src/authorize.mjs \
@@ -339,7 +342,7 @@ tools="$(grep -oE '^export const TOOLS = \[[^]]*\]' services/runner/src/repohelp
   && grep -q 'slackTokenFile: join(secrets, "slack_mcp_read_token")' services/runner/src/config.mjs \
   && grep -q 'gleanTokenFile: join(secrets, "glean_mcp_read_token")' services/runner/src/config.mjs \
   && grep -q 'const reads = observes(engine.kind) ? privateReads(cfg) : \[\];' services/runner/src/engines.mjs \
-  && pass "runner: the Engineer's push, pr, merge and Primer publishing are checked against the user's words only (services/runner/src/authorize.mjs); jobs hold only read tokens, and Slack, Glean and other tasks go to Claude Code and Codex only" || fail "runner: the Engineer's tools or their check changed: $tools"
+  && pass "runner: the Engineer's push, merge, and pr and Primer publishing beyond its own work (D-70), are checked against the user's words only (services/runner/src/authorize.mjs); jobs hold only read tokens, and Slack, Glean and other tasks go to Claude Code and Codex only" || fail "runner: the Engineer's tools or their check changed: $tools"
 pass "no email/Slack/Telegram send or calendar write tool is configured for any agent"
 
 echo

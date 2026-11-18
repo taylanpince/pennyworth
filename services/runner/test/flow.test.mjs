@@ -606,7 +606,8 @@ recurring:
     assert.ok(existsSync(join(dir, "work/tasks/PEN-2/backend/.git")), "the corrected repository was cloned");
   });
 
-  it("keeps a pr that stopped before publishing for the next turn, then consumes it", async () => {
+  it("keeps a pr that stopped before publishing, then opens the agent's own draft PR without a check", async () => {
+    writeFileSync(join(dir, "gh-open.json"), JSON.stringify(["acme/app fix/late-clone"]));
     const issue = { id: "late-repo", identifier: "PEN-5", title: "Inspect the site", status: "todo", assigneeAgentId: "engineer-claude", createdByUserId: USER, labels: [], description: "Inspect the site; no repository yet." };
     const comments = () => paperclip.comments.get(issue.id);
     const replies = () => paperclip.patches.filter((p) => p.issue === issue.identifier && p.status === "in_review");
@@ -620,23 +621,39 @@ recurring:
     const state = new State(join(dir, "state"));
     assert.equal(state.get(`publish-command:${request.id}`), "pending");
 
-    // The agent discovers the repository itself, then retries the user's unfulfilled PR request.
+    // The agent discovers the repository itself and opens the draft PR of its own work: no check (D-70).
+    const checks = () => fakeLog().filter((e) => e.kind === "authorize").length;
+    const checked = checks();
     step("clone-commit\npennyworth pr acme/app fix/late-clone");
     paperclip.addComment(issue.id, "Finish the change.");
     await waitFor("the completed PR", () => replies().length === 2);
     assert.equal(state.task(issue.id).repo, null, "cloning mid-run doesn't set the legacy field");
     const published = toolRuns().at(-1);
     assert.equal(published.code, 0, published.out);
+    assert.match(published.out, /opened draft PR https:\/\/github\.com\/acme\/app\/pull\/\d+/);
     assert.ok(git(dir, "--git-dir", join(dir, "github/acme/app.git"), "branch", "--list", "fix/late-clone"));
-    const check = fakeLog().filter((e) => e.kind === "authorize").at(-1).data;
-    assert.match(check, /RECENT_COMMENTS_FROM_TAYLAN\n[^\n]*pr\n/);
-    assert.equal(state.get(`publish-command:${request.id}`), "attempted");
+    assert.equal(checks(), checked, "the agent's own draft PR isn't checked");
+    assert.equal(state.get(`publish-command:${request.id}`), "attempted", "the waiting pr was carried out");
 
+    // Its own PR stays its own: a new title needs no go-ahead either.
     step("none\npennyworth pr acme/app fix/late-clone --title Updated");
     paperclip.addComment(issue.id, "What changed?");
     await waitFor("the next reply", () => replies().length === 3);
-    assert.notEqual(toolRuns().at(-1).code, 0, "the old pr cannot authorize another write");
-    assert.match(toolRuns().at(-1).out, /go-ahead/);
+    const retitled = toolRuns().at(-1);
+    assert.equal(retitled.code, 0, retitled.out);
+    assert.match(retitled.out, /Updated the title of/);
+    assert.equal(checks(), checked, "still unchecked");
+
+    // A new Primer document is unchecked too; a new version of someone else's still needs the words.
+    step("none\npennyworth primer\npennyworth primer https://primer.example.com/d/someone-elses-doc");
+    paperclip.addComment(issue.id, "Write up what you found.");
+    await waitFor("the write-up", () => replies().length === 4);
+    const [fresh, theirs] = toolRuns().slice(-2);
+    assert.equal(fresh.code, 0, fresh.out);
+    assert.match(fresh.out, /the runner publishes \.pennyworth\/primer\.md .*on Primer/);
+    assert.equal(theirs.code, 1);
+    assert.match(theirs.out, /go-ahead/);
+    assert.equal(checks(), checked + 1, "only the other document was checked");
     state.db.close();
   });
 

@@ -801,10 +801,28 @@ async function allowWrite(ctx, action, targets, extra = {}) {
   const verdict = await authorize({ cfg, user: cfg.selfName, action, targets, words, ...extra });
   log("write checked", { issue: ctx.issue.identifier, action, targets: targets.length, allowed: verdict.allowed, how: verdict.how, reason: verdict.reason.slice(0, 200) });
   if (!verdict.allowed) throw new UserError(`Not done: this needs ${cfg.selfName}'s go-ahead (${verdict.reason}). Say exactly what you'd ${action === "merge" ? "merge" : action === "aws" ? "run" : "publish"} and ask them; don't try again in this turn.`);
-  for (const c of words.recent) {
+  usedCommands(words);
+  (ctx.allowed ??= new Set()).add(key);
+}
+
+/** The user's waiting "push"/"pr" are carried out by this write: they can't allow another one. */
+function usedCommands(words) {
+  for (const c of words?.recent ?? []) {
     if (state.get(`publish-command:${c.id}`) === "pending") state.set(`publish-command:${c.id}`, "attempted");
   }
-  (ctx.allowed ??= new Set()).add(key);
+}
+
+/**
+ * Draft PRs of the agent's own work need no go-ahead (D-70): every branch is new to GitHub or one this
+ * task pushed, and its PR is new or one this task opened. Someone else's branch or PR is still checked.
+ */
+const ownWork = (rows) => rows.every((r) => (!r.onGitHub || r.pushed) && (!r.prUrl || state.get(`own-pr:${r.prUrl}`)));
+
+async function allowPr(ctx, rows) {
+  if (!ownWork(rows)) return allowWrite(ctx, "pr", rows.map((r) => `${r.repo} \`${r.branch}\`${r.prUrl ? ` (PR ${r.prUrl})` : ""}`));
+  log("write unchecked", { issue: ctx.issue.identifier, action: "pr", targets: rows.length });
+  const comments = await pc.comments(ctx.issue.id).catch(() => undefined);
+  usedCommands(comments ? writeWords(comments) : ctx.words);
 }
 
 /**
@@ -818,7 +836,7 @@ async function agentPublish(ctx, command, args) {
   const { text } = await publish(ctx.issue, ctx.workspace, command, ctx.signal, {
     only,
     text: command === "pr" && (args.title || args.body) ? { title: String(args.title ?? ""), body: String(args.body ?? "") } : undefined,
-    check: (ordered) => allowWrite(ctx, command, ordered.map((r) => `${r.repo} \`${r.branch}\`${r.prUrl ? ` (PR ${r.prUrl})` : ""}`)),
+    check: (ordered) => (command === "pr" ? allowPr(ctx, ordered) : allowWrite(ctx, command, ordered.map((r) => `${r.repo} \`${r.branch}\`${r.prUrl ? ` (PR ${r.prUrl})` : ""}`))),
   });
   return stripHidden(text).trim();
 }
@@ -874,8 +892,10 @@ async function agentPrimer(ctx, args) {
   const link = String(args.link ?? "").trim();
   const target = link ? primerLink(link) : undefined;
   if (link && !target) throw new UserError("That isn't a link to a Primer document (…/d/<id>). Use the link the document has in Primer.");
-  await allowWrite(ctx, "primer", [target ? `a new version of the existing Primer document ${target.url} (its earlier versions stay in its history), made from the document the agent writes to ${PRIMER_FILES}` : `the document the agent writes to ${PRIMER_FILES} in the workspace`]);
   const record = primerRecord(ctx.issue.id);
+  // A new document, or a new version of the one this task published, needs no go-ahead (D-70).
+  const own = !target || (record?.documentId === target.documentId && !record.linked);
+  if (!own) await allowWrite(ctx, "primer", [`a new version of the existing Primer document ${target.url} (its earlier versions stay in its history), made from the document the agent writes to ${PRIMER_FILES}`]);
   if (target && record?.documentId !== target.documentId) savePrimer(ctx.issue.id, { documentId: target.documentId, url: target.url, linked: true });
   else if (!record) savePrimer(ctx.issue.id, {});
   return target
@@ -1622,6 +1642,7 @@ async function publishBranch(issue, full, r, command, rows, text) {
   });
   const prUrl = stdout.trim().split("\n").pop();
   state.updateBranch(issue.id, r.repo, r.branch, { pr_url: prUrl });
+  state.set(`own-pr:${prUrl}`, issue.id);
   log("draft PR opened", { issue: issue.identifier, url: prUrl });
   return `${pushed ? `${pushed}, opened` : "Opened"} draft PR ${prUrl}`;
 }
