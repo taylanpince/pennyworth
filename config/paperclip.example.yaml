@@ -299,8 +299,8 @@ agents:
     title: Vulnerability sweeps, pentest triage and exposure checks (pennyworth-runner)
     instructions: config/agents/engineer.md
     adapter: claude_local
-    engine: codex
-    model: gpt-6-astra
+    engine: openrouter
+    model: openrouter/deepseek/deepseek-v4.1-flash
     dispatch: runner
     mcp_servers: []
 
