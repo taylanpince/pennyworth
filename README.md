@@ -218,6 +218,7 @@ todo                                 # open todos + meeting actions, by priority
 todo add "Draft the Q4 roadmap" -p high -n "for Thursday's review"
 todo prio PEN-12 critical            # critical | high | medium | low
 todo done PEN-12 "sent to Alice"
+todo note PEN-12 "draft PR opened"   # a comment from your own agent session, never read as your words
 todo show PEN-12
 todo waiting                         # what other people owe you
 todo brief                           # today's daily brief
@@ -225,6 +226,8 @@ todo --all                           # include reviews and briefs
 ```
 
 `todo` is `scripts/todo.mjs`; alias or symlink it onto your PATH. The Chief of Staff ranks the list every weekday morning in the **Daily Brief** task. It only *suggests* priority changes; you decide.
+
+**Your own agent sessions** (Claude Code or Codex started by hand, outside the runner) can keep the list current too: [`skills/pennyworth/SKILL.md`](skills/pennyworth/SKILL.md) tells them when to show, add, note and close tasks with `todo`. Link it into your agent's skills, e.g. `ln -s "$PWD/skills/pennyworth" ~/.claude/skills/pennyworth`. Their progress goes in `todo note`, which carries the runner's marker, so it never wakes the Assistant or counts as your words.
 
 ## Assistant
 
