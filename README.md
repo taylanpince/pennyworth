@@ -104,7 +104,22 @@ services/paperclip-tasks-mcp   stdio bridge, mounted into paperclip, for agents'
 
    Make sure its `PATH` has `git`, `gh` and the engines you use.
 
-   **macOS:** use launchd user agents instead of systemd, in `~/Library/LaunchAgents/`, labelled `dev.pennyworth.runner` (a `KeepAlive` agent running the same `node` command), `dev.pennyworth.transcripts` (`WatchPaths` on the transcripts folder) and `dev.pennyworth.backup` (below). Load each with `launchctl bootstrap gui/$(id -u) <plist>`; `scripts/healthcheck.sh` looks for those labels. Install the tools with `brew install flock restic`.
+   **macOS:** use launchd user agents instead of systemd, in `~/Library/LaunchAgents/`, labelled `dev.pennyworth.runner` (a `KeepAlive` agent running the same `node` command), `dev.pennyworth.transcripts` (below) and `dev.pennyworth.backup` (below). Load each with `launchctl bootstrap gui/$(id -u) <plist>`; `scripts/healthcheck.sh` looks for those labels. Install the tools with `brew install flock restic`.
+
+   The transcripts agent runs `scripts/trigger-meeting-scan.sh` when the folder changes. `WatchPaths` does not look inside subfolders, so list the nested `1-1s` folder too, as the Linux unit does. `~/Library/LaunchAgents/dev.pennyworth.transcripts.plist`:
+
+   ```xml
+   <plist version="1.0"><dict>
+     <key>Label</key><string>dev.pennyworth.transcripts</string>
+     <key>ProgramArguments</key><array><string>/bin/bash</string><string>/path/to/pennyworth/scripts/trigger-meeting-scan.sh</string></array>
+     <key>WorkingDirectory</key><string>/path/to/pennyworth</string>
+     <key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/bin:/bin</string></dict>
+     <key>WatchPaths</key><array><string>/Users/you/Documents/transcripts</string><string>/Users/you/Documents/transcripts/1-1s</string></array>
+     <key>ThrottleInterval</key><integer>30</integer>
+   </dict></plist>
+   ```
+
+   **Job sandbox on macOS:** there is no Bubblewrap, so jobs run in the single Codex permissions sandbox (Seatbelt). That is the default on a Mac, and the runner refuses `sandbox.credential_isolation: bwrap` there. `scripts/healthcheck.sh` runs the same preflight a job starts with and fails if credential reads aren't denied.
 
 7. **Check:** `scripts/healthcheck.sh` should be all green, and `scripts/verify-security.sh` should pass.
 
@@ -399,11 +414,11 @@ Setting it up once:
      <key>ProgramArguments</key><array><string>/path/to/pennyworth/scripts/backup.sh</string><string>--offsite</string></array>
      <key>WorkingDirectory</key><string>/path/to/pennyworth</string>
      <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
-     <key>StartInterval</key><integer>3600</integer>
+     <key>StartCalendarInterval</key><dict><key>Minute</key><integer>0</integer></dict>
    </dict></plist>
    ```
 
-To recover: `docker compose down`, `systemctl --user stop pennyworth-runner`, then `scripts/restore.sh --snapshot` (latest, or an ID from `restic snapshots`) and the steps it prints. On a new machine, put `backup/restic.env` and `backup/password` back from your password manager first; everything else in the secrets directory comes back by signing in again.
+To recover: `docker compose down`, stop the runner (`systemctl --user stop pennyworth-runner`, or on macOS `launchctl bootout gui/$(id -u)/dev.pennyworth.runner`, since `KeepAlive` restarts a plain kill; also `bootout` `dev.pennyworth.backup` so a snapshot doesn't start mid-restore), then `scripts/restore.sh --snapshot` (latest, or an ID from `restic snapshots`) and the steps it prints. On a new machine, put `backup/restic.env` and `backup/password` back from your password manager first; everything else in the secrets directory comes back by signing in again.
 
 ## Security model
 
