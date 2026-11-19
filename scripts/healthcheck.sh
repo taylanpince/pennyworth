@@ -191,8 +191,24 @@ if svc_installed runner; then
       sh -c 'for t in bwrap codex claude opencode git node; do command -v "$t" >/dev/null || { echo "missing $t"; exit 1; }; done' 2>&1 | grep -v 'is dirty'
     return "${PIPESTATUS[0]}"
   }
+  # No bwrap or devshell on macOS: exercise the Codex permissions sandbox jobs run in there, the
+  # same preflight a job starts with (credential read denied, workspace write allowed).
+  mac_sandbox() {
+    PATH="${runner_path:-$PATH}" node --input-type=module -e "
+      import { mkdtempSync, rmSync } from 'node:fs';
+      import { tmpdir } from 'node:os';
+      import { join } from 'node:path';
+      import { loadConfig } from './services/runner/src/config.mjs';
+      import { checkCodexPermissions } from './services/runner/src/engines.mjs';
+      const cfg = loadConfig();
+      const dir = mkdtempSync(join(tmpdir(), 'pw-health-'));
+      try { await checkCodexPermissions({ cfg, worktree: dir }); }
+      catch (e) { console.log(e.message); process.exit(1); }
+      finally { rmSync(dir, { recursive: true, force: true }); }
+    "
+  }
   if [ "$(uname)" = Darwin ]; then
-    printf '  skip  runner devshell (Linux only)\n'
+    check "runner job sandbox (Codex permissions)" mac_sandbox
   else
     check "runner devshell ${eshell:-?} has the job tools" job_tools
   fi
