@@ -11,7 +11,7 @@ import { chmodSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 
 const SERVER = (process.env.PRIMER_MCP_URL ?? "").replace(/\/$/, "");
-const [outFile, portArg = "3123"] = process.argv.slice(2);
+const [outFile, portArg = "3133"] = process.argv.slice(2);
 if (!outFile || !SERVER) {
   console.error("usage: PRIMER_MCP_URL=https://…/mcp node src/auth.ts <output token file> [callback_port]");
   process.exit(2);

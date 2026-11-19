@@ -326,7 +326,7 @@ Pennyworth reads work email, Slack, calendars and documents. The user cleared ru
   - `primer_send_events`, which reaches other people's open pages.
   - Anything that deletes, shares, changes visibility or collaborators, or mints tokens. Primer's MCP has no such tools today; the `NEVER` pattern guards against new ones.
   - Write tools are annotated `readOnlyHint: false, openWorldHint: false` so Codex runs them unattended.
-- **Auth:** Primer is an OAuth 2.1 server with dynamic client registration, PKCE and loopback redirects. `scripts/primer-auth.sh` registers Pennyworth and runs the code flow (company sign-in in the browser, callback port 3123).
+- **Auth:** Primer is an OAuth 2.1 server with dynamic client registration, PKCE and loopback redirects. `scripts/primer-auth.sh` registers Pennyworth and runs the code flow (company sign-in in the browser, callback port 3133, since 3123 is primer-mcp's own).
   - Access tokens last an hour. Refresh tokens last 30 days and rotate on every use, and reusing an old one revokes the whole family. So the proxy is the only refresher: one process, one in-flight refresh, and the new pair is written atomically to `$PENNYWORTH_SECRETS_DIR/primer/`.
   - Personal access tokens would never expire, so OAuth was preferred: a lost token stops working within 30 days of disuse.
 - **Publishing is the first write to an outside service** (beyond Paperclip and the board). It's bounded three ways:
