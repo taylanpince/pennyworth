@@ -287,7 +287,8 @@ recurring:
     // Engines run in the devshells, with the gcloud sign-ins hidden (D-48).
     assert.ok(fakeLog().some((e) => e.kind === "nix" && e.data[1].endsWith("#llm")));
     const bwrap = fakeLog().find((e) => e.kind === "bwrap")?.data ?? [];
-    assert.ok(bwrap.includes("--tmpfs") && bwrap.some((a) => a.endsWith(".config/gcloud")));
+    if (process.platform === "darwin") assert.deepEqual(bwrap, [], "macOS has no bwrap: the Codex permissions sandbox hides them");
+    else assert.ok(bwrap.includes("--tmpfs") && bwrap.some((a) => a.endsWith(".config/gcloud")));
   });
 
   it("posts the agent's reply as its own, with no start notes around it", () => {

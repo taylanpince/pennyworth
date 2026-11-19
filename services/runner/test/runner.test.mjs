@@ -9,6 +9,7 @@ import { crewNames, findRepos, personaFor, mentionedRepos, readOnlyRefusal, norm
 import { buildCommand, inDevshells, runAgent } from "../src/engines.mjs";
 import { firstPrompt, followUpPrompt, latestReport, observeSection, prTitle, stripCommitLine } from "../src/prompt.mjs";
 import { accessToken, gcpSession } from "../src/gcp.mjs";
+import { credentialIsolation } from "../src/config.mjs";
 import { diskName, plan, syncFiles } from "../src/files.mjs";
 
 const cfg = {
@@ -1374,4 +1375,16 @@ describe("Grafana and Google Cloud for Engineer jobs (D-48)", () => {
     const result = await runAgent({cfg:{devshells:{flake:"/missing"},ghWrapperDir:dir},engine:{kind:"codex"},shells:["missing"],worktree:dir,prompt:"test",logPath:join(dir,"job.log"),env:{PATH:"/nonexistent"}});
     assert.notEqual(result.code, 0);
   } finally { rmSync(dir, {recursive:true,force:true}); }
+});
+
+describe("credentialIsolation", () => {
+  it("defaults to bwrap on Linux and to the Codex permissions sandbox on macOS", () => {
+    assert.equal(credentialIsolation(undefined, "linux"), "bwrap");
+    assert.equal(credentialIsolation({}, "darwin"), "permissions");
+    assert.equal(credentialIsolation({ credential_isolation: "permissions" }, "linux"), "permissions");
+  });
+  it("refuses bwrap on macOS and unknown modes anywhere", () => {
+    assert.throws(() => credentialIsolation({ credential_isolation: "bwrap" }, "darwin"), /not available on macOS/);
+    assert.throws(() => credentialIsolation({ credential_isolation: "none" }, "linux"), /must be bwrap or permissions/);
+  });
 });

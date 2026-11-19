@@ -274,8 +274,8 @@ echo "$profile_sandbox" | grep -Fq '":root": "read"' \
   && echo "$profile_sandbox" | grep -Fq 'filesystem[dir] = "deny"' \
   && echo "$profile_sandbox" | grep -Fq 'cfg.aws?.hidden' \
   && echo "$profile_sandbox" | grep -Fq 'cfg.gcp?.hidden' \
-  && grep -Fq 'cfg.sandbox?.credential_isolation ?? "bwrap"' services/runner/src/config.mjs \
-  && pass "runner: optional single sandbox denies cloud credential reads and confines writes; bwrap remains the default" || fail "runner: single sandbox lost credential denial or the default isolation mode"
+  && grep -Fq 'sandbox?.credential_isolation ?? (platform === "darwin" ? "permissions" : "bwrap")' services/runner/src/config.mjs \
+  && pass "runner: optional single sandbox denies cloud credential reads and confines writes; bwrap remains the Linux default" || fail "runner: single sandbox lost credential denial or the default isolation mode"
 grep -Fq 'default_permissions="pennyworth-job"' services/runner/src/engines.mjs \
   && grep -Fq 'await checkCodexPermissions({ cfg, worktree' services/runner/src/engines.mjs \
   && grep -Fq 'stdout.trim() !== "pennyworth-permissions-ok"' services/runner/src/engines.mjs \
