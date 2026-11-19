@@ -104,6 +104,8 @@ services/paperclip-tasks-mcp   stdio bridge, mounted into paperclip, for agents'
 
    Make sure its `PATH` has `git`, `gh` and the engines you use.
 
+   **macOS:** use launchd user agents instead of systemd, in `~/Library/LaunchAgents/`, labelled `dev.pennyworth.runner` (a `KeepAlive` agent running the same `node` command), `dev.pennyworth.transcripts` (`WatchPaths` on the transcripts folder) and `dev.pennyworth.backup` (below). Load each with `launchctl bootstrap gui/$(id -u) <plist>`; `scripts/healthcheck.sh` looks for those labels. Install the tools with `brew install flock restic`.
+
 7. **Check:** `scripts/healthcheck.sh` should be all green, and `scripts/verify-security.sh` should pass.
 
 Then drop a transcript into your transcripts folder, or have a Meet call that produces one, and watch the **Meeting scan** task in Paperclip at <http://localhost:3100>, or the board at <http://localhost:3120>.
@@ -388,6 +390,18 @@ Setting it up once:
 3. Make an encryption password, `head -c 32 /dev/urandom | base64 > ~/.config/pennyworth/backup/password` (0600), and **save it and `restic.env` in your password manager**: they aren't in the backup, and without the password no snapshot can be read.
 4. `scripts/backup.sh --init`, then `scripts/backup.sh --offsite` for the first snapshot, and `scripts/backup.sh --verify` to restore it into a scratch directory and a throwaway Postgres.
 5. Enable the timer with Home Manager (`systemd.user.services.pennyworth-backup` and its timer in your Home Manager config).
+
+   On macOS, run it as a launchd agent instead (`brew install flock restic` first; `scripts/backup.sh` needs `flock`). `~/Library/LaunchAgents/dev.pennyworth.backup.plist`:
+
+   ```xml
+   <plist version="1.0"><dict>
+     <key>Label</key><string>dev.pennyworth.backup</string>
+     <key>ProgramArguments</key><array><string>/path/to/pennyworth/scripts/backup.sh</string><string>--offsite</string></array>
+     <key>WorkingDirectory</key><string>/path/to/pennyworth</string>
+     <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+     <key>StartInterval</key><integer>3600</integer>
+   </dict></plist>
+   ```
 
 To recover: `docker compose down`, `systemctl --user stop pennyworth-runner`, then `scripts/restore.sh --snapshot` (latest, or an ID from `restic snapshots`) and the steps it prints. On a new machine, put `backup/restic.env` and `backup/password` back from your password manager first; everything else in the secrets directory comes back by signing in again.
 
