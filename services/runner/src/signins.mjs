@@ -174,8 +174,11 @@ export function drivers(cfg, deps = {}) {
       command() {
         // setup-token is a TUI: give it a terminal (wide, so the link isn't wrapped) and a config dir of its own.
         const home = mkdtempSync(join(tmpdir(), "pennyworth-claude-signin-"));
+        const tty = "stty cols 4000 rows 50; exec claude setup-token";
+        // macOS ships BSD script: file first, then the command.
+        const script = (deps.platform ?? process.platform) === "darwin" ? ["script", "-q", "/dev/null", "sh", "-c", tty] : ["script", "-qfec", tty, "/dev/null"];
         return {
-          argv: llm(["script", "-qfec", "stty cols 4000 rows 50; exec claude setup-token", "/dev/null"]),
+          argv: llm(script),
           env: { CLAUDE_CONFIG_DIR: home, BROWSER: "true" },
           cleanup: () => rmSync(home, { recursive: true, force: true }),
         };
