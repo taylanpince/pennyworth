@@ -9,6 +9,21 @@ env_file="${PENNYWORTH_ENV_FILE:-.env}"
 dc() { docker compose --env-file "$env_file" "$@"; }
 
 fails=0
+# The runner, transcript watcher and backup timer: systemd user units on Linux, launchd agents
+# (dev.pennyworth.<name>) on macOS. Only the runner is a daemon with a pid; the others run on demand.
+svc_unit() { case "$1" in runner) echo pennyworth-runner.service;; transcripts) echo pennyworth-transcripts.path;; backup) echo pennyworth-backup.timer;; esac; }
+svc_installed() {
+  if [ "$(uname)" = Darwin ]; then launchctl print "gui/$(id -u)/dev.pennyworth.$1" >/dev/null 2>&1; return; fi
+  systemctl --user list-unit-files "$(svc_unit "$1")" >/dev/null 2>&1
+}
+svc_active() {
+  if [ "$(uname)" = Darwin ]; then
+    if [ "$1" = runner ]; then launchctl print "gui/$(id -u)/dev.pennyworth.$1" 2>/dev/null | grep -q 'pid = '; return; fi
+    svc_installed "$1"; return
+  fi
+  systemctl --user is-active --quiet "$(svc_unit "$1")"
+}
+
 check() { # name, command...
   local name="$1"; shift
   if out="$("$@" 2>&1)"; then
@@ -160,10 +175,14 @@ check "board (127.0.0.1:3120)" sh -c 'curl -fsS --max-time 5 http://127.0.0.1:31
 
 # The runner, and what its jobs need from the engine devshell, seen with the runner's own PATH:
 # bwrap only on an interactive shell's PATH stopped every job (PEN-2714).
-if systemctl --user list-unit-files pennyworth-runner.service >/dev/null 2>&1; then
-  check "runner active" systemctl --user is-active --quiet pennyworth-runner
-  runner_pid="$(systemctl --user show pennyworth-runner -p MainPID --value)"
-  runner_path="$(tr '\0' '\n' < "/proc/$runner_pid/environ" 2>/dev/null | sed -n 's/^PATH=//p')"
+if svc_installed runner; then
+  check "runner active" svc_active runner
+  if [ "$(uname)" = Darwin ]; then
+    runner_path="$PATH"
+  else
+    runner_pid="$(systemctl --user show pennyworth-runner -p MainPID --value)"
+    runner_path="$(tr '\0' '\n' < "/proc/$runner_pid/environ" 2>/dev/null | sed -n 's/^PATH=//p')"
+  fi
   rcfg="config/runner.yaml"; [ -f "$rcfg" ] || rcfg="config/runner.example.yaml"
   flake="$(sed -n 's/^  flake: *\([^ #]*\).*/\1/p' "$rcfg" | head -1)"; flake="${flake/#\~/$HOME}"
   eshell="$(sed -n 's/^  engine_shell: *\([^ #]*\).*/\1/p' "$rcfg" | head -1)"
@@ -172,7 +191,27 @@ if systemctl --user list-unit-files pennyworth-runner.service >/dev/null 2>&1; t
       sh -c 'for t in bwrap codex claude opencode git node; do command -v "$t" >/dev/null || { echo "missing $t"; exit 1; }; done' 2>&1 | grep -v 'is dirty'
     return "${PIPESTATUS[0]}"
   }
-  check "runner devshell ${eshell:-?} has the job tools" job_tools
+  # No bwrap or devshell on macOS: exercise the Codex permissions sandbox jobs run in there, the
+  # same preflight a job starts with (credential read denied, workspace write allowed).
+  mac_sandbox() {
+    PATH="${runner_path:-$PATH}" node --input-type=module -e "
+      import { mkdtempSync, rmSync } from 'node:fs';
+      import { tmpdir } from 'node:os';
+      import { join } from 'node:path';
+      import { loadConfig } from './services/runner/src/config.mjs';
+      import { checkCodexPermissions } from './services/runner/src/engines.mjs';
+      const cfg = loadConfig();
+      const dir = mkdtempSync(join(tmpdir(), 'pw-health-'));
+      try { await checkCodexPermissions({ cfg, worktree: dir }); }
+      catch (e) { console.log(e.message); process.exit(1); }
+      finally { rmSync(dir, { recursive: true, force: true }); }
+    "
+  }
+  if [ "$(uname)" = Darwin ]; then
+    check "runner job sandbox (Codex permissions)" mac_sandbox
+  else
+    check "runner devshell ${eshell:-?} has the job tools" job_tools
+  fi
   # AWS for Engineer jobs (D-59): each account's read role mints with Pennyworth's sign-in.
   aws_roles() {
     PATH="${runner_path:-/run/current-system/sw/bin}" node --input-type=module -e "
@@ -194,14 +233,14 @@ else
 fi
 
 check "watcher webhook configured" test -s "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/meeting_webhook_url"
-if systemctl --user list-unit-files pennyworth-transcripts.path >/dev/null 2>&1; then
-  check "transcript watcher active" systemctl --user is-active --quiet pennyworth-transcripts.path
+if svc_installed transcripts; then
+  check "transcript watcher active" svc_active transcripts
 else
   printf '  skip  transcript watcher (not installed; see nix/README.md)\n'
 fi
 
 # Off-machine backups (D-58): the hourly timer, and a snapshot that worked in the last 26 hours.
-check "backup timer active" systemctl --user is-active --quiet pennyworth-backup.timer
+check "backup timer active" svc_active backup
 check "off-machine backup (last 26 hours)" node -e '
   let s; try { s = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); } catch { console.log("never ran: scripts/backup.sh --offsite"); process.exit(1); }
   if (!(Date.now() - Date.parse(s.lastSuccess) < 26 * 3600e3)) { console.log(`last success ${s.lastSuccess ?? "never"} (${s.state}${s.error ? ": " + s.error : ""})`); process.exit(1); }

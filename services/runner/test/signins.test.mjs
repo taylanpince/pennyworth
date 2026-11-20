@@ -140,6 +140,16 @@ describe("sign-ins from Settings (D-66)", () => {
     assert.deepEqual(reports.at(-1), { session: "f".repeat(24), status: "waiting", url: "https://auth.openai.com/codex/device", code: "Q7RT-9KXPL" });
   });
 
+  it("claude: gives setup-token a terminal with the script syntax of the platform", async () => {
+    const tty = "stty cols 4000 rows 50; exec claude setup-token";
+    for (const [platform, script] of [["linux", ["script", "-qfec", tty, "/dev/null"]], ["darwin", ["script", "-q", "/dev/null", "sh", "-c", tty]]]) {
+      const { cfg, reports, procs, spawnImpl } = setup();
+      const r = new SignInRunner(cfg, (u) => reports.push(u), { spawnImpl, deps: { platform } });
+      await r.handle({ session: "1".repeat(24), kind: "start", provider: "claude" });
+      assert.deepEqual(procs[0].argv.slice(-script.length), script, platform);
+    }
+  });
+
   it("claude: shows the manual link, passes the code on, saves the token and never reports it", async () => {
     const { cfg, reports, procs, spawnImpl } = setup();
     const r = new SignInRunner(cfg, (u) => reports.push(u), { spawnImpl });

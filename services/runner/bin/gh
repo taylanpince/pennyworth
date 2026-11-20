@@ -33,7 +33,7 @@ case "$sub" in
         -f|-F|--field|--raw-field|--input|-f*|-F*|--field=*|--raw-field=*|--input=*) deny "api with request body" ;;
       esac
     done
-    [ "${method^^}" = "GET" ] || deny "api -X $method"
+    [ "$(printf %s "$method" | tr '[:lower:]' '[:upper:]')" = "GET" ] || deny "api -X $method"
     exec "$real" api "$@"
     ;;
   pr|issue|run|workflow|release|repo|gist|label|project|cache|secret|variable|ruleset|codespace|org|attestation)

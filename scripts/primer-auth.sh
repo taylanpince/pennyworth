@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-time consent for the primer-mcp sidecar (Primer, PRIMER_MCP_URL; Pennyworth registers as
-# a public OAuth client on the fly). Uses callback http://localhost:3123/callback.
+# a public OAuth client on the fly). Uses callback http://localhost:3133/callback.
 set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo"
@@ -14,6 +14,6 @@ export PRIMER_MCP_URL
 : "${PENNYWORTH_SECRETS_DIR:?set PENNYWORTH_SECRETS_DIR in .env}"
 dir="$PENNYWORTH_SECRETS_DIR/primer"
 mkdir -p "$dir" && chmod 0700 "$dir"
-node services/primer-mcp/src/auth.ts "$dir/token.json" "${PRIMER_CALLBACK_PORT:-3123}"
+node services/primer-mcp/src/auth.ts "$dir/token.json" "${PRIMER_CALLBACK_PORT:-3133}"
 docker compose up -d --force-recreate primer-mcp
 echo "Primer connected. Verify with scripts/healthcheck.sh"

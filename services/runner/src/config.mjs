@@ -19,6 +19,14 @@ function loadEnv(path) {
   );
 }
 
+/** bwrap doesn't exist on macOS, so a Mac runs the single Codex permissions sandbox unless told otherwise. */
+export function credentialIsolation(sandbox, platform = process.platform) {
+  const mode = sandbox?.credential_isolation ?? (platform === "darwin" ? "permissions" : "bwrap");
+  if (!["bwrap", "permissions"].includes(mode)) throw new Error("sandbox.credential_isolation must be bwrap or permissions");
+  if (mode === "bwrap" && platform === "darwin") throw new Error("sandbox.credential_isolation: bwrap is not available on macOS; use permissions");
+  return mode;
+}
+
 /** Runner configuration: config/runner.yaml (or the example) plus .env and system.yaml. */
 export function loadConfig() {
   const env = { ...loadEnv(process.env.PENNYWORTH_ENV_FILE ?? join(REPO_ROOT, ".env")), ...process.env };
@@ -32,7 +40,7 @@ export function loadConfig() {
   const secrets = expand(env.PENNYWORTH_SECRETS_DIR ?? "~/.config/pennyworth");
   const gcpCredentials = expand(cfg.gcp?.credentials ?? join(secrets, "gcloud/application_default_credentials.json"));
   const awsHome = expand(cfg.aws?.home ?? join(secrets, "aws"));
-  if (!["bwrap", "permissions"].includes(cfg.sandbox?.credential_isolation ?? "bwrap")) throw new Error("sandbox.credential_isolation must be bwrap or permissions");
+  const isolation = credentialIsolation(cfg.sandbox);
   const awsAuth = cfg.aws?.auth ?? "sso";
   if (!["sso", "iam"].includes(awsAuth)) throw new Error("aws.auth must be sso or iam");
   if (awsAuth === "iam" && cfg.aws?.accounts?.some((a) => a.write_role)) throw new Error("AWS IAM authentication is read-only; remove write_role");
@@ -41,6 +49,7 @@ export function loadConfig() {
   }
   return {
     ...cfg,
+    sandbox: { ...cfg.sandbox, credential_isolation: isolation },
     file,
     companyId,
     selfName,

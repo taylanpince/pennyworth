@@ -33,6 +33,11 @@ if systemctl --user is-active -q "$runner_service" 2>/dev/null; then
   echo "       stop it first: systemctl --user stop $runner_service" >&2
   exit 1
 fi
+if [ "$(uname)" = Darwin ] && launchctl print "gui/$(id -u)/dev.pennyworth.runner" 2>/dev/null | grep -q 'pid = '; then
+  echo "error: refusing to restore while the runner is running" >&2
+  echo "       unload it first (KeepAlive would restart a plain kill): launchctl bootout gui/$(id -u)/dev.pennyworth.runner" >&2
+  exit 1
+fi
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT

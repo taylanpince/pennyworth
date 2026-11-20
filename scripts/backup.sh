@@ -17,6 +17,8 @@
 set -euo pipefail
 umask 077
 
+mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
+
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo"
 env_file="${PENNYWORTH_ENV_FILE:-.env}"
@@ -68,7 +70,7 @@ stage() {
   local dump
   dump="$(ls -1t "$instance"/data/backups/paperclip-*.sql.gz 2>/dev/null | head -1 || true)"
   [ -n "$dump" ] || { echo "error: no Paperclip database dump in $instance/data/backups" >&2; return 1; }
-  local age_min=$(( ($(date +%s) - $(stat -c %Y "$dump")) / 60 ))
+  local age_min=$(( ($(date +%s) - $(mtime "$dump")) / 60 ))
   if [ "$running" = yes ] && [ "$age_min" -gt "$max_dump_age_min" ]; then
     echo "error: Paperclip's newest database dump is ${age_min} minutes old; its hourly backups have stopped" >&2
     return 1
@@ -143,7 +145,7 @@ write_status() { # state [error]
 # Runs at most once per period: due <name> <seconds>.
 due() {
   local stamp="$cache/$1.last"
-  [ ! -f "$stamp" ] || [ $(( $(date +%s) - $(stat -c %Y "$stamp") )) -ge "$2" ]
+  [ ! -f "$stamp" ] || [ $(( $(date +%s) - $(mtime "$stamp") )) -ge "$2" ]
 }
 
 case "$mode" in
@@ -172,6 +174,7 @@ case "$mode" in
   offsite)
     mkdir -p "$cache"
     exec 9>"$cache/lock"
+    command -v flock >/dev/null || { echo "error: flock is not installed (on macOS: brew install flock)" >&2; exit 1; }
     flock -n 9 || { echo "another backup is running"; exit 0; }
     if ! restic_env; then
       write_status missing "no $secrets/backup/restic.env or password"
