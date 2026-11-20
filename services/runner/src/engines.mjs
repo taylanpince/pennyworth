@@ -205,6 +205,9 @@ function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp,
       env: {
         ...mcpEnv,
         OPENROUTER_API_KEY: key,
+        // opencode prefers its own stored auth.json over the env var; this makes the job use the
+        // runner's key file (the scoped key) instead of whatever the user signed in with.
+        OPENCODE_AUTH_CONTENT: JSON.stringify({ openrouter: { type: "api", key } }),
         // Non-interactive: opencode must not stop to ask for permission, because an unanswered prompt
         // is auto-rejected and ends the run. Reading outside the worktree (reference repos) is
         // fine: the codex sandbox around opencode still limits writes to the worktree. Its default asks
