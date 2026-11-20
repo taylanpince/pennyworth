@@ -5,6 +5,7 @@
 //   todo add "Draft OMS roadmap" [-p high] [-n "details"]
 //   todo prio PEN-12 high                 critical | high | medium | low
 //   todo done PEN-12 ["optional note"]
+//   todo note PEN-12 "progress"           a comment from your own agent session, never read as your words
 //   todo show PEN-12
 //   todo waiting                          things other people owe you
 //   todo brief                            print today's daily brief
@@ -34,6 +35,8 @@ const sys = readFileSync(join(repo, dotenv.PENNYWORTH_CONFIG_DIR ?? "config", "s
 const company = /^\s*company_id:\s*"?([0-9a-f-]{36})"?/m.exec(sys)?.[1];
 if (!company) die("paperclip.company_id missing in config/system.yaml");
 
+// The runner's marker: comments carrying it are never the user's instructions (runner, board, tasks bridge).
+const RUNNER_MARKER = "<!-- pennyworth-runner -->";
 const PRIORITIES = ["critical", "high", "medium", "low"];
 const OPEN = "backlog,todo,in_progress,in_review,blocked";
 const tty = process.stdout.isTTY;
@@ -151,6 +154,14 @@ switch (cmd) {
     console.log(`${ref(id)} done`);
     break;
   }
+  case "note": {
+    const [id, ...words] = args;
+    const text = words.join(" ").trim();
+    if (!text) die('usage: todo note PEN-12 "what happened"');
+    await api("POST", `/api/issues/${ref(id)}/comments`, { body: `${text}\n\n${RUNNER_MARKER}` });
+    console.log(`${ref(id)} noted`);
+    break;
+  }
   case "show": {
     const i = await api("GET", `/api/issues/${ref(args[0])}`);
     console.log(`${c("1", i.identifier)} ${i.title}\n${i.status} · ${i.priority} · ${(i.labels ?? []).map((l) => l.name).join(", ")} · created ${age(i.createdAt) === "today" ? "today" : `${age(i.createdAt)} ago`}\n`);
@@ -171,7 +182,7 @@ switch (cmd) {
   case "help":
   case "-h":
   case "--help":
-    console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1, 13).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
+    console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1, 14).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
     break;
   default:
     die(`unknown command "${cmd}" (try: todo help)`);
