@@ -229,7 +229,7 @@ case "$mode" in
     # Load the dump into a throwaway Postgres (no network) the way a restore would.
     docker run -d --name "$container" --network none -e POSTGRES_PASSWORD=verify \
       -v "$root/paperclip/paperclip.sql:/dump.sql:ro" postgres:18-alpine >/dev/null
-    for _ in $(seq 60); do docker exec "$container" pg_isready -U postgres -q 2>/dev/null && break; sleep 1; done
+    for _ in $(seq 60); do docker exec "$container" pg_isready -h 127.0.0.1 -U postgres -q 2>/dev/null && break; sleep 1; done
     docker exec "$container" psql -U postgres -q -v ON_ERROR_STOP=1 -f /dump.sql >/dev/null
     issues="$(docker exec "$container" psql -U postgres -tAc 'select count(*) from issues')"
     comments="$(docker exec "$container" psql -U postgres -tAc 'select count(*) from issue_comments')"
