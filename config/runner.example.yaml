@@ -136,6 +136,18 @@ merges:
   gap_minutes: 15        # between merges, unless the request says otherwise
   timeout_minutes: 90    # stop the queue when a check or CI stays pending this long
 
+# The crew's own PRs (docs/design/automation.md): new reviews and failed checks start the author's next
+# turn without you. Read-only GraphQL with your gh login; the turn's writes are checked as always, and
+# the review's words never count as yours. The `hands-off` label on a task stops it; so does a question
+# the agent asked (`pennyworth ask`) until you answer.
+watches:
+  enabled: true
+  interval_minutes: 2
+  debounce_minutes: 3      # wait this long after the newest review comment, so a review is one turn
+  rounds_per_day: 5        # automatic turns per PR in 24 hours; two in a row that change nothing wait for you
+  # Bots whose reviews start a turn; reviewers in the repository always do, everyone else is only shown.
+  bots: [copilot-pull-request-reviewer, copilot, coderabbitai, github-advanced-security, claude, chatgpt-codex-connector, gemini-code-assist, cursor]
+
 # Your comments on your own open tasks → the Assistant ("Process task replies" routine).
 replies:
   enabled: true

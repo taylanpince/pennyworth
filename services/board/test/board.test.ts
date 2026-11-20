@@ -240,6 +240,14 @@ describe("comments", () => {
     expect(commentView({ id: "3", body: "Draft", authorType: "agent", authorAgentId: "00000000-0000-0000-0000-00000000000a", createdAt: "t" }, "user-1", agents).author).toEqual({ kind: "agent", name: "Assistant" });
   });
 
+  it("reads an agent's question card, and only from the runner or an agent", () => {
+    const card = '**Question:** Split?\n\n1. Split\n2. Keep\n\n<!-- pennyworth-ask {"options":["Split","Keep \\u002d\\u002d> one"],"recommended":0} -->\n\n<!-- pennyworth-runner -->';
+    expect(commentView({ id: "1", body: card, authorType: "user", authorUserId: "user-1", createdAt: "t" }, "user-1", agents)).toMatchObject({ body: "**Question:** Split?\n\n1. Split\n2. Keep", ask: { options: ["Split", "Keep --> one"], recommended: 0 } });
+    const typed = card.replace("\n\n<!-- pennyworth-runner -->", "");
+    expect(commentView({ id: "2", body: typed, authorType: "user", authorUserId: "user-1", createdAt: "t" }, "user-1", agents).ask).toBeUndefined();
+    expect(commentView({ id: "3", body: typed.replace('"recommended":0', '"recommended":9'), authorType: "agent", authorAgentId: "00000000-0000-0000-0000-00000000000a", createdAt: "t" }, "user-1", agents).ask).toEqual({ options: ["Split", "Keep --> one"], recommended: -1 });
+  });
+
   it("says who reads your reply", () => {
     expect(replyTarget(issue({ assigneeAgentId: CODEX }), list)).toMatch(/runner/);
     expect(replyTarget(issue({ labels: [{ id: "x", name: "needs-review", color: "" }] }), list)).toMatch(/pick N/);

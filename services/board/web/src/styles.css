@@ -967,3 +967,5 @@ span.mem-kind { display: inline-flex; align-items: center; }
 .app.mobile .budget-row .meter { grid-column: 2 / 4; grid-row: 2; }
 .app.mobile .budget-row .num { grid-row: 1; grid-column: 3; }
 @media (forced-colors: active) { .chart rect, .chart path { forced-color-adjust: none; } }
+/* A question an agent asked (docs/design/automation.md): its options, until you answer. */
+.ask-options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

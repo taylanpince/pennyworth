@@ -236,6 +236,8 @@ export interface CommentView {
   body: string;
   author: { kind: "me" | "runner" | "agent" | "user"; name: string };
   createdAt: string;
+  /** A question for you (`pennyworth ask`): its options become buttons until you answer. */
+  ask?: { options: string[]; recommended: number };
 }
 
 export interface IssueView extends Omit<Card, "scheduled" | "recurring" | "working" | "crew" | "subtasks"> {

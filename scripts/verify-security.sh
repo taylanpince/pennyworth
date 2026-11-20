@@ -327,13 +327,13 @@ merge_writes="$(sed -n '/^export const WRITES/,/^\];/p' services/runner/src/merg
   && pass "runner: merge queue writes only merges, branch updates and ready-for-review (services/runner/src/merges.mjs)" || fail "runner: unexpected merge-queue writes: $merge_writes"
 # The Engineer's own tools (docs/design/conversational-engineers.md): a fixed command list on the per-run
 # loopback endpoint, every write checked against the user's words, and the check given nothing else. Draft PRs and
-# Primer documents of the agent's own work skip it (D-70): a PR counts as its own only where the runner opened it.
+# Primer documents of the agent's own work skip it (D-70): a PR counts as its own only where the runner opened it (the PR watch only reads that record).
 tools="$(grep -oE '^export const TOOLS = \[[^]]*\]' services/runner/src/repohelper.mjs)"
-[ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "pass", "aws", "reset", "cleanup", "task", "tasks", "remember", "propose", "memory"]' ] \
+[ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "pass", "ask", "aws", "reset", "cleanup", "task", "tasks", "remember", "propose", "memory"]' ] \
   && [ "$(awk '/^async function agentTasks?\(/,/^}/' services/runner/src/main.mjs | grep -c '^  requireTaskReads(ctx);')" = 2 ] \
   && grep -q 'check: (ordered) => (command === "pr" ? allowPr(ctx, ordered) : allowWrite(ctx, command,' services/runner/src/main.mjs \
   && grep -q '^  if (!ownWork(rows)) return allowWrite(ctx, "pr",' services/runner/src/main.mjs \
-  && [ "$(grep -c 'own-pr:' services/runner/src/main.mjs)" = 2 ] && [ "$(grep -c 'state.set(`own-pr:${prUrl}`, issue.id);' services/runner/src/main.mjs)" = 1 ] \
+  && [ "$(grep -c 'own-pr:' services/runner/src/main.mjs)" = 3 ] && [ "$(grep -c 'state.set(`own-pr:${prUrl}`, issue.id);' services/runner/src/main.mjs)" = 1 ] \
   && [ "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "merge"' | cut -d: -f1)" -lt "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'ctx.merge = ' | cut -d: -f1)" ] \
   && [ "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "primer"' | cut -d: -f1)" -lt "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'savePrimer(' | head -1 | cut -d: -f1)" ] \
   && grep -q '^export function authorizePrompt({ user, action, aws = false, earlier = \[\], recent = \[\], lastReply = "" })' services/runner/src/authorize.mjs \

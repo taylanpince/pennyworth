@@ -177,4 +177,9 @@ export class State {
   set(key, value) {
     this.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(key, value);
   }
+
+  /** Every meta entry whose key starts with `prefix`, as [key, value] pairs. */
+  entries(prefix) {
+    return this.db.prepare("SELECT key, value FROM meta WHERE substr(key, 1, ?) = ?").all(prefix.length, prefix).map((r) => [r.key, r.value]);
+  }
 }

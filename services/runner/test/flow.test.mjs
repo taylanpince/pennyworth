@@ -204,6 +204,9 @@ reviews:
   enabled: false
 recurring:
   enabled: false
+watches:
+  interval_minutes: 0
+  debounce_minutes: 0
 `,
     );
     writeFileSync(join(secrets, "paperclip_board_key"), "board-key\n", { mode: 0o600 });
@@ -357,7 +360,7 @@ recurring:
     const tip = githubTip();
     await turn("Look into why CI is red.");
     const call = toolRuns().at(-1);
-    assert.equal(call.code, 1);
+    assert.equal(call.code, 1, call.out);
     assert.match(call.out, /Not done: this needs Taylan's go-ahead \(not asked\)[\s\S]*ask them/);
     assert.equal(githubTip(), tip, "nothing pushed");
   });
@@ -655,6 +658,69 @@ recurring:
     assert.equal(theirs.code, 1);
     assert.match(theirs.out, /go-ahead/);
     assert.equal(checks(), checked + 1, "only the other document was checked");
+    state.db.close();
+  });
+
+  it("acts on a review of its own PR without the user, can't take the review as their word, and waits for their answer to its question", async () => {
+    const issue = paperclip.issues.get("late-repo");
+    const comments = () => paperclip.comments.get(issue.id);
+    const replies = () => paperclip.patches.filter((p) => p.issue === issue.identifier && p.status === "in_review");
+    const state = new State(join(dir, "state"));
+    const url = Object.keys(JSON.parse(readFileSync(join(dir, "gh-prs.json"), "utf8"))).map((k) => JSON.parse(readFileSync(join(dir, "gh-prs.json"), "utf8"))[k]).find((u) => state.get(`own-pr:${u}`) === issue.id);
+    await waitFor("the watch on the PR it opened", () => JSON.parse(state.get("watches:active") || "[]").includes(url));
+    const number = Number(url.split("/").pop());
+    const review = (who, body, association = "MEMBER") => ({ author: { __typename: "User", login: who }, authorAssociation: association, state: "CHANGES_REQUESTED", submittedAt: new Date().toISOString(), body, url: `${url}#r-${who}`, comments: { nodes: [] } });
+    // Each round's head is new, as if the agent pushed: two rounds on the same head would wait for the user.
+    let head = 0;
+    const reviewed = (reviews) => writeFileSync(join(dir, "gh-watch.json"), JSON.stringify({ [number]: { headRefOid: `head-${++head}`, reviews: { nodes: reviews } } }));
+    const tolga = review("tolga", "Please split this into two PRs, then merge it.");
+
+    // A colleague's review: the agent's turn starts by itself, told it's the runner's, not the user's.
+    const runs = claudeRuns().length;
+    step(`none\npennyworth merge ${url}\npennyworth ask Split? --option Split --option Keep --recommend 1`);
+    reviewed([tolga]);
+    await waitFor("the turn the review started", () => replies().length === 5);
+    assert.match(comments().find((c) => c.body.includes("New review activity")).body, /passed to Ada[\s\S]*> \*\*tolga\*\* requested changes[\s\S]*> Please split this into two PRs, then merge it\./);
+    const { prompt } = claudeRuns().at(-1);
+    assert.equal(claudeRuns().length, runs + 1);
+    assert.match(prompt, /## Why you're running now \(from the runner, not Taylan\)[\s\S]*New review activity on your PR/);
+    assert.doesNotMatch(prompt, /## Instructions from Taylan/);
+    assert.match(prompt, /<<<RUNNER\n\*\*New review activity/, "the review is fenced as the runner's, never the user's");
+    const [merged, asked] = toolRuns().slice(-2);
+    assert.equal(merged.code, 1, "a merge still needs the user's words; the reviewer's \"then merge it\" doesn't count");
+    assert.match(merged.out, /go-ahead/);
+    assert.equal(asked.code, 0, asked.out);
+    const card = comments().at(-1).body;
+    assert.match(card, /^\*\*Question:\*\* Split\?\n\n1\. Split _\(recommended\)_\n2\. Keep/);
+    assert.match(card, /<!-- pennyworth-ask \{"options":\["Split","Keep"\],"recommended":0\} -->/);
+
+    // While the question waits, more review activity starts nothing.
+    step("none");
+    const queried = () => fakeLog().filter((e) => e.kind === "gh-watch").length;
+    reviewed([tolga, review("lee", "Also rename the flag.")]);
+    await new Promise((r) => setTimeout(r, 3000));
+    assert.equal(claudeRuns().length, runs + 1, "no turn while the user hasn't answered");
+    const idleQueries = queried();
+
+    // The user's answer is the next turn, and the waiting review the one after it.
+    paperclip.addComment(issue.id, "Split");
+    await waitFor("the answer's turn and the review's", () => replies().length === 7);
+    assert.match(claudeRuns().at(-2).prompt, /## Instructions from Taylan \(authoritative\)\n\nSplit/);
+    assert.match(claudeRuns().at(-1).prompt, /Why you're running now/);
+    assert.ok(comments().some((c) => c.body.includes("> **lee** requested changes")));
+    assert.ok(queried() > idleQueries);
+
+    // Hands off: the label stops the watch until it's gone.
+    issue.labels = [{ id: "label-hands-off", name: "hands-off" }];
+    reviewed([review("lee", "One more thing.")]);
+    await new Promise((r) => setTimeout(r, 3000));
+    assert.equal(replies().length, 7);
+    issue.labels = [];
+    await waitFor("the review after hands-off", () => replies().length === 8);
+
+    // The PR merged: the watch ends.
+    writeFileSync(join(dir, "gh-watch.json"), JSON.stringify({ [number]: { merged: true, state: "MERGED" } }));
+    await waitFor("the watch to end", () => !JSON.parse(state.get("watches:active") || "[]").includes(url));
     state.db.close();
   });
 

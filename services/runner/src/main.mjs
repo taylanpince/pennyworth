@@ -28,6 +28,7 @@ import { SignInRunner } from "./signins.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import * as merges from "./merges.mjs";
+import { DEFAULT_BOTS, HANDS_OFF, WATCH_QUERY, askComment, eventComment, eventInstructions, newWatch, parseAsk, parsePr, roundsLeft, waitingOnUser, watchStep } from "./watches.mjs";
 import { State } from "./state.mjs";
 import { REPLY_MARKER, fence, prSnapshot, stateSection, threadEntries, threadSection, transcript, wordsAround } from "./thread.mjs";
 import { authorize } from "./authorize.mjs";
@@ -79,6 +80,11 @@ async function poll() {
   if (board && Date.now() - lastRecurringCheck >= 60_000) {
     lastRecurringCheck = Date.now();
     await startRecurringRuns().catch((err) => log("recurring check failed", { err: String(err.message ?? err).slice(0, 300) }));
+  }
+  // The crew's own PRs (docs/design/automation.md): reviews and failed checks start the author's next turn.
+  if (cfg.watches?.enabled !== false && Date.now() - lastWatchCheck >= (cfg.watches?.interval_minutes ?? 2) * 60_000) {
+    lastWatchCheck = Date.now();
+    await advanceWatches().catch((err) => log("watch check failed", { err: String(err.stderr || err.message || err).slice(0, 300) }));
   }
   // Merges you asked for (D-46), at most once a minute.
   if (Date.now() - lastMergeCheck >= 60_000) {
@@ -324,6 +330,115 @@ async function closeReviewedTasks() {
   }
 }
 
+// ------------------------------------------------------------------ watches on the crew's own PRs (docs/design/automation.md)
+
+let lastWatchCheck = 0;
+const watchOf = (url) => (state.get(`watch:${url}`) ? JSON.parse(state.get(`watch:${url}`)) : undefined);
+const activeWatches = () => JSON.parse(state.get("watches:active") || "[]");
+function saveWatch(watch) {
+  state.set(`watch:${watch.url}`, JSON.stringify(watch));
+  const active = activeWatches().filter((u) => u !== watch.url);
+  state.set("watches:active", JSON.stringify(watch.ended ? active : [...active, watch.url]));
+}
+
+/** Watch a PR the task opened: what happens on it from now on reaches the agent without the user. */
+function addWatch(issueId, url) {
+  if (cfg.watches?.enabled === false || watchOf(url) || !parsePr(url)) return;
+  saveWatch(newWatch(issueId, url));
+  log("watching PR", { url });
+}
+
+/** The user said something on the task: a watch that stopped for them carries on. */
+function resumeWatches(issueId) {
+  for (const url of activeWatches()) {
+    const watch = watchOf(url);
+    if (watch?.issueId !== issueId || !watch.paused) continue;
+    Object.assign(watch, { paused: "", idle: 0 });
+    saveWatch(watch);
+  }
+}
+
+/** The user took the task out of automation: the `hands-off` label on it or on the task it is part of. */
+async function handsOff(issue) {
+  const has = (i) => (i?.labels ?? []).some((l) => l.name === HANDS_OFF);
+  if (has(issue)) return true;
+  return issue.parentId ? has(await pc.issue(issue.parentId).catch(() => undefined)) : false;
+}
+
+async function advanceWatches() {
+  // PRs the crew opened before watches existed: watched from now on.
+  if (!state.get("watches:backfilled")) {
+    for (const [key, issueId] of state.entries("own-pr:")) addWatch(issueId, key.slice("own-pr:".length));
+    state.set("watches:backfilled", new Date().toISOString());
+  }
+  const urls = activeWatches();
+  if (!urls.length) return;
+  const gh = await findRealGh();
+  githubLogin ??= (await execFileP(gh, ["api", "user", "--jq", ".login"])).stdout.trim();
+  for (const url of urls) {
+    const watch = watchOf(url);
+    if (!watch) continue;
+    await advanceWatch(watch, gh).catch((err) => log("watch step failed", { url, err: String(err.stderr || err.message || err).slice(0, 300) }));
+  }
+}
+
+/** One check of one watched PR; at most one automatic turn comes of it. */
+async function advanceWatch(watch, gh) {
+  const end = (why) => {
+    watch.ended = why;
+    saveWatch(watch);
+    log("watch ended", { url: watch.url, why });
+  };
+  // The task's own turn comes first; what happened on the PR waits for the next check, nothing is lost.
+  if (running.has(watch.issueId) || queue.some((j) => j.issue.id === watch.issueId)) return;
+  const issue = await pc.issue(watch.issueId);
+  if (["done", "cancelled"].includes(issue.status)) return end(`task ${issue.status}`);
+  if (watch.paused || (await handsOff(issue))) return;
+  if (waitingOnUser(await pc.comments(issue.id), Paperclip.isUserInstruction)) return;
+  const ref = parsePr(watch.url);
+  const { stdout } = await execFileP(gh, ["api", "graphql", "-f", `query=${WATCH_QUERY}`, "-f", `owner=${ref.owner}`, "-f", `repo=${ref.repo}`, "-F", `number=${ref.number}`], { maxBuffer: 16 * 1024 * 1024 });
+  const pr = JSON.parse(stdout).data?.repository?.pullRequest;
+  const step = watchStep(watch, pr, { me: githubLogin, bots: cfg.watches?.bots ?? DEFAULT_BOTS, debounceMs: (cfg.watches?.debounce_minutes ?? 3) * 60_000 });
+  if (step.end) return end(`PR ${step.end}`);
+  if (step.failedSince) {
+    watch.failedSince = step.failedSince;
+    return saveWatch(watch);
+  }
+  if (!step.event && !step.shown?.length) return;
+  const who = personaFor((await pc.engineerAgents().catch(() => [])).find((a) => a.id === issue.assigneeAgentId))?.name;
+  if (!step.event) {
+    // Only people outside the repository: on the task for the user, no turn.
+    await pc.comment(issue.id, eventComment(pr, step, who));
+    watch.cursor = step.cursor;
+    return saveWatch(watch);
+  }
+  const now = Date.now();
+  const { recent, left } = roundsLeft(watch, { perDay: cfg.watches?.rounds_per_day ?? 5, now });
+  if (!left) {
+    // Kept for later: the activity is still new when the day's rounds free up or the user comments.
+    if (!watch.capNoted || now - Date.parse(watch.capNoted) > 24 * 3_600_000) {
+      watch.capNoted = new Date(now).toISOString();
+      saveWatch(watch);
+      await pc.comment(issue.id, `There's new activity on ${pr.url}, but ${recent.length} automatic rounds on it in a day is the limit, so ${who ?? "the agent"} waits for you (or until tomorrow).`);
+    }
+    return;
+  }
+  // Two rounds in a row that left the PR as it was: the next one waits for the user.
+  const idle = watch.lastHead && watch.lastHead === step.head ? (watch.idle ?? 0) + 1 : 0;
+  if (idle >= 2) {
+    Object.assign(watch, { paused: "two rounds without changes", idle });
+    saveWatch(watch);
+    return void (await pc.comment(issue.id, `There's new activity on ${pr.url}. The last two automatic rounds didn't change the PR, so ${who ?? "the agent"} waits for you: say what to do, or just "go on".`));
+  }
+  Object.assign(watch, { idle, lastHead: step.head ?? "", rounds: [...recent, new Date(now).toISOString()], failedSince: {}, capNoted: "" });
+  if (step.cursor) watch.cursor = step.cursor;
+  if (step.event.kind === "checks") watch.checkedHead = step.head;
+  saveWatch(watch);
+  await pc.comment(issue.id, eventComment(pr, step, who));
+  log("watch event", { issue: issue.identifier, url: watch.url, kind: step.event.kind, items: step.event.items.length });
+  await dispatch({ issue: { id: issue.id, identifier: issue.identifier, assigneeAgentId: issue.assigneeAgentId }, instructions: eventInstructions(pr, step, cfg.selfName), event: true });
+}
+
 async function handleIssue(issue, engineerIds) {
   const known = state.task(issue.id);
   const task = known ?? state.ensureTask(issue.id, issue.identifier);
@@ -355,6 +470,8 @@ async function handleIssue(issue, engineerIds) {
     return;
   }
 
+  // The user is back on the task: a watch that waited for them carries on.
+  resumeWatches(issue.id);
   const texts = [];
   for (const c of fresh) {
     state.markHandled(c.id, issue.id);
@@ -471,7 +588,10 @@ async function dispatch(job) {
   // Comments that arrive while a turn waits join it: the agent reads them together.
   const waiting = queue.find((j) => j.issue.id === issue.id);
   if (waiting) {
-    waiting.instructions = `${waiting.instructions}\n\n${job.instructions}`;
+    // The user's words lead whenever they're in the turn; what a watch brings in joins as a runner note.
+    const note = (j) => (j.event ? `(Runner note: ${j.instructions})` : j.instructions);
+    waiting.instructions = waiting.event === job.event ? `${waiting.instructions}\n\n${job.instructions}` : `${note(waiting)}\n\n${note(job)}`;
+    waiting.event = Boolean(waiting.event && job.event);
     saveQueue();
     return;
   }
@@ -907,6 +1027,22 @@ async function agentPrimer(ctx, args) {
  * `pennyworth pass <name>`: the user's latest message on this task goes to another agent on it (D-54),
  * word for word, through the board, which checks it's the user's own. For what this agent can't do.
  */
+/**
+ * `pennyworth ask`: a decision for the user, posted after the agent's reply as a card the board shows
+ * with buttons. Until they answer, nothing automatic (a PR watch) starts a turn on the task.
+ */
+async function agentAsk(ctx, args) {
+  let ask;
+  try {
+    ask = parseAsk(args);
+  } catch (err) {
+    throw new UserError(err.message);
+  }
+  ctx.ask = ask;
+  log("question asked", { issue: ctx.issue.identifier, options: ask.options.length });
+  return `Your question goes on the task right after your reply${ask.options.length ? ", with the options as buttons" : ""}, and nothing automatic runs on this task until ${cfg.selfName} answers. Finish your turn now: your reply should lead up to the question, not repeat it.`;
+}
+
 async function agentPass(ctx, args) {
   const to = String(args.to ?? "").trim();
   if (!to) throw new UserError("Name the agent: `pennyworth pass <name>`.");
@@ -1111,7 +1247,7 @@ class UserError extends Error {}
  * user's new comments (or their own task's description) go to the agent with the whole task in context;
  * its reply goes on the task. The agent decides what to do; its GitHub writes go through its tools.
  */
-async function startJob({ issue, instructions }) {
+async function startJob({ issue, instructions, event = false }) {
   const controller = new AbortController();
   let gcp;
   let aws;
@@ -1217,12 +1353,12 @@ async function startJob({ issue, instructions }) {
     // The conversation (all of it for a new session, what's new for a resumed one) and where the work stands.
     const { thread, stand, words } = await conversation(issue, workspace, { instructions, resumed, persona });
     let prompt = resumed
-      ? followUpPrompt({ user: cfg.selfName, instructions, workspace, repos, branches, files, primer, primerEnabled: cfg.primerEnabled && !cad, crew, observe, thread, stand, memory })
-      : firstPrompt({ user: cfg.selfName, task: full, workspace, repos, branches, shells: runShells, instructions, files, primer, primerEnabled: cfg.primerEnabled && !cad, persona, crew, observe, thread, stand, team: crewNames(await pc.agents().catch(() => engineers)), memory, restarted: Boolean(state.get(`restarted:${issue.id}`)) });
+      ? followUpPrompt({ user: cfg.selfName, instructions, event, workspace, repos, branches, files, primer, primerEnabled: cfg.primerEnabled && !cad, crew, observe, thread, stand, memory })
+      : firstPrompt({ user: cfg.selfName, task: full, event, workspace, repos, branches, shells: runShells, instructions, files, primer, primerEnabled: cfg.primerEnabled && !cad, persona, crew, observe, thread, stand, team: crewNames(await pc.agents().catch(() => engineers)), memory, restarted: Boolean(state.get(`restarted:${issue.id}`)) });
     if (runtime) prompt += `\n\n${runtime.instructions}\n\nThese CAD-specific workflow instructions replace the generic repository/commit and Primer guidance above. The current user request still defines what to design.\n`;
     if (!resumed) state.set(`restarted:${issue.id}`, "");
     const tipsBefore = await branchTips(workspace);
-    tools = { issue, workspace, words, instructions, kind: engine.kind, who: persona?.name, memoryScope: memoryOf, signal: controller.signal, ...(cad ? { allowedTools: CAD_TOOLS } : {}) };
+    tools = { issue, workspace, words, instructions, event, kind: engine.kind, who: persona?.name, memoryScope: memoryOf, signal: controller.signal, ...(cad ? { allowedTools: CAD_TOOLS } : {}) };
     const helper = repoHelper.register(tools);
     let result;
     try {
@@ -1312,9 +1448,11 @@ async function afterTurn(issue, tools) {
     state.updateTask(issue.id, { engine: tools.engine });
     state.set(`picker:${issue.id}`, new Date().toISOString());
     log("engine switched by the agent", { issue: issue.identifier, engine: tools.engine.kind, model: tools.engine.model });
-    return dispatch({ issue, instructions: tools.instructions, full: await pc.issue(issue.id) });
+    return dispatch({ issue, instructions: tools.instructions, event: tools.event, full: await pc.issue(issue.id) });
   }
   if (tools.merge) await startMerges(issue, { prs: tools.merge.prs, gapMinutes: tools.merge.gap });
+  // The question goes after the reply, so it's the last thing on the task (`pennyworth ask`).
+  if (tools.ask) await pc.comment(issue.id, askComment(tools.ask));
   if (tools.cleanup) await runCommand(issue, state.task(issue.id), "cleanup");
 }
 
@@ -1643,6 +1781,7 @@ async function publishBranch(issue, full, r, command, rows, text) {
   const prUrl = stdout.trim().split("\n").pop();
   state.updateBranch(issue.id, r.repo, r.branch, { pr_url: prUrl });
   state.set(`own-pr:${prUrl}`, issue.id);
+  addWatch(issue.id, prUrl);
   log("draft PR opened", { issue: issue.identifier, url: prUrl });
   return `${pushed ? `${pushed}, opened` : "Opened"} draft PR ${prUrl}`;
 }
@@ -1765,6 +1904,7 @@ const repoHelper = startRepoHelper(async ({ issue, workspace }, raw) => {
   engine: agentEngine,
   primer: agentPrimer,
   pass: agentPass,
+  ask: agentAsk,
   aws: agentAws,
   reset: agentReset,
   cleanup: agentCleanup,

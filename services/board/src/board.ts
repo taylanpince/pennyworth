@@ -288,6 +288,22 @@ export interface CommentView {
   body: string;
   author: { kind: "me" | "runner" | "agent" | "user"; name: string };
   createdAt: string;
+  /** A question for the user (`pennyworth ask`, docs/design/automation.md): its options become buttons. */
+  ask?: { options: string[]; recommended: number };
+}
+
+/** The options of an agent's question card, from its hidden marker; undefined for any other comment. */
+export function askOf(body: string): CommentView["ask"] {
+  const m = /<!-- pennyworth-ask (\{[\s\S]*?\}) -->/.exec(body);
+  if (!m) return undefined;
+  try {
+    const raw = JSON.parse(m[1]!) as { options?: unknown; recommended?: unknown };
+    const options = (Array.isArray(raw.options) ? raw.options : []).filter((o): o is string => typeof o === "string" && o.trim() !== "").map((o) => o.slice(0, 200)).slice(0, 5);
+    const recommended = typeof raw.recommended === "number" && Number.isInteger(raw.recommended) && raw.recommended < options.length ? raw.recommended : -1;
+    return { options, recommended };
+  } catch {
+    return { options: [], recommended: -1 };
+  }
 }
 
 export function commentView(c: Comment, me: string, agents: Agent[]): CommentView {
@@ -299,7 +315,8 @@ export function commentView(c: Comment, me: string, agents: Agent[]): CommentVie
         : c.authorUserId && c.authorUserId !== me
           ? { kind: "user", name: "Someone else" }
           : { kind: "me", name: "You" };
-  return { id: c.id, body: displayText(c.body), author, createdAt: c.createdAt };
+  const ask = author.kind === "runner" || author.kind === "agent" ? askOf(c.body) : undefined;
+  return { id: c.id, body: displayText(c.body), author, createdAt: c.createdAt, ...(ask ? { ask } : {}) };
 }
 
 /** Who reads a reply on this task (shown under the reply box). */

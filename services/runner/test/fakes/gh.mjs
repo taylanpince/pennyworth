@@ -2,11 +2,28 @@
 // description goes through, logged with what it would have written; a lookup of a branch's open PR
 // answers from gh-prs.json next to the log (PRs the user opened); and a draft PR opens, into that file,
 // for a branch named in gh-open.json (a list of "<repo> <branch>"), so other PRs still fail to open.
+// The PR watch's query answers from gh-watch.json (PR number → pullRequest), else an open PR with no
+// activity; `api user` is the user's login.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { log } from "./lib.mjs";
 
 const args = process.argv.slice(2);
+if (args[0] === "api" && args[1] === "user" && args.includes("--jq")) {
+  process.stdout.write("taylan\n");
+  process.exit(0);
+}
+const field = (name) => args.find((a) => a.startsWith(`${name}=`))?.slice(name.length + 1);
+if (args[0] === "api" && args[1] === "graphql" && field("query")?.includes("authorAssociation")) {
+  const watched = join(dirname(process.env.FAKE_LOG), "gh-watch.json");
+  const number = Number(field("number"));
+  const url = `https://github.com/${field("owner")}/${field("repo")}/pull/${number}`;
+  const pr = (existsSync(watched) ? JSON.parse(readFileSync(watched, "utf8")) : {})[number] ?? {};
+  log("gh-watch", number);
+  const open = { number, url, title: "Late clone", state: "OPEN", merged: false, headRefOid: "head-1", reviews: { nodes: [] }, comments: { nodes: [] }, commits: { nodes: [] } };
+  process.stdout.write(JSON.stringify({ data: { repository: { pullRequest: { ...open, ...pr } } } }));
+  process.exit(0);
+}
 if (args[0] === "pr" && args[1] === "edit") {
   log("gh", args);
   process.exit(0);

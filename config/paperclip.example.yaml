@@ -16,6 +16,8 @@ labels:
   - { name: engineer, color: "#4f46e5" }
   - { name: email, color: "#ea580c" }
   - { name: recurring, color: "#0d9488" }
+  # No automatic turns on this task or its parts: PR watches wait for you (docs/design/automation.md).
+  - { name: hands-off, color: "#64748b" }
 
 # MCP servers given to Codex agents directly through the shared Codex config
 # (/paperclip/.codex/config.toml). Not registered as Paperclip Tool Connections: the

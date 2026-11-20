@@ -12,6 +12,8 @@
 //   pennyworth primer [<Primer link>]                   publish .pennyworth/primer.md on Primer after runs (a new
 //                                                       document, or new versions of the one linked)
 //   pennyworth pass <name>                              pass the user's latest message on to another agent on the task
+//   pennyworth ask "<question>" [--option <text>]... [--recommend <n>]
+//                                                       a decision for the user, as a card on the task after the reply
 //   pennyworth aws [--account <name>] <service> <operation> [options]...
 //                                                       one AWS change the user asked for, with the account's write role
 //   pennyworth reset                                    start the next turn with a fresh session
@@ -24,7 +26,7 @@
 //   pennyworth memory <words> | #<id>                   search memories and past tasks
 import { readFileSync } from "node:fs";
 
-const usage = `usage: pennyworth status | push [<org/repo> <branch>]... | pr [<org/repo> <branch>]... [--title <title>] [--body-file <file>] | merge <PR link>... [--gap <minutes>] | repo <org/name> | engine <claude|codex|openrouter> [model] | primer [<Primer link>] | pass <name> | aws [--account <name>] <service> <operation> [options] | reset | cleanup | task <PEN-N> | tasks [<words>] [--agent <name>] | remember <global|self|Name> <rule|fact|lesson|playbook> <text> | propose <global|self|Name> <rule|fact|lesson|playbook> <text> --why <reason> | memory <words>`;
+const usage = `usage: pennyworth status | push [<org/repo> <branch>]... | pr [<org/repo> <branch>]... [--title <title>] [--body-file <file>] | merge <PR link>... [--gap <minutes>] | repo <org/name> | engine <claude|codex|openrouter> [model] | primer [<Primer link>] | pass <name> | ask "<question>" [--option <text>]... [--recommend <n>] | aws [--account <name>] <service> <operation> [options] | reset | cleanup | task <PEN-N> | tasks [<words>] [--agent <name>] | remember <global|self|Name> <rule|fact|lesson|playbook> <text> | propose <global|self|Name> <rule|fact|lesson|playbook> <text> --why <reason> | memory <words>`;
 const MEMORY_COMMANDS = ["remember", "propose", "memory"];
 const [command, ...rest] = process.argv.slice(2);
 const fail = (msg, code = 1) => {
@@ -36,7 +38,7 @@ if (!command || ["help", "-h", "--help"].includes(command) || rest.some((w) => w
   console.log(usage);
   process.exit(0);
 }
-if (!["status", "push", "pr", "merge", "repo", "engine", "primer", "pass", "aws", "reset", "cleanup", "task", "tasks", ...MEMORY_COMMANDS].includes(command)) fail(usage, 2);
+if (!["status", "push", "pr", "merge", "repo", "engine", "primer", "pass", "ask", "aws", "reset", "cleanup", "task", "tasks", ...MEMORY_COMMANDS].includes(command)) fail(usage, 2);
 if (!process.env.PENNYWORTH_REPO_URL) fail("only available inside a task run", 2);
 
 // aws: everything after the account is the AWS CLI's own arguments, passed on as they are.
@@ -63,7 +65,8 @@ const memoryBody = () => {
 const flags = {};
 const words = [];
 for (let i = 0; command !== "aws" && !MEMORY_COMMANDS.includes(command) && i < rest.length; i++) {
-  if (rest[i] === "--title" || rest[i] === "--body-file" || rest[i] === "--gap" || rest[i] === "--agent") flags[rest[i].slice(2)] = rest[++i];
+  if (rest[i] === "--title" || rest[i] === "--body-file" || rest[i] === "--gap" || rest[i] === "--agent" || rest[i] === "--recommend") flags[rest[i].slice(2)] = rest[++i];
+  else if (rest[i] === "--option") (flags.options ??= []).push(rest[++i] ?? "");
   else if (rest[i].startsWith("--")) fail(`unknown option ${rest[i]}\n${usage}`, 2);
   else words.push(rest[i]);
 }
@@ -84,6 +87,9 @@ if (command === "aws") {
 } else if (command === "pass") {
   if (words.length !== 1) fail("usage: pennyworth pass <name>", 2);
   body = { to: words[0] };
+} else if (command === "ask") {
+  if (words.length !== 1) fail('usage: pennyworth ask "<question>" [--option <text>]... [--recommend <n>] (quote the question)', 2);
+  body = { question: words[0], options: flags.options ?? [], recommend: flags.recommend };
 } else if (command === "task") {
   if (words.length !== 1) fail("usage: pennyworth task <PEN-N>", 2);
   body = { task: words[0] };

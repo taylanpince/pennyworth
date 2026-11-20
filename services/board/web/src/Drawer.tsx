@@ -430,7 +430,7 @@ function Overview({ issue, board, editable, update, reload, toast, pick, onAdd, 
             </div>
           )
         )}
-        {(mine || !issue.crew.length) && <Thread issue={issue} board={board} prefix={board.prefix} title={mine && assistant ? "Team chat" : "Activity"} />}
+        {(mine || !issue.crew.length) && <Thread issue={issue} board={board} prefix={board.prefix} title={mine && assistant ? "Team chat" : "Activity"} answer={editable ? async (text) => (await api.comment(issue.id, text), await reload()) : undefined} />}
       </div>
       {editable && (mine || !issue.crew.length) && (
         <Composer issue={issue} reload={reload} toast={toast} to={mine && assistant ? { assignee: assistant, label: `${shortName(assistant)} reads this; @name brings in someone else` } : undefined} crew={mine ? board.assignees : []} moved={moved} />
@@ -728,7 +728,7 @@ function AgentPane({ task, member, focus, board, reload, onChanged, toast, moved
           </details>
         )}
         {part && !self && <Files issue={part} />}
-        {part ? <Thread issue={part} board={board} prefix={board.prefix} agent={agent} title="Chat" /> : <p className="muted">Loading…</p>}
+        {part ? <Thread issue={part} board={board} prefix={board.prefix} agent={agent} title="Chat" answer={part.editable ? async (text) => (await api.comment(part.id, text), await (self ? reload : load)()) : undefined} /> : <p className="muted">Loading…</p>}
         {part?.working && (
           <div className="working-tail">
             <div className={`working-line${part.working.queued ? " queued" : ""}`}>
@@ -884,9 +884,13 @@ function useFollow(comments: CommentView[], openAtEnd = true, tail = "") {
 /** The latest comments stay open; older ones fold into one-line rows that open on a click. */
 const OPEN_COMMENTS = 2;
 
-function Thread({ issue, board, agent, prefix, title = "Activity" }: { issue: IssueView; board: Board; agent?: Assignee; prefix: string; title?: string }) {
+function Thread({ issue, board, agent, prefix, title = "Activity", answer }: { issue: IssueView; board: Board; agent?: Assignee; prefix: string; title?: string; answer?: (text: string) => Promise<void> }) {
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  const [answering, setAnswering] = useState(false);
   const comments = issue.comments;
+  // The latest question waits for you until you write anything after it; only then are its buttons live.
+  const asked = comments.findLastIndex((c) => c.ask);
+  const waiting = asked >= 0 && !comments.slice(asked + 1).some((c) => c.author.kind === "me") ? comments[asked]!.id : undefined;
   const deliveries = commentFiles(comments, issue.files);
   const older = comments.slice(0, Math.max(0, comments.length - OPEN_COMMENTS));
   const allOpen = older.every((c) => open.has(c.id));
@@ -931,6 +935,28 @@ function Thread({ issue, board, agent, prefix, title = "Activity" }: { issue: Is
             </div>
             <Markdown text={deliveries.has(c.id) ? c.body.replace(/^_Attached to the task: .+\._$/m, "") : c.body} prefix={prefix} />
             {deliveries.has(c.id) && <Files issue={issue} files={deliveries.get(c.id)} title="Files from this reply" />}
+            {c.id === waiting && answer && c.ask!.options.length > 0 && (
+              <div className="ask-options" role="group" aria-label="Answer">
+                {c.ask!.options.map((o, n) => (
+                  <button
+                    key={n}
+                    className={`btn${n === c.ask!.recommended ? " primary" : ""}`}
+                    disabled={answering}
+                    title={n === c.ask!.recommended ? "Recommended" : undefined}
+                    onClick={async () => {
+                      setAnswering(true);
+                      try {
+                        await answer(o);
+                      } finally {
+                        setAnswering(false);
+                      }
+                    }}
+                  >
+                    {n === c.ask!.recommended ? `★ ${o}` : o}
+                  </button>
+                ))}
+              </div>
+            )}
           </article>
         );
       })}
