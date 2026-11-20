@@ -90,8 +90,8 @@ export function readOnlyRefusal(slug, allowedOrgs, what) {
 export function resolveEngine(directives, cfg, previous) {
   const raw = (directives.engine ?? "").trim().toLowerCase();
   const model = directives.model?.trim();
-  if (!raw && !model) return previous ?? { kind: "codex", model: cfg.engines.codex.model || undefined };
-  if (raw === "codex") return { kind: "codex", model: model || cfg.engines.codex.model || undefined };
+  if (!raw && !model) return previous ?? { kind: "codex", model: cfg.engines?.codex?.model || undefined };
+  if (raw === "codex") return { kind: "codex", model: model || cfg.engines?.codex?.model || undefined };
   if (["claude", "claude-code", "claude code", "anthropic"].includes(raw)) return { kind: "claude", model: model || cfg.engines.claude?.model || undefined };
   if (raw === "glm" || raw === "openrouter" || raw === "opencode") return { kind: "openrouter", model: model || cfg.engines.openrouter.model };
   if (raw.startsWith("openrouter:")) return { kind: "openrouter", model: directives.engine.trim().slice("openrouter:".length) };
@@ -142,7 +142,7 @@ export function pickedEngine(issue, engineers, cfg) {
     if (kind !== "openrouter") return v;
     return v.startsWith("openrouter/") ? v.slice("openrouter/".length) : "";
   };
-  const fallback = kind === "codex" ? cfg.engines.codex.model : kind === "claude" ? cfg.engines.claude?.model : cfg.engines.openrouter.model;
+  const fallback = kind === "codex" ? cfg.engines?.codex?.model : kind === "claude" ? cfg.engines?.claude?.model : cfg.engines?.openrouter?.model;
   const model = usable(override.model) || (kind === own.kind ? usable(own.model) : "") || fallback || undefined;
   const key = EFFORT_KEY[kind];
   const effort = key ? String(override[key] ?? (kind === own.kind ? own.effort ?? "" : "")).trim().toLowerCase() : "";
@@ -222,7 +222,8 @@ export function resolveShells(directives, detected, instructions, cfg) {
  */
 export function ownRequest(issue) {
   const text = String(issue?.description ?? "");
-  if (!issue?.createdByUserId || issue.createdByAgentId || /<!--\s*source:/.test(text)) return "";
+  // The runner's own parts (a cross-model review) are written by the runner, not the user.
+  if (!issue?.createdByUserId || issue.createdByAgentId || /<!--\s*source:/.test(text) || text.includes(RUNNER_MARKER)) return "";
   return stripHidden(text).trim();
 }
 

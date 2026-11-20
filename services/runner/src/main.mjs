@@ -28,6 +28,7 @@ import { SignInRunner } from "./signins.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import * as merges from "./merges.mjs";
+import { closingComment, declined, findingsComment, fixInstructions, reviewChain, reviewInstructions, reviewVerdict } from "./crossreview.mjs";
 import { DEFAULT_BOTS, HANDS_OFF, WATCH_QUERY, askComment, eventComment, eventInstructions, newWatch, parseAsk, parsePr, roundsLeft, waitingOnUser, watchStep } from "./watches.mjs";
 import { State } from "./state.mjs";
 import { REPLY_MARKER, fence, prSnapshot, stateSection, threadEntries, threadSection, transcript, wordsAround } from "./thread.mjs";
@@ -439,6 +440,105 @@ async function advanceWatch(watch, gh) {
   await dispatch({ issue: { id: issue.id, identifier: issue.identifier, assigneeAgentId: issue.assigneeAgentId }, instructions: eventInstructions(pr, step, cfg.selfName), event: true });
 }
 
+// ------------------------------------------------------------------ cross-model review (docs/design/automation.md, stage 2)
+
+const reviewOf = (authorId) => JSON.parse(state.get(`xreview:${authorId}`) || "{}");
+const saveReview = (authorId, review) => state.set(`xreview:${authorId}`, JSON.stringify(review));
+const reviewerOf = (engineers) => engineers.find((a) => a.metadata?.setupKey === `pennyworth:${cfg.cross_review?.reviewer ?? "reviewer"}`);
+const nameOf = (engineers, id, fallback) => personaFor(engineers.find((a) => a.id === id))?.name ?? fallback;
+
+/**
+ * After an Engineer's turn: if its open PRs moved since the last review, Linus reviews them on the first
+ * model of the chain for the author's engine, in his part of the task (made by the runner, never the user).
+ */
+async function maybeCrossReview(issue) {
+  if (cfg.cross_review?.enabled === false || state.get(`xreview-part:${issue.id}`)) return;
+  const engineers = await pc.engineerAgents();
+  const reviewer = reviewerOf(engineers);
+  const full = await pc.issue(issue.id);
+  if (!reviewer || full.assigneeAgentId === reviewer.id || ["done", "cancelled"].includes(full.status)) return;
+  const urls = state.entries("own-pr:").filter(([, id]) => id === issue.id).map(([key]) => key.slice("own-pr:".length));
+  if (!urls.length) return;
+  const gh = await findRealGh();
+  const heads = {};
+  for (const url of urls) {
+    const { stdout } = await execFileP(gh, ["pr", "view", url, "--json", "state,headRefOid"], { timeout: 20_000 }).catch(() => ({ stdout: "" }));
+    const pr = stdout ? JSON.parse(stdout) : undefined;
+    if (pr?.state === "OPEN" && pr.headRefOid) heads[url] = pr.headRefOid;
+  }
+  const review = reviewOf(issue.id);
+  if (!Object.keys(heads).some((url) => review.heads?.[url] !== heads[url])) return;
+  if ((await handsOff(full)) || waitingOnUser(await pc.comments(issue.id), Paperclip.isUserInstruction)) return;
+  const author = nameOf(engineers, full.assigneeAgentId, "the Engineer");
+  const reviewerName = nameOf(engineers, reviewer.id, "The reviewer");
+  const rounds = cfg.cross_review?.rounds ?? 3;
+  if ((review.round ?? 0) >= rounds) {
+    if (review.capNoted) return;
+    saveReview(issue.id, { ...review, capNoted: true });
+    return void (await pc.comment(issue.id, closingComment({ outcome: "capped", reviewer: reviewerName, rounds, author })));
+  }
+  const chain = reviewChain(state.task(issue.id)?.engine?.kind, cfg.cross_review?.chains);
+  if (!chain.length) return;
+  let part = review.partId ? await pc.issue(review.partId).catch(() => undefined) : undefined;
+  if (part && (running.has(part.id) || queue.some((j) => j.issue.id === part.id))) return;
+  const picker = pickerFor(chain[0], engineers, reviewer.id);
+  if (!part || ["done", "cancelled"].includes(part.status)) {
+    // Crew parts carry their task's title, which Paperclip would otherwise take for a duplicate (D-45).
+    part = await pc.createIssue({
+      title: full.title,
+      description: `Cross-model review of ${author}'s PRs on this task: the runner asks for one each time they change, on a model from another family.\n\n${RUNNER_MARKER}`,
+      status: "todo",
+      priority: full.priority,
+      parentId: full.parentId ?? full.id,
+      allowDuplicate: true,
+      ...picker,
+    });
+    state.set(`xreview-part:${part.id}`, issue.id);
+    log("review part created", { issue: issue.identifier, part: part.identifier });
+  } else await pc.setPicker(part.id, picker);
+  const round = (review.round ?? 0) + 1;
+  saveReview(issue.id, { ...review, partId: part.id, round, pending: heads, step: 0, tried: [], capNoted: false });
+  log("cross review started", { issue: issue.identifier, part: part.identifier, round, engine: chain[0].kind, model: chain[0].model });
+  await dispatch({ issue: { id: part.id, identifier: part.identifier, assigneeAgentId: reviewer.id }, instructions: reviewInstructions({ prs: Object.keys(heads), author, user: cfg.selfName, round }), event: true });
+}
+
+/**
+ * After a review round on Linus's part: a model that declined or failed hands over to the next one; a
+ * verdict goes to the author (blocking findings as its next turn), and the user hears when it's over.
+ */
+async function afterCrossReview(part, ended) {
+  const authorId = state.get(`xreview-part:${part.id}`);
+  if (!authorId || !ended?.event) return; // the user's own turns on Linus's part aren't rounds
+  const review = reviewOf(authorId);
+  if (review.partId !== part.id || !review.pending) return;
+  const engineers = await pc.engineerAgents();
+  const author = await pc.issue(authorId);
+  const authorName = nameOf(engineers, author.assigneeAgentId, "the Engineer");
+  const reviewerName = nameOf(engineers, part.assigneeAgentId, "The reviewer");
+  const model = engineLabel(ended.engine);
+  if (!ended.finished || declined(ended)) {
+    const chain = reviewChain(state.task(authorId)?.engine?.kind, cfg.cross_review?.chains);
+    const step = (review.step ?? 0) + 1;
+    const tried = [...(review.tried ?? []), model];
+    const next = chain[step];
+    log("cross review declined", { part: part.identifier, engine: model, next: next ? engineLabel(next) : "" });
+    if (!next) {
+      saveReview(authorId, { ...review, pending: undefined, tried });
+      return void (await pc.comment(authorId, closingComment({ outcome: "failed", reviewer: reviewerName, tried, author: authorName })));
+    }
+    saveReview(authorId, { ...review, step, tried });
+    await pc.comment(part.id, `${model} ${ended.finished ? "declined the review" : "didn't finish the review"}; ${engineLabel(next)} takes it.`);
+    await pc.setPicker(part.id, pickerFor(next, engineers, part.assigneeAgentId));
+    return dispatch({ issue: { id: part.id, identifier: part.identifier, assigneeAgentId: part.assigneeAgentId }, instructions: ended.instructions, event: true });
+  }
+  const verdict = reviewVerdict(ended.reply);
+  saveReview(authorId, { ...review, heads: { ...review.heads, ...review.pending }, pending: undefined, tried: [] });
+  log("cross review verdict", { part: part.identifier, verdict: verdict ?? "none", engine: model });
+  if (verdict !== "blocking") return void (await pc.comment(authorId, closingComment({ outcome: verdict === "clean" ? "clean" : "unclear", reviewer: reviewerName, model, round: review.round })));
+  await pc.comment(authorId, findingsComment({ reviewer: reviewerName, model, round: review.round, reply: ended.reply, author: authorName }));
+  await dispatch({ issue: { id: author.id, identifier: author.identifier, assigneeAgentId: author.assigneeAgentId }, instructions: fixInstructions({ reviewer: reviewerName, model, user: cfg.selfName }), event: true });
+}
+
 async function handleIssue(issue, engineerIds) {
   const known = state.task(issue.id);
   const task = known ?? state.ensureTask(issue.id, issue.identifier);
@@ -462,6 +562,8 @@ async function handleIssue(issue, engineerIds) {
       }
       // Sub-tasks the Assistant created wait quietly for the go-ahead on their parent (D-24).
       if (isAgentSubtask(full)) return;
+      // The runner's own parts (a cross-model review) start when the runner says.
+      if (String(full.description ?? "").includes(RUNNER_MARKER)) return;
       if (!state.get(`greeted:${issue.id}`)) {
         state.set(`greeted:${issue.id}`, new Date().toISOString());
         await pc.comment(issue.id, "Ready. What would you like me to do, and in which repository? (Or write it in the task description.)");
@@ -1249,6 +1351,7 @@ class UserError extends Error {}
  */
 async function startJob({ issue, instructions, event = false }) {
   const controller = new AbortController();
+  let ended; // how a finished or failed run ended, for the cross-model review's next step
   let gcp;
   let aws;
   running.set(issue.id, { controller, identifier: issue.identifier, startedAt: new Date().toISOString(), request: instructions });
@@ -1272,7 +1375,8 @@ async function startJob({ issue, instructions, event = false }) {
     // (D-41); the first leads. None named: the workspace starts empty, and the agent clones what it needs.
     const parent = await crewParent(full).catch(() => undefined);
     const candidates = cad ? [] : await repoCandidates(`${instructions}\n${full.title}\n${withParent(full.description, parent)}`);
-    let task = state.task(issue.id);
+    // A part the runner made itself (a cross-model review) starts before any poll has seen it.
+    let task = state.task(issue.id) ?? state.ensureTask(issue.id, issue.identifier);
     if (!task.repo && candidates.length) task = await applySettings(issue, task, { repo: candidates[0] });
     rememberRepos(issue.id, candidates.filter((c) => c.toLowerCase() !== String(task.repo).toLowerCase()));
     task = await syncPicker(issue, full, task, false);
@@ -1389,6 +1493,7 @@ async function startJob({ issue, instructions, event = false }) {
     // Agents commit as they go: the run changed something if any branch moved or appeared.
     const committedNow = (await branchTips(workspace)) !== tipsBefore;
     const outcome = runOutcome({ ...result, timeoutMinutes: cfg.timeout_minutes ?? 60 });
+    ended = { finished: outcome.finished, reply: result.lastMessage, logTail: logTail(logPath, 40), engine, event, instructions };
     // Put every commit on a properly named branch and sign the agent's commits. What's left
     // uncommitted stays as it is: the agent commits what it means to keep.
     const tidy = await tidyBranches(issue, workspace, { commitDirty: false });
@@ -1427,6 +1532,13 @@ async function startJob({ issue, instructions, event = false }) {
     running.delete(issue.id);
     if (jobId) await recordUsage(jobId);
     if (!stopping) await afterTurn(issue, tools).catch((err) => reportError(issue, err));
+    // A review round's result, or an author's changed PR for the next round (docs/design/automation.md, stage 2).
+    if (!stopping) {
+      void (async () => {
+        await afterCrossReview(issue, ended);
+        await maybeCrossReview(issue);
+      })().catch((err) => log("cross review failed", { issue: issue.identifier, err: String(err.stderr || err.message || err).slice(0, 300) }));
+    }
     drainQueue();
     reportActivity();
     void reportUsage();

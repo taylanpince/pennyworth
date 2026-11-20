@@ -45,7 +45,10 @@ const result = (fields) => {
 };
 out({ type: "assistant", message: { content: [{ type: "tool_use", id: "tool-1", name: "Bash", input: {} }, { type: "tool_use", id: "tool-2", name: "mcp__grafana__query_loki_logs", input: {} }] } });
 
-const [step, ...tools] = (existsSync(process.env.FAKE_STEP) ? readFileSync(process.env.FAKE_STEP, "utf8").trim() : "commit").split("\n");
+// A cross-model review (Linus's part) does nothing but review: it answers from $FAKE_STEP's review-verdict file.
+const reviewing = prompt.includes("`VERDICT: blocking` if any finding is blocking");
+const verdictFile = join(dirname(process.env.FAKE_LOG), "review-verdict");
+const [step, ...tools] = reviewing ? ["none"] : (existsSync(process.env.FAKE_STEP) ? readFileSync(process.env.FAKE_STEP, "utf8").trim() : "commit").split("\n");
 if (step === "clone-commit") {
   const res = spawnSync("pennyworth-repo", ["acme/app"], { encoding: "utf8" });
   if (res.status !== 0) throw new Error(res.stderr || res.stdout);
@@ -62,6 +65,11 @@ if (step === "commit" || step === "clone-commit") {
   writeFileSync(join(repo, "second.txt"), "second\n");
   git("add", "second.txt");
   git("commit", "-qm", "feat: second change");
+} else if (step === "third") {
+  git("switch", "-qc", "feat/third", "origin/main");
+  writeFileSync(join(repo, "third.txt"), `third\n# ${Date.now()}\n`);
+  git("add", "third.txt");
+  git("commit", "-qm", "feat: third change");
 } else if (step === "amend") {
   // Rewrites the pushed commit, as a rebase does.
   git("switch", "-q", "fix/remove-telos");
@@ -101,7 +109,8 @@ for (const line of tools) {
 const during = [];
 while (lines.length) during.push(take());
 if (during.length) log("claude-mid-run", during);
-const reply = step === "silent" ? "NO_REPLY" : "Checked every repository; nothing needed changing.";
+const verdict = reviewing && existsSync(verdictFile) ? readFileSync(verdictFile, "utf8").trim() : "clean";
+const reply = reviewing ? `third.txt:1 has no newline at the end, and nothing tests it.\n\nVERDICT: ${verdict}` : step === "silent" ? "NO_REPLY" : "Checked every repository; nothing needed changing.";
 result({ result: during.length ? `${reply}\n\nAlso, as you asked while I worked: ${during.join(" / ")}` : reply });
 // Anything after this turn ended gets a turn of its own, until the runner closes the input.
 for (;;) {

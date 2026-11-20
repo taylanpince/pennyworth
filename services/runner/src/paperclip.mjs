@@ -54,6 +54,11 @@ export class Paperclip {
   }
 
   /** Show the executor on the task: assign it to an Engineer and set (or clear) its model override. */
+  /** A new issue, as the user (the board key): the runner's own crew parts, such as Linus's reviews. */
+  createIssue(fields) {
+    return this.api("POST", `/api/companies/${this.company}/issues`, fields);
+  }
+
   setPicker(issueId, fields) {
     return this.api("PATCH", `/api/issues/${encodeURIComponent(issueId)}`, fields);
   }

@@ -13,6 +13,12 @@ if (args[0] === "api" && args[1] === "user" && args.includes("--jq")) {
   process.stdout.write("taylan\n");
   process.exit(0);
 }
+// A PR's state and head for the cross-model review: open, with the head in gh-heads.json (URL → oid).
+if (args[0] === "pr" && args[1] === "view" && args.at(-1) === "state,headRefOid") {
+  const heads = join(dirname(process.env.FAKE_LOG), "gh-heads.json");
+  process.stdout.write(JSON.stringify({ state: "OPEN", headRefOid: (existsSync(heads) ? JSON.parse(readFileSync(heads, "utf8")) : {})[args[2]] ?? "head-1" }));
+  process.exit(0);
+}
 const field = (name) => args.find((a) => a.startsWith(`${name}=`))?.slice(name.length + 1);
 if (args[0] === "api" && args[1] === "graphql" && field("query")?.includes("authorAssociation")) {
   const watched = join(dirname(process.env.FAKE_LOG), "gh-watch.json");

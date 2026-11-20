@@ -60,6 +60,14 @@ function fakePaperclip({ parent, part, engineers, parentComments = [], others = 
       return send(list);
     }
     if (req.method === "GET" && path === "/api/cli-auth/me") return send({ userId: USER });
+    // The runner's own crew parts (a cross-model review), created as the user.
+    if (req.method === "POST" && path === `/api/companies/${COMPANY}/issues`) {
+      const fields = JSON.parse(body);
+      const created = { id: `issue-${issues.size + 1}`, identifier: `PEN-${100 + issues.size}`, status: "todo", labels: [], createdByUserId: USER, createdByAgentId: null, assigneeUserId: null, ...fields };
+      issues.set(created.id, created);
+      comments.set(created.id, []);
+      return send(created, 201);
+    }
     const upload = new RegExp(`^/api/companies/${COMPANY}/issues/([^/]+)/attachments$`).exec(path);
     if (req.method === "POST" && upload) {
       const name = /filename="([^"]+)"/.exec(body)?.[1];
@@ -105,7 +113,7 @@ function fakePaperclip({ parent, part, engineers, parentComments = [], others = 
     unknown.push(`${req.method} ${path}`);
     send({ error: "not found" }, 404);
   });
-  fake = { server, issues, comments, patches, activity, usage, passed, attached, unknown, addComment, memory, memoryText: "### For every agent\n\n- [1] I always review on Primer directly." };
+  fake = { server, engineers, issues, comments, patches, activity, usage, passed, attached, unknown, addComment, memory, memoryText: "### For every agent\n\n- [1] I always review on Primer directly." };
   return fake;
 }
 
@@ -791,6 +799,53 @@ watches:
     assert.equal(state.lastJob(reassigned.id), undefined);
     assert.equal(claudeRuns().filter((r) => r.prompt.includes("Inspect restart-queued")).length, 1);
     state.db.close();
+  });
+
+  it("has Linus review Ada's own PR on another model, moves on when one can't, and hands blocking findings back to Ada", async () => {
+    // Codex fails here (the fake has no jobs), so Claude Sonnet takes the review: the fallback, end to end.
+    const configFile = join(runnerOptions.env.PENNYWORTH_CONFIG_DIR, "runner.yaml");
+    writeFileSync(configFile, `${readFileSync(configFile, "utf8")}cross_review:\n  rounds: 2\n  chains:\n    claude:\n      - { engine: codex, model: gpt-6-astra }\n      - { engine: claude, model: claude-sonnet-5 }\n`);
+    const exited = new Promise((resolve) => runner.once("exit", resolve));
+    runner.kill("SIGTERM");
+    await exited;
+    paperclip.engineers.push({ id: "reviewer", name: "Reviewer", status: "idle", adapterType: "opencode_local", adapterConfig: {}, metadata: { setupKey: "pennyworth:reviewer", runnerEngine: true, role: { engine: "codex", model: "gpt-6-sol" }, persona: { name: "Linus" } } });
+    writeFileSync(join(dir, "gh-open.json"), JSON.stringify(["acme/app feat/third"]));
+    writeFileSync(join(dir, "review-verdict"), "blocking");
+    const task = { id: "xr-task", identifier: "PEN-80", title: "Third change", status: "todo", assigneeUserId: USER, createdByUserId: USER, createdByAgentId: null, labels: [], description: "Third change in acme/app." };
+    const ada = { id: "xr-ada", identifier: "PEN-81", title: "Third change", status: "todo", parentId: task.id, assigneeAgentId: "engineer-claude", assigneeUserId: null, createdByUserId: USER, createdByAgentId: null, labels: [], description: "Add the third change to acme/app and open a PR." };
+    for (const i of [task, ada]) paperclip.issues.set(i.id, i), paperclip.comments.set(i.id, []);
+    step("third\npennyworth pr acme/app feat/third");
+    launch();
+    const adaComments = () => paperclip.comments.get(ada.id).map((c) => c.body);
+    const linusPart = () => [...paperclip.issues.values()].find((i) => i.parentId === task.id && i.assigneeAgentId === "reviewer");
+    await waitFor("Linus's findings back on Ada's part", () => adaComments().some((c) => c.includes("found blocking issues")));
+    const part = linusPart();
+    assert.equal(part.title, "Third change");
+    assert.match(part.description, /Cross-model review of Ada's PRs[\s\S]*<!-- pennyworth-runner -->/);
+    const partComments = paperclip.comments.get(part.id).map((c) => c.body);
+    assert.ok(partComments.some((c) => /^Codex \(gpt-6-astra\) didn't finish the review; Claude Code \(claude-sonnet-5\) takes it\./.test(c)), partComments.join("\n---\n"));
+    assert.deepEqual(part.assigneeAdapterOverrides, { adapterConfig: { engine: "claude", model: "claude-sonnet-5" } }, "the picker shows who reviewed");
+    const review = claudeRuns().find((r) => r.prompt.includes("Review Ada's pull request on this task adversarially"));
+    assert.match(review.prompt, /## Why you're running now \(from the runner, not Taylan\)[\s\S]*- https:\/\/github\.com\/acme\/app\/pull\/\d+/);
+    assert.ok(review.argv.includes("claude-sonnet-5"));
+    assert.ok(!partComments.some((c) => /^Ready\./.test(c)), "the runner's part isn't greeted as a task with no request");
+    assert.match(adaComments().find((c) => c.includes("found blocking issues")), /\*\*Linus reviewed the PR on Claude Code \(claude-sonnet-5\) \(round 1\) and found blocking issues\*\*: passed to Ada\.\n\n> third\.txt:1 has no newline/);
+
+    // Ada's turn on the findings is the runner's, and her new commit starts round 2, which comes back clean.
+    writeFileSync(join(dir, "review-verdict"), "clean");
+    await waitFor("Ada's fix turn", () => claudeRuns().some((r) => r.prompt.includes("Linus reviewed your PR on Claude Code (claude-sonnet-5) and marked findings as blocking")));
+    const fix = claudeRuns().find((r) => r.prompt.includes("marked findings as blocking"));
+    assert.match(fix.prompt, /Why you're running now/);
+    assert.doesNotMatch(fix.prompt, /## Instructions from Taylan/);
+    // The fix turn pushed nothing new (the fake's head stays): move the head as a push would.
+    const url = Object.values(JSON.parse(readFileSync(join(dir, "gh-prs.json"), "utf8"))).find((u) => adaComments().join("\n").includes(u));
+    writeFileSync(join(dir, "gh-heads.json"), JSON.stringify({ [url]: "head-2" }));
+    step("none");
+    paperclip.addComment(ada.id, "Also add a line to the README.");
+    await waitFor("round 2's verdict", () => adaComments().some((c) => c.includes("(round 2): no blocking findings.")));
+    assert.match(adaComments().find((c) => c.includes("(round 2)")), /The PR stays a draft: mark it ready for review/);
+    const round2 = claudeRuns().find((r) => r.prompt.includes("This is round 2"));
+    assert.ok(round2.argv.includes("--resume"), "round 2 resumes Linus's session on the same model");
   });
 
   it("never errors or asks for a repository along the way", () => {
