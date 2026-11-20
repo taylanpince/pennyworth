@@ -329,7 +329,7 @@ merge_writes="$(sed -n '/^export const WRITES/,/^\];/p' services/runner/src/merg
 # loopback endpoint, every write checked against the user's words, and the check given nothing else. Draft PRs and
 # Primer documents of the agent's own work skip it (D-70): a PR counts as its own only where the runner opened it (the PR watch and the cross-model review only read that record).
 tools="$(grep -oE '^export const TOOLS = \[[^]]*\]' services/runner/src/repohelper.mjs)"
-[ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "pass", "ask", "aws", "reset", "cleanup", "task", "tasks", "remember", "propose", "memory"]' ] \
+[ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "pass", "ask", "later", "aws", "reset", "cleanup", "task", "tasks", "remember", "propose", "memory"]' ] \
   && [ "$(awk '/^async function agentTasks?\(/,/^}/' services/runner/src/main.mjs | grep -c '^  requireTaskReads(ctx);')" = 2 ] \
   && grep -q 'check: (ordered) => (command === "pr" ? allowPr(ctx, ordered) : allowWrite(ctx, command,' services/runner/src/main.mjs \
   && grep -q '^  if (!ownWork(rows)) return allowWrite(ctx, "pr",' services/runner/src/main.mjs \

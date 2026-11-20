@@ -808,6 +808,25 @@ const TOOLS = {
       return { comment_id: c.id };
     },
   },
+  task_ask: {
+    description:
+      "Ask the user for a decision you need before going on (a choice between approaches with real trade-offs, anything beyond what they asked, changing someone else's work), as a question card on the task: the board shows the options as buttons, and the user's choice comes back as their reply. Give 2–4 options and recommend one; then finish with task_handoff. Not for questions a short reply in your handoff answers well enough.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        issue: { type: "string" },
+        question: { type: "string", description: "one question, up to 1000 characters" },
+        options: { type: "array", items: { type: "string" }, maxItems: 5, description: "up to 5 options, each up to 200 characters" },
+        recommended: { type: "integer", minimum: 1, description: "the number of the option you recommend (1 is the first)" },
+      },
+      required: ["issue", "question"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    run: async ({ issue, question, options = [], recommended }) => {
+      return { comment_id: (await api("POST", `/api/issues/${issueRef(issue)}/comments`, { body: askCard(question, options, recommended) })).id };
+    },
+  },
   task_set_status: {
     description: `Set a Paperclip task's status (${STATUSES.join(", ")}), optionally with a comment.`,
     inputSchema: {
@@ -831,6 +850,22 @@ const TOOLS = {
     },
   },
 };
+
+/**
+ * A question for the user as a comment (docs/design/automation.md): readable as it is, and the board turns the
+ * hidden marker's options into buttons. The same format as the runner's `pennyworth ask` (services/runner/src/watches.mjs).
+ */
+export function askCard(question, options = [], recommended) {
+  const q = String(question ?? "").trim();
+  if (!q || q.length > 1000) throw new Error("ask one question, up to 1000 characters");
+  const opts = (Array.isArray(options) ? options : []).map((o) => String(o ?? "").replace(/\s+/g, " ").trim()).filter(Boolean);
+  if (opts.length > 5 || opts.some((o) => o.length > 200)) throw new Error("up to 5 options, each up to 200 characters");
+  const r = recommended === undefined || recommended === null ? -1 : Number(recommended) - 1;
+  if (!Number.isInteger(r) || r < -1 || r >= opts.length) throw new Error(`recommended is the number of one of the options (1 to ${opts.length})`);
+  const list = opts.map((o, i) => `${i + 1}. ${o}${i === r ? " _(recommended)_" : ""}`).join("\n");
+  const card = JSON.stringify({ options: opts, recommended: r }).replace(/--/g, "\\u002d\\u002d");
+  return `**Question:** ${q}${list ? `\n\n${list}\n\nReply with your choice, or in your own words.` : ""}\n\n<!-- pennyworth-ask ${card} -->`;
+}
 
 // ---------------------------------------------------------------- memory (D-61)
 // The board keeps the agents' memories. The scope comes from this agent's own setup key, in code:

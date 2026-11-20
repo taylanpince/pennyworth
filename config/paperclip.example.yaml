@@ -222,7 +222,7 @@ agents:
       # task_create_engineer_task: Engineer sub-tasks that wait for the user's go-ahead (D-24).
       # task_create_subtasks: the user's own subtasks of one of their tasks, folded into it on the board (D-68).
       # task_schedule, task_recurring: board moves on a date and recurring tasks (D-25). task_merge: merging tasks (D-56).
-      paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_create, task_update, task_comment, task_handoff, task_set_status, task_create_engineer_task, task_create_subtasks, task_schedule, task_recurring, task_pass_on, task_merge, memory_recall, memory_search, memory_remember, memory_propose]
+      paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_create, task_update, task_comment, task_ask, task_handoff, task_set_status, task_create_engineer_task, task_create_subtasks, task_schedule, task_recurring, task_pass_on, task_merge, memory_recall, memory_search, memory_remember, memory_propose]
 
   # The writer (D-60): drafts in the user's voice, Slack drafts, Primer documents and agendas. A woken
   # Codex agent like the Assistant, with the Assistant's reading tools and only its writing ones.
@@ -249,7 +249,7 @@ agents:
       # Reads only: Jira changes stay with the Assistant (D-69).
       jira: [getAccessibleAtlassianResources, atlassianUserInfo, search, getJiraIssue, listJiraIssueComments, searchJiraIssuesUsingJql, getConfluenceContent, searchConfluence, discover, executeRead]
       google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
-      paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_comment, task_handoff, task_set_status, task_pass_on, memory_recall, memory_search, memory_remember, memory_propose]
+      paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_comment, task_ask, task_handoff, task_set_status, task_pass_on, memory_recall, memory_search, memory_remember, memory_propose]
 
   # The crew's runner roles (D-60): a role is the character (what it takes on, its memory), the engine
   # is a setting. Paperclip never wakes them; pennyworth-runner does the work. Each role runs on its

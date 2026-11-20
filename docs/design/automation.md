@@ -1,6 +1,6 @@
 # Design: agents that keep going (follow-ups, cross-model review, idle work, check-ins)
 
-Status: decided, 2026-11-20 (decisions at the end). Stage 1 (PR watches and `pennyworth ask`) built 2026-11-20 as **D-71**, stage 2 (cross-model review) as **D-72**; stages 3–4 open. Builds on D-25 (schedules in the board), D-45 (crew parts), D-50 (every comment is a turn), D-54 (passing work on), D-60 (roles, engine a setting) and D-70 (draft PRs need no go-ahead). Every write gate in AGENTS.md stays.
+Status: decided, 2026-11-20 (decisions at the end). Stage 1 (PR watches and `pennyworth ask`) built 2026-11-20 as **D-71**, stage 2 (cross-model review) as **D-72**, stage 3 (follow-ups, Slack and Primer, Alfred's and Ursula's questions) as **D-73**; stage 4 (idle work) open. Builds on D-25 (schedules in the board), D-45 (crew parts), D-50 (every comment is a turn), D-54 (passing work on), D-60 (roles, engine a setting) and D-70 (draft PRs need no go-ahead). Every write gate in AGENTS.md stays.
 
 ## Why
 

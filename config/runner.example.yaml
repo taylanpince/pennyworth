@@ -145,6 +145,10 @@ watches:
   interval_minutes: 2
   debounce_minutes: 3      # wait this long after the newest review comment, so a review is one turn
   rounds_per_day: 5        # automatic turns per PR in 24 hours; two in a row that change nothing wait for you
+  # The Slack thread a task came from and the task's Primer document, for Engineer parts that worked in the
+  # last week, through slack-mcp's and primer-mcp's read endpoints; and follow-ups agents set (`pennyworth later`).
+  sources_interval_minutes: 10
+  slack_rounds_per_day: 3  # automatic turns per Slack thread in 24 hours
   # Bots whose reviews start a turn; reviewers in the repository always do, everyone else is only shown.
   bots: [copilot-pull-request-reviewer, copilot, coderabbitai, github-advanced-security, claude, chatgpt-codex-connector, gemini-code-assist, cursor]
 

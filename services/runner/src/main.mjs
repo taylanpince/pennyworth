@@ -20,7 +20,7 @@ import { Paperclip } from "./paperclip.mjs";
 import { branchGuidance, checkBranchName, chooseBranchName, exampleBranches } from "./branch.mjs";
 import { cleanMessages, leakIn, leaksInternal, stripAttribution, writePrDescription } from "./describe.mjs";
 import { branchesFooter, slackSources, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, subtaskSummary, runOutcome, stripCommitLine } from "./prompt.mjs";
-import { PRIMER_FILES, primerLink, publishDocument, readDocument } from "./primer.mjs";
+import { PRIMER_FILES, primerCall, primerLink, publishDocument, readDocument } from "./primer.mjs";
 import { startRepoHelper } from "./repohelper.mjs";
 import { baseRef, branchChanges, carryOver, dirtyCheckouts, ensureRepo, findBranches, keepBranches, messagesSince, moveOffDefault, readManifest, signUnsigned, workspacePath, workspaceRepos } from "./workspace.mjs";
 import { checkConnections } from "./connections.mjs";
@@ -29,7 +29,7 @@ import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } 
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import * as merges from "./merges.mjs";
 import { closingComment, declined, findingsComment, fixInstructions, reviewChain, reviewInstructions, reviewVerdict } from "./crossreview.mjs";
-import { DEFAULT_BOTS, HANDS_OFF, WATCH_QUERY, askComment, eventComment, eventInstructions, newWatch, parseAsk, parsePr, roundsLeft, waitingOnUser, watchStep } from "./watches.mjs";
+import { DEFAULT_BOTS, HANDS_OFF, WATCH_QUERY, askComment, eventComment, eventInstructions, followUpComment, followUpInstructions, newWatch, parseAsk, parseNote, parsePr, parseWhen, primerComments, primerEventComment, primerInstructions, roundsLeft, slackEventComment, slackInstructions, slackReplies, slackThreads, slackTs, waitingOnUser, watchStep } from "./watches.mjs";
 import { State } from "./state.mjs";
 import { REPLY_MARKER, fence, prSnapshot, stateSection, threadEntries, threadSection, transcript, wordsAround } from "./thread.mjs";
 import { authorize } from "./authorize.mjs";
@@ -86,6 +86,15 @@ async function poll() {
   if (cfg.watches?.enabled !== false && Date.now() - lastWatchCheck >= (cfg.watches?.interval_minutes ?? 2) * 60_000) {
     lastWatchCheck = Date.now();
     await advanceWatches().catch((err) => log("watch check failed", { err: String(err.stderr || err.message || err).slice(0, 300) }));
+  }
+  // Follow-ups agents set (`pennyworth later`), at most once a minute; Slack threads and Primer comments every few.
+  if (cfg.watches?.enabled !== false && Date.now() - lastFollowUpCheck >= 60_000) {
+    lastFollowUpCheck = Date.now();
+    await advanceFollowUps().catch((err) => log("follow-up check failed", { err: String(err.message ?? err).slice(0, 300) }));
+  }
+  if (cfg.watches?.enabled !== false && Date.now() - lastSourceCheck >= (cfg.watches?.sources_interval_minutes ?? 10) * 60_000) {
+    lastSourceCheck = Date.now();
+    await advanceSources().catch((err) => log("source check failed", { err: String(err.message ?? err).slice(0, 300) }));
   }
   // Merges you asked for (D-46), at most once a minute.
   if (Date.now() - lastMergeCheck >= 60_000) {
@@ -438,6 +447,147 @@ async function advanceWatch(watch, gh) {
   await pc.comment(issue.id, eventComment(pr, step, who));
   log("watch event", { issue: issue.identifier, url: watch.url, kind: step.event.kind, items: step.event.items.length });
   await dispatch({ issue: { id: issue.id, identifier: issue.identifier, assigneeAgentId: issue.assigneeAgentId }, instructions: eventInstructions(pr, step, cfg.selfName), event: true });
+}
+
+// ------------------------------------------------------------------ follow-ups, Slack threads and Primer comments (docs/design/automation.md, stage 3)
+
+let lastFollowUpCheck = 0;
+let lastSourceCheck = 0;
+let slackMe;
+const followUps = (issueId) => JSON.parse(state.get(`followups:${issueId}`) || "[]");
+const refOf = (issue) => ({ id: issue.id, identifier: issue.identifier, assigneeAgentId: issue.assigneeAgentId });
+const tokenOf = (file) => readFileSync(file, "utf8").trim();
+const DAY = 24 * 3_600_000;
+
+/** Whether an automatic turn may start on the task now; false keeps what came in for a later check. */
+async function mayStart(issue) {
+  if (running.has(issue.id) || queue.some((j) => j.issue.id === issue.id)) return false;
+  if (await handsOff(issue)) return false;
+  return !waitingOnUser(await pc.comments(issue.id), Paperclip.isUserInstruction);
+}
+
+/** `pennyworth later <when> <note>`: a turn on this task at that time, with the agent's own note. */
+async function agentLater(ctx, args) {
+  let at;
+  let note;
+  try {
+    at = parseWhen(args.when);
+    note = parseNote(args.note);
+  } catch (err) {
+    throw new UserError(err.message);
+  }
+  const list = followUps(ctx.issue.id);
+  if (list.length >= 5) throw new UserError(`This task has 5 follow-ups waiting already (${list.map((f) => f.at.slice(0, 16)).join(", ")}). Fold this one into one of them.`);
+  list.push({ at: at.toISOString(), note, set: new Date().toISOString() });
+  state.set(`followups:${ctx.issue.id}`, JSON.stringify(list));
+  log("follow-up set", { issue: ctx.issue.identifier, at: at.toISOString() });
+  return `Set: a turn on this task at ${at.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })} with your note. Say so in a line in your reply.`;
+}
+
+/** Follow-ups that came due: one turn each, when the task is free and not waiting on the user. */
+async function advanceFollowUps() {
+  for (const [key, value] of state.entries("followups:")) {
+    const list = JSON.parse(value);
+    const due = list.find((f) => Date.parse(f.at) <= Date.now());
+    if (!due) continue;
+    const issue = await pc.issue(key.slice("followups:".length)).catch(() => undefined);
+    if (!issue) continue;
+    if (["done", "cancelled"].includes(issue.status)) {
+      state.set(key, "[]");
+      continue;
+    }
+    if (!(await mayStart(issue))) continue;
+    state.set(key, JSON.stringify(list.filter((f) => f !== due)));
+    await pc.comment(issue.id, followUpComment(due.note, due.set));
+    log("follow-up due", { issue: issue.identifier });
+    await dispatch({ issue: refOf(issue), instructions: followUpInstructions(due.note, cfg.selfName), event: true });
+  }
+}
+
+/**
+ * The Slack threads and Primer documents of Engineer parts that worked in the last week: new replies and
+ * comments from others start the part's next turn. Watched from the first check on; earlier ones were the
+ * user's to point at.
+ */
+async function advanceSources() {
+  for (const agent of await pc.engineerAgents()) {
+    for (const part of await pc.assignedIssues(agent.id)) {
+      if (state.get(`xreview-part:${part.id}`)) continue; // Linus's reviews have their own rounds
+      const last = state.lastJob(part.id);
+      if (!last?.finished_at || Date.now() - Date.parse(last.finished_at) > 7 * DAY) continue;
+      const who = personaFor(agent)?.name;
+      const started = await advanceSlack(part, who).catch((err) => (log("slack check failed", { issue: part.identifier, err: String(err.message ?? err).slice(0, 200) }), false));
+      if (!started && cfg.primerEnabled) await advancePrimer(part, who).catch((err) => log("primer check failed", { issue: part.identifier, err: String(err.message ?? err).slice(0, 200) }));
+    }
+  }
+}
+
+async function advanceSlack(part, who) {
+  if (!existsSync(cfg.slackTokenFile)) return false;
+  const full = await pc.issue(part.id);
+  const parent = full.parentId ? await pc.issue(full.parentId).catch(() => undefined) : undefined;
+  const threads = slackThreads(`${full.description ?? ""}\n${parent?.description ?? ""}`).slice(0, 3);
+  if (!threads.length) return false;
+  const endpoint = { url: cfg.slackMcpUrl, token: tokenOf(cfg.slackTokenFile) };
+  slackMe ??= /User ID: ([A-Z0-9]+)/.exec(await primerCall(endpoint, "slack_read_user_profile", {}))?.[1];
+  if (!slackMe) return false;
+  for (const t of threads) {
+    const key = `slackw:${part.id}:${t.channel}:${t.root}`;
+    if (!state.get(key)) {
+      state.set(key, JSON.stringify({ cursor: slackTs(Date.now()), rounds: [] }));
+      continue;
+    }
+    const watch = JSON.parse(state.get(key));
+    const text = await primerCall(endpoint, "slack_read_thread", { channel_id: t.channel, message_ts: t.root, oldest: watch.cursor, limit: 100 });
+    let messages = text;
+    try {
+      messages = JSON.parse(text).messages ?? text;
+    } catch {}
+    const replies = slackReplies(messages).filter((r) => Number(r.ts) > Number(watch.cursor));
+    if (!replies.length) continue;
+    const fresh = replies.filter((r) => r.user !== slackMe && !r.user.startsWith("B"));
+    if (!fresh.length) {
+      // Only the user's own replies (or bots'): nothing for the agent, and nothing to read again.
+      state.set(key, JSON.stringify({ ...watch, cursor: replies.at(-1).ts }));
+      continue;
+    }
+    if (Date.now() - Number(replies.at(-1).ts) * 1000 < (cfg.watches?.debounce_minutes ?? 3) * 60_000) continue;
+    if (!(await mayStart(full))) return false;
+    const { recent, left } = roundsLeft(watch, { perDay: cfg.watches?.slack_rounds_per_day ?? 3 });
+    if (!left) continue;
+    state.set(key, JSON.stringify({ cursor: replies.at(-1).ts, rounds: [...recent, new Date().toISOString()] }));
+    await pc.comment(part.id, slackEventComment(`https://slack.com/archives/${t.channel}/p${t.root.replace(".", "")}`, fresh, who));
+    log("slack event", { issue: part.identifier, replies: fresh.length });
+    await dispatch({ issue: refOf(full), instructions: slackInstructions(cfg.selfName), event: true });
+    return true;
+  }
+  return false;
+}
+
+async function advancePrimer(part, who) {
+  const record = primerRecord(part.id);
+  if (!record?.documentId || !existsSync(cfg.primerTokenFile)) return false;
+  const key = `primerw:${part.id}`;
+  if (!state.get(key)) {
+    state.set(key, JSON.stringify({ cursor: new Date().toISOString(), rounds: [] }));
+    return false;
+  }
+  const watch = JSON.parse(state.get(key));
+  const comments = primerComments(await primerCall({ url: cfg.primerMcpUrl, token: tokenOf(cfg.primerTokenFile) }, "primer_get_document_comments", { documentId: record.documentId }))
+    .filter((c) => Date.parse(c.at) > Date.parse(watch.cursor));
+  if (!comments.length) return false;
+  const fresh = comments.filter((c) => !c.who.toLowerCase().startsWith(String(cfg.selfName).toLowerCase()));
+  if (!fresh.length) return void state.set(key, JSON.stringify({ ...watch, cursor: comments.at(-1).at }));
+  if (Date.now() - Date.parse(comments.at(-1).at) < (cfg.watches?.debounce_minutes ?? 3) * 60_000) return false;
+  const full = await pc.issue(part.id);
+  if (!(await mayStart(full))) return false;
+  const { recent, left } = roundsLeft(watch, { perDay: cfg.watches?.rounds_per_day ?? 5 });
+  if (!left) return false;
+  state.set(key, JSON.stringify({ cursor: comments.at(-1).at, rounds: [...recent, new Date().toISOString()] }));
+  await pc.comment(part.id, primerEventComment(record.url, fresh, who));
+  log("primer event", { issue: part.identifier, comments: fresh.length });
+  await dispatch({ issue: refOf(full), instructions: primerInstructions(cfg.selfName), event: true });
+  return true;
 }
 
 // ------------------------------------------------------------------ cross-model review (docs/design/automation.md, stage 2)
@@ -2017,6 +2167,7 @@ const repoHelper = startRepoHelper(async ({ issue, workspace }, raw) => {
   primer: agentPrimer,
   pass: agentPass,
   ask: agentAsk,
+  later: agentLater,
   aws: agentAws,
   reset: agentReset,
   cleanup: agentCleanup,
