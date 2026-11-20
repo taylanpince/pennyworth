@@ -34,6 +34,9 @@ status_file="$data/board/backup.json"
 # Paperclip dumps every hour; an older newest dump while it runs means its backups stopped.
 max_dump_age_min=150
 
+# macOS `stat` differs; use the BSD form first, fall back to GNU.
+file_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1"; }
+
 mode=archive
 case "${1:-}" in
   --init | --offsite | --verify) mode="${1#--}"; shift ;;
@@ -68,7 +71,7 @@ stage() {
   local dump
   dump="$(ls -1t "$instance"/data/backups/paperclip-*.sql.gz 2>/dev/null | head -1 || true)"
   [ -n "$dump" ] || { echo "error: no Paperclip database dump in $instance/data/backups" >&2; return 1; }
-  local age_min=$(( ($(date +%s) - $(stat -c %Y "$dump")) / 60 ))
+  local age_min=$(( ($(date +%s) - $(file_mtime "$dump")) / 60 ))
   if [ "$running" = yes ] && [ "$age_min" -gt "$max_dump_age_min" ]; then
     echo "error: Paperclip's newest database dump is ${age_min} minutes old; its hourly backups have stopped" >&2
     return 1
@@ -143,7 +146,7 @@ write_status() { # state [error]
 # Runs at most once per period: due <name> <seconds>.
 due() {
   local stamp="$cache/$1.last"
-  [ ! -f "$stamp" ] || [ $(( $(date +%s) - $(stat -c %Y "$stamp") )) -ge "$2" ]
+  [ ! -f "$stamp" ] || [ $(( $(date +%s) - $(file_mtime "$stamp") )) -ge "$2" ]
 }
 
 case "$mode" in
