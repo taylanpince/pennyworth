@@ -28,6 +28,7 @@ import { SignInRunner } from "./signins.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import * as merges from "./merges.mjs";
+import { idleCandidate, inHours, prepareInstructions } from "./idle.mjs";
 import { closingComment, declined, findingsComment, fixInstructions, reviewChain, reviewInstructions, reviewVerdict } from "./crossreview.mjs";
 import { DEFAULT_BOTS, HANDS_OFF, WATCH_QUERY, askComment, eventComment, eventInstructions, followUpComment, followUpInstructions, newWatch, parseAsk, parseNote, parsePr, parseWhen, primerComments, primerEventComment, primerInstructions, roundsLeft, slackEventComment, slackInstructions, slackReplies, slackThreads, slackTs, waitingOnUser, watchStep } from "./watches.mjs";
 import { State } from "./state.mjs";
@@ -95,6 +96,11 @@ async function poll() {
   if (cfg.watches?.enabled !== false && Date.now() - lastSourceCheck >= (cfg.watches?.sources_interval_minutes ?? 10) * 60_000) {
     lastSourceCheck = Date.now();
     await advanceSources().catch((err) => log("source check failed", { err: String(err.message ?? err).slice(0, 300) }));
+  }
+  // Idle work: nothing running, so Alfred prepares the next task in Today (docs/design/automation.md, stage 4).
+  if (cfg.idle?.enabled !== false && Date.now() - lastIdleCheck >= 60_000) {
+    lastIdleCheck = Date.now();
+    await startIdleWork().catch((err) => log("idle check failed", { err: String(err.message ?? err).slice(0, 300) }));
   }
   // Merges you asked for (D-46), at most once a minute.
   if (Date.now() - lastMergeCheck >= 60_000) {
@@ -588,6 +594,47 @@ async function advancePrimer(part, who) {
   log("primer event", { issue: part.identifier, comments: fresh.length });
   await dispatch({ issue: refOf(full), instructions: primerInstructions(cfg.selfName), event: true });
   return true;
+}
+
+// ------------------------------------------------------------------ idle work (docs/design/automation.md, stage 4)
+
+let lastIdleCheck = 0;
+
+/**
+ * When nothing runs (a slot always left for the user's own requests), in the idle hours and under the day's
+ * cap: the next task in Today, then Tomorrow, that nobody is on goes to Alfred to prepare, once per task.
+ */
+async function startIdleWork() {
+  const idle = cfg.idle ?? {};
+  if (!boardApi || running.size + queue.length > Math.max((cfg.max_concurrent ?? 2) - 2, 0)) return;
+  if (!inHours(new Date(), idle)) return;
+  const day = new Date().toLocaleDateString("en-CA");
+  let count = JSON.parse(state.get("idle:count") || "{}");
+  if (count.day !== day) count = { day, n: 0, last: 0 };
+  if (count.n >= (idle.per_day ?? 6) || Date.now() - count.last < (idle.gap_minutes ?? 20) * 60_000) return;
+  const alfred = (await pc.agents()).find((a) => a.metadata?.setupKey === "pennyworth:assistant");
+  if (!alfred) return;
+  const me = await pc.me();
+  const order = await boardApi.post("/internal/runner/order");
+  for (const id of [...(order.today ?? []), ...(order.tomorrow ?? [])]) {
+    if (state.get(`idle:${id}`)) continue;
+    const task = await pc.issue(id).catch(() => undefined);
+    if (!task || !idleCandidate(task, await pc.children(id, "backlog,todo,in_progress,in_review,blocked,done,cancelled"), me)) continue;
+    state.set(`idle:${id}`, new Date().toISOString());
+    // As the user (the board key), like "+ Add agent": Paperclip wakes Alfred on the assignment.
+    const part = await pc.createIssue({
+      title: task.title,
+      description: `${prepareInstructions(cfg.selfName, Boolean(ownRequest(task)))}\n\n${RUNNER_MARKER}`,
+      status: "todo",
+      priority: task.priority,
+      parentId: task.id,
+      assigneeAgentId: alfred.id,
+      allowDuplicate: true,
+    });
+    state.set("idle:count", JSON.stringify({ day, n: count.n + 1, last: Date.now() }));
+    log("idle work", { task: task.identifier, part: part.identifier, own: Boolean(ownRequest(task)) });
+    return;
+  }
 }
 
 // ------------------------------------------------------------------ cross-model review (docs/design/automation.md, stage 2)

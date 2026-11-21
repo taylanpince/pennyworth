@@ -23,7 +23,7 @@ import { addDays, nextWorkday, type Weekday } from "./recurrence.js";
 import { readBackup } from "./backup.js";
 import { connectionsView, HostReportSchema, type HostReport } from "./connections.js";
 import { RunnerPollSchema, SIGNIN_PROVIDERS, SignIns, type SignInProvider } from "./signins.js";
-import { BUCKETS, isBucket, localDate, type Store } from "./store.js";
+import { BUCKETS, isBucket, localDate, type Bucket, type Store } from "./store.js";
 
 export interface AppOptions {
   paperclip: Paperclip;
@@ -544,6 +544,16 @@ export function createApp(opts: AppOptions): Server {
       handle: async (_m, body) => {
         shared.host = { ...parse(HostReportSchema, body), at: new Date().toISOString() };
         return { ok: true };
+      },
+    },
+    {
+      // The runner's idle work (docs/design/automation.md, stage 4): Today, then Tomorrow, top to bottom.
+      method: "POST",
+      path: /^\/internal\/runner\/order$/,
+      handle: async () => {
+        const placed = [...store.placements().entries()];
+        const column = (bucket: Bucket) => placed.filter(([, p]) => p.bucket === bucket).sort((a, b) => a[1].rank - b[1].rank).map(([id]) => id);
+        return { today: column("today"), tomorrow: column("tomorrow") };
       },
     },
     ...mem.internal,

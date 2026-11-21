@@ -1,6 +1,6 @@
 # Design: agents that keep going (follow-ups, cross-model review, idle work, check-ins)
 
-Status: decided, 2026-11-20 (decisions at the end). Stage 1 (PR watches and `pennyworth ask`) built 2026-11-20 as **D-71**, stage 2 (cross-model review) as **D-72**, stage 3 (follow-ups, Slack and Primer, Alfred's and Ursula's questions) as **D-73**; stage 4 (idle work) open. Builds on D-25 (schedules in the board), D-45 (crew parts), D-50 (every comment is a turn), D-54 (passing work on), D-60 (roles, engine a setting) and D-70 (draft PRs need no go-ahead). Every write gate in AGENTS.md stays.
+Status: decided, 2026-11-20 (decisions at the end). Stage 1 (PR watches and `pennyworth ask`) built 2026-11-20 as **D-71**, stage 2 (cross-model review) as **D-72**, stage 3 (follow-ups, Slack and Primer, Alfred's and Ursula's questions) as **D-73**, stage 4 (idle work) as **D-74**: all four built. Builds on D-25 (schedules in the board), D-45 (crew parts), D-50 (every comment is a turn), D-54 (passing work on), D-60 (roles, engine a setting) and D-70 (draft PRs need no go-ahead). Every write gate in AGENTS.md stays.
 
 ## Why
 
@@ -148,6 +148,6 @@ Each stage extends `test/flow.test.mjs` (fake GitHub reviews, a fake Slack reply
 ## Decisions (the user, 2026-11-20)
 
 1. **Replies to reviewers:** the agent fixes and updates the PR unasked, and drafts its replies to the review threads on the task; posting and resolving them on GitHub waits for the user's word (they appear under the user's name).
-2. **Idle work, split by author:** tasks the user wrote start the routed role's work; tasks from other people's words get Alfred's preparation and a proposed part that waits for Approve.
+2. **Idle work, split by author:** tasks the user wrote start the routed role's work; tasks from other people's words get Alfred's preparation and a proposed part that waits for Approve. **Changed 2026-11-21 (D-74):** Alfred prepares every idle task, the user's own too: their tasks are mostly a title, with the instructions given when they add an agent.
 3. **Failed CI on own PRs:** fixed automatically, like a review round, and counted in the same per-PR cap.
 4. **A converged review loop** leaves the PR a draft and marks the task Needs you with the summary; the user marks it ready.

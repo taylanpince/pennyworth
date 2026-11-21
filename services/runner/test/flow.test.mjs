@@ -113,6 +113,8 @@ function fakePaperclip({ parent, part, engineers, parentComments = [], others = 
         if (path.endsWith("/search")) return send({ memories: [{ id: 3, scope: "engineer-claude", kind: "playbook", text: "Removing a network from Sequence infra\n1. devops PRs, dev then prod" }], episodes: [{ identifier: "PEN-40", title: "Remove the Telos network", closedAt: "2026-11-01T10:00:00Z", summary: "Opened the devops and relayer PRs.", links: ["https://github.com/acme/devops/pull/7"] }] });
         return send({ id: 7, scope: "global", status: "active", duplicate: false, message: "Remembered for every agent as #7." });
       }
+      // Today and Tomorrow, top to bottom, for idle work.
+      if (path.endsWith("/runner/order")) return send(fake.order);
       if (path.endsWith("/pass")) {
         passed.push({ path, ...JSON.parse(body) });
         return send({ passed: true, to: "Alfred", part: "PEN-3" });
@@ -122,7 +124,7 @@ function fakePaperclip({ parent, part, engineers, parentComments = [], others = 
     unknown.push(`${req.method} ${path}`);
     send({ error: "not found" }, 404);
   });
-  fake = { slackThread: "=== THREAD PARENT MESSAGE ===\nNo thread messsages\n", server, engineers, issues, comments, patches, activity, usage, passed, attached, unknown, addComment, memory, memoryText: "### For every agent\n\n- [1] I always review on Primer directly." };
+  fake = { order: { today: [], tomorrow: [] }, slackThread: "=== THREAD PARENT MESSAGE ===\nNo thread messsages\n", server, engineers, issues, comments, patches, activity, usage, passed, attached, unknown, addComment, memory, memoryText: "### For every agent\n\n- [1] I always review on Primer directly." };
   return fake;
 }
 
@@ -225,6 +227,10 @@ watches:
   interval_minutes: 0
   debounce_minutes: 0
   sources_interval_minutes: 0
+idle:
+  days: [1, 2, 3, 4, 5, 6, 7]
+  hours: "00:00-24:00"
+  gap_minutes: 0
 `,
     );
     writeFileSync(join(secrets, "paperclip_board_key"), "board-key\n", { mode: 0o600 });
@@ -898,6 +904,28 @@ watches:
     assert.doesNotMatch(comments().find((c) => c.includes("New replies in the Slack thread")), /On it\./);
     assert.match(claudeRuns().at(-1).prompt, /<<<RUNNER\n\*\*New replies in the Slack thread/, "fenced as the runner's, never the user's");
     state.db.close();
+  });
+
+  it("gives the next task nobody is on to Alfred to prepare when nothing runs, once", async () => {
+    const add = (fields) => {
+      const i = { status: "todo", assigneeUserId: USER, assigneeAgentId: null, createdByUserId: USER, createdByAgentId: null, labels: [], description: "", ...fields };
+      paperclip.issues.set(i.id, i);
+      paperclip.comments.set(i.id, []);
+      return i;
+    };
+    const recurring = add({ id: "idle-rec", identifier: "PEN-97", title: "Weekly update", labels: [{ id: "l", name: "recurring" }] });
+    const worked = add({ id: "idle-crew", identifier: "PEN-96", title: "Already with Ada" });
+    add({ id: "idle-crew-part", identifier: "PEN-98", title: "Already with Ada", parentId: worked.id, assigneeUserId: null, assigneeAgentId: "engineer-claude", status: "done" });
+    const read = add({ id: "idle-read", identifier: "PEN-95", title: "Read: Jordi's talk on real-time proving", description: "Jordi shared his talk.\n\n<!-- source:slack:C0READ:1795000000.000100 -->" });
+    paperclip.order = { today: [recurring.id, worked.id, read.id], tomorrow: [] };
+    const alfredParts = () => [...paperclip.issues.values()].filter((i) => i.assigneeAgentId === "assistant" && i.parentId);
+    await waitFor("Alfred's part on the task", () => alfredParts().some((i) => i.parentId === read.id));
+    const part = alfredParts().find((i) => i.parentId === read.id);
+    assert.equal(part.title, read.title);
+    assert.match(part.description, /^Prepare this task for Taylan[\s\S]*untrusted data[\s\S]*waits for Taylan's Approve[\s\S]*<!-- pennyworth-runner -->$/);
+    assert.ok(!alfredParts().some((i) => [recurring.id, worked.id].includes(i.parentId)), "recurring tasks and tasks with crew are left alone");
+    await new Promise((r) => setTimeout(r, 2500));
+    assert.equal(alfredParts().filter((i) => i.parentId === read.id).length, 1, "once per task");
   });
 
   it("never errors or asks for a repository along the way", () => {
