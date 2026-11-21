@@ -141,21 +141,52 @@ async function doStart() {
   }
 }
 
+/**
+ * A request that never answers: the connection died without an error. GramJS's update loop then only
+ * prints `Error: TIMEOUT`, and every call and sweep waits forever (2026-11-20: 23 hours of nothing, the
+ * health check still "ok"). Past the deadline, start over from the stored session, as onError does.
+ */
+class Stalled extends Error {}
+const CALL_MS = 60_000;
+const SWEEP_MS = 10 * 60_000;
+let sweeping = false;
+
+async function deadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([work, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Stalled(what)), ms)))]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function stalled(what: string) {
+  log.warn({ what }, "Telegram stopped answering; starting over from the stored session");
+  setState("error", "Telegram stopped answering; reconnecting");
+  // After the current turn: a stall in a start's first sweep must not be folded into that same start.
+  setTimeout(() => void startReader(), 0).unref();
+}
+
 async function sweep() {
   const s = scout;
-  if (!s) return;
+  // One at a time: a sweep that hangs mustn't have another start on top of it every few minutes.
+  if (!s || sweeping) return;
+  sweeping = true;
   const started = Date.now();
   try {
     const live = s.status().live_since_scan;
     const raw = Object.fromEntries(reader?.rawUpdates ?? []);
     reader?.rawUpdates.clear();
-    await s.sweep();
+    await deadline(s.sweep(), SWEEP_MS, "sweep");
     const st = s.status();
     log.info({ ms: Date.now() - started, chats: s.chats().length, raw_updates: raw, live_messages: live, caught_up: st.caught_up_last_scan, errors: st.errors.length }, "Telegram sweep finished");
     if (status.state === "error") setState("ok");
   } catch (err) {
+    if (err instanceof Stalled) return stalled(err.message);
     noteError(err);
     log.warn({ err: String((err as Error).message).slice(0, 300) }, "Telegram sweep failed");
+  } finally {
+    sweeping = false;
   }
 }
 
@@ -182,11 +213,15 @@ function buildServer(): Server {
     const r = reader;
     if (!s || !r) return fail("telegram_auth_unavailable", `Telegram is ${status.state}: ${status.detail ?? "not connected"}`);
     try {
-      const result = await callTool(s, r, name, req.params.arguments ?? {});
+      const result = await deadline(callTool(s, r, name, req.params.arguments ?? {}), CALL_MS, name);
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     } catch (err) {
       if (err instanceof z.ZodError) return fail("bad_arguments", err.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
       if (err instanceof ToolError) return fail("telegram_error", err.message);
+      if (err instanceof Stalled) {
+        if (reader === r) stalled(name);
+        return fail("telegram_error", "Telegram didn't answer within a minute; reconnecting now, try again in a minute or two");
+      }
       noteError(err);
       if (err instanceof RefusedRequest) log.error({ tool: name, request: err.request }, "a tool tried a Telegram request that isn't a read");
       else log.warn({ tool: name, err: String((err as Error).message).slice(0, 300) }, "Telegram tool failed");
