@@ -18,16 +18,6 @@ export function idleCandidate(task, parts, me) {
   return !parts.some((p) => p.assigneeAgentId);
 }
 
-/** Whether `now` (local) is inside the idle hours: `days` (1 = Monday … 7 = Sunday) and `hours` "08:00-20:00". */
-export function inHours(now, { days = [1, 2, 3, 4, 5], hours = "08:00-20:00" } = {}) {
-  const day = now.getDay() || 7;
-  if (!days.includes(day)) return false;
-  const m = /^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/.exec(String(hours).trim());
-  if (!m) return false;
-  const at = now.getHours() * 60 + now.getMinutes();
-  return at >= Number(m[1]) * 60 + Number(m[2]) && at < Number(m[3]) * 60 + Number(m[4]);
-}
-
 /**
  * Alfred's instructions for a task he prepares: read-only, nothing outside Pennyworth, code work proposed.
  * `own`: the user wrote the task; otherwise it was made from other people's words and is untrusted.

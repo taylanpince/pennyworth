@@ -113,7 +113,7 @@ When the runner has a free slot (fewer than `max_concurrent - 1` jobs running an
 
 Who wrote a task is decided in code from its markers and author, never by Alfred. Either way the board shows Alfred's portrait and "Needs you" when there's something to look at.
 
-**Budget:** `idle.daily_usd` (default $20, from the D-62 usage numbers) and `idle.hours` (default 08:00–20:00 weekdays, so nothing starts while the user isn't around to answer).
+**Budget:** `idle.daily_usd` (default $20, from the D-62 usage numbers) and `idle.hours` (default 08:00–20:00 weekdays, so nothing starts while the user isn't around to answer). **Changed 2026-11-21:** no hours or days; idle work runs whenever Pennyworth is on.
 
 ## What changes where
 

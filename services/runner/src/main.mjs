@@ -28,7 +28,7 @@ import { SignInRunner } from "./signins.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import * as merges from "./merges.mjs";
-import { idleCandidate, inHours, prepareInstructions } from "./idle.mjs";
+import { idleCandidate, prepareInstructions } from "./idle.mjs";
 import { closingComment, declined, findingsComment, fixInstructions, reviewChain, reviewInstructions, reviewVerdict } from "./crossreview.mjs";
 import { DEFAULT_BOTS, HANDS_OFF, WATCH_QUERY, askComment, eventComment, eventInstructions, followUpComment, followUpInstructions, newWatch, parseAsk, parseNote, parsePr, parseWhen, primerComments, primerEventComment, primerInstructions, roundsLeft, slackEventComment, slackInstructions, slackReplies, slackThreads, slackTs, waitingOnUser, watchStep } from "./watches.mjs";
 import { State } from "./state.mjs";
@@ -601,13 +601,12 @@ async function advancePrimer(part, who) {
 let lastIdleCheck = 0;
 
 /**
- * When nothing runs (a slot always left for the user's own requests), in the idle hours and under the day's
- * cap: the next task in Today, then Tomorrow, that nobody is on goes to Alfred to prepare, once per task.
+ * When nothing runs (a slot always left for the user's own requests), at any hour the runner is on (the
+ * user's choice), under the day's cap: the next task in Today, then Tomorrow, that nobody is on goes to Alfred to prepare, once per task.
  */
 async function startIdleWork() {
   const idle = cfg.idle ?? {};
   if (!boardApi || running.size + queue.length > Math.max((cfg.max_concurrent ?? 2) - 2, 0)) return;
-  if (!inHours(new Date(), idle)) return;
   const day = new Date().toLocaleDateString("en-CA");
   let count = JSON.parse(state.get("idle:count") || "{}");
   if (count.day !== day) count = { day, n: 0, last: 0 };

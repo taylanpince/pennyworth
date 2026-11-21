@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { idleCandidate, inHours, prepareInstructions } from "../src/idle.mjs";
+import { idleCandidate, prepareInstructions } from "../src/idle.mjs";
 
 const task = (fields = {}) => ({ id: "t", status: "todo", assigneeUserId: "me", assigneeAgentId: null, parentId: null, labels: [], ...fields });
 
@@ -16,13 +16,6 @@ describe("idle work", () => {
     for (const name of ["recurring", "needs-review", "hands-off", "daily-brief"]) assert.ok(!idleCandidate(task({ labels: [{ name }] }), [], "me"), name);
   });
 
-  it("only works in the idle hours", () => {
-    assert.ok(inHours(new Date(2026, 10, 20, 9, 0)), "Friday 09:00");
-    assert.ok(!inHours(new Date(2026, 10, 20, 20, 0)), "Friday 20:00 is after");
-    assert.ok(!inHours(new Date(2026, 10, 21, 10, 0)), "Saturday");
-    assert.ok(inHours(new Date(2026, 10, 21, 23, 59), { days: [6], hours: "00:00-24:00" }));
-    assert.ok(!inHours(new Date(2026, 10, 20, 9, 0), { hours: "nonsense" }));
-  });
 
   it("tells Alfred to prepare, never to act, and whose words the task is", () => {
     const theirs = prepareInstructions("Taylan", false);

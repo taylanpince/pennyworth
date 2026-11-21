@@ -152,14 +152,12 @@ watches:
   # Bots whose reviews start a turn; reviewers in the repository always do, everyone else is only shown.
   bots: [copilot-pull-request-reviewer, copilot, coderabbitai, github-advanced-security, claude, chatgpt-codex-connector, gemini-code-assist, cursor]
 
-# Idle work (docs/design/automation.md, stage 4): when nothing runs (a slot always left for your own
-# requests), the next task in Today, then Tomorrow, that nobody is on goes to Alfred to prepare, once per task:
+# Idle work (docs/design/automation.md, stage 4): whenever the runner is on and nothing runs (a slot always
+# left for your own requests), the next task in Today, then Tomorrow, that nobody is on goes to Alfred to prepare, once per task:
 # research, context and drafts on his part; code work proposed for an Engineer, waiting for your Approve.
 # Recurring, needs-review and hands-off tasks are left alone.
 idle:
   enabled: true
-  days: [1, 2, 3, 4, 5]    # 1 = Monday
-  hours: "08:00-20:00"     # local time
   per_day: 6               # tasks a day
   gap_minutes: 20          # between two
 

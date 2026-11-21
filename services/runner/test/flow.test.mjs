@@ -228,8 +228,6 @@ watches:
   debounce_minutes: 0
   sources_interval_minutes: 0
 idle:
-  days: [1, 2, 3, 4, 5, 6, 7]
-  hours: "00:00-24:00"
   gap_minutes: 0
 `,
     );
