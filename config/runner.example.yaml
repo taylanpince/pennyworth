@@ -144,7 +144,7 @@ automation:
   pr_watches: true         # act on reviews, comments and failed checks on the crew's own PRs
   cross_review: true       # Linus reviews the crew's PRs on another model
   follow_ups: true         # pennyworth later, and the task's Slack thread and Primer document
-  idle: true               # Alfred prepares the next task in Today when nothing runs
+  supervisor: true         # Margaret reviews the whole board every two hours and assigns the crew (D-76)
 
 # The crew's own PRs (docs/design/automation.md): new reviews and failed checks start the author's next
 # turn without you. Read-only GraphQL with your gh login; the turn's writes are checked as always, and
@@ -161,13 +161,10 @@ watches:
   # Bots whose reviews start a turn; reviewers in the repository always do, everyone else is only shown.
   bots: [copilot-pull-request-reviewer, copilot, coderabbitai, github-advanced-security, claude, chatgpt-codex-connector, gemini-code-assist, cursor]
 
-# Idle work (docs/design/automation.md, stage 4): whenever the runner is on and nothing runs (a slot always
-# left for your own requests), the next task in Today, then Tomorrow, that nobody is on goes to Alfred to prepare, once per task:
-# research, context and drafts on his part; code work proposed for an Engineer, waiting for your Approve.
-# Recurring, needs-review and hands-off tasks are left alone.
-idle:
-  per_day: 6               # tasks a day
-  gap_minutes: 20          # between two
+# The supervisor (D-76): the "Supervise the board" routine, started this often while the part is on.
+supervisor:
+  interval_minutes: 120
+  routine: Supervise the board
 
 # Cross-model review (docs/design/automation.md, stage 2): when an Engineer opens or updates a PR, the
 # reviewer role reviews it in its own part of the task, on the first model of the chain for the author's

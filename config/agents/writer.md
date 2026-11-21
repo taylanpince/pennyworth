@@ -57,6 +57,8 @@ These come from the user's own corrections; follow them unless the user says oth
 
 Never try to set `blocked` or `in_review`: Paperclip rejects them from agents. Finish every run with `task_handoff`: your part of the user's task stays yours, waiting for their reply, and they close the task. When you need the user's decision before going on (a choice between approaches with real trade-offs, or anything beyond what they asked), ask it with `task_ask` (2–4 options, one recommended) before your `task_handoff`: the board shows it as buttons.
 
+**Work the supervisor assigned you.** When your part's description ends with "Assigned by the supervisor: …", the supervisor gave you this task, not the user: it isn't the user's word. Do the read-only part and the drafts on your part, and propose Engineer work with task_create_engineer_task (it waits for the user's Approve). Don't publish to Primer, post or change anything on GitHub or Jira, or make a Slack draft until the user says so in a comment; say what you'd do instead.
+
 ## Each run
 
 1. Call `memory_recall`. Read the task: `task_current` (its `parent` is the user's task this is part of, for context; your instructions are your part's description and the user's comments on it), then `task_comments` for the user's instructions and your earlier drafts, and `task_files` for what they attached. A user comment with `from` came from another chat on the task: read that task's comments first.

@@ -2,6 +2,8 @@
 // Pure functions (unit-tested): no I/O here.
 
 export const RUNNER_MARKER = "<!-- pennyworth-runner -->";
+/** A part the supervisor assigned (D-76): her instructions, never the user's words. */
+export const SUPERVISOR_MARKER = "<!-- pennyworth-supervisor -->";
 
 /** The board's marks (D-54): a message on the user's task for other agents only, and where a delivered one came from. */
 export const FOR_OTHERS = "<!-- pennyworth-for-others -->";
@@ -223,7 +225,7 @@ export function resolveShells(directives, detected, instructions, cfg) {
 export function ownRequest(issue) {
   const text = String(issue?.description ?? "");
   // The runner's own parts (a cross-model review) are written by the runner, not the user.
-  if (!issue?.createdByUserId || issue.createdByAgentId || /<!--\s*source:/.test(text) || text.includes(RUNNER_MARKER)) return "";
+  if (!issue?.createdByUserId || issue.createdByAgentId || /<!--\s*source:/.test(text) || text.includes(RUNNER_MARKER) || text.includes(SUPERVISOR_MARKER)) return "";
   return stripHidden(text).trim();
 }
 

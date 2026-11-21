@@ -10,13 +10,13 @@ export const AutomationSchema = z
     prWatches: z.boolean(),
     crossReview: z.boolean(),
     followUps: z.boolean(),
-    idle: z.boolean(),
+    supervisor: z.boolean(),
   })
   .strict();
 export type Automation = z.infer<typeof AutomationSchema>;
 
 /** Nothing set anywhere: everything off. */
-export const AUTOMATION_OFF: Automation = { enabled: false, prWatches: true, crossReview: true, followUps: true, idle: true };
+export const AUTOMATION_OFF: Automation = { enabled: false, prWatches: true, crossReview: true, followUps: true, supervisor: true };
 
 /** What the user chose in Settings, or undefined when they never did (the runner's config applies). */
 export function storedAutomation(store: Store): Automation | undefined {

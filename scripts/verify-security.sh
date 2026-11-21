@@ -196,6 +196,9 @@ for a in config/paperclip.yaml config/paperclip.example.yaml; do
   # with it lists its tools, and only the Assistant's list has writes.
   jira_agents="$(node -e 'const fs=require("node:fs"),yaml=require("./services/ops-mcp/node_modules/yaml"); const c=yaml.parse(fs.readFileSync(process.argv[1],"utf8")); const W=/^(createJiraIssue|editJiraIssue|transitionJiraIssue|addOrEditJiraIssueComment|executeWrite|executeDestructive)$/; process.stdout.write(Object.entries(c.agents??{}).filter(([,a])=>(a.mcp_servers??[]).includes("jira")).map(([k,a])=>{const t=a.enabled_tools?.jira; return k+(Array.isArray(t)?(t.some(n=>W.test(n))?"=writes":"=reads"):"=all")+" "}).sort().join(""))' "$a")"
   { [ -z "$jira_agents" ] || [ "$jira_agents" = "assistant=writes writer=reads " ] || [ "$jira_agents" = "assistant=writes " ]; } && pass "$a: Jira is disabled, or the Assistant's (with writes) and the Writer's (reads only)" || fail "$a: Jira given to: $jira_agents"
+  # The supervisor (D-76): the board and tasks only (no outside reads), and the only one that assigns from the board.
+  sup="$(node -e 'const fs=require("node:fs"),yaml=require("./services/ops-mcp/node_modules/yaml"); const c=yaml.parse(fs.readFileSync(process.argv[1],"utf8")); const a=c.agents?.supervisor; const others=Object.entries(c.agents??{}).filter(([k,x])=>k!=="supervisor"&&(x.enabled_tools?.paperclip_tasks??[]).some(t=>t==="task_assign"||t==="board_overview")).map(([k])=>k); process.stdout.write(!a?"none":JSON.stringify(a.mcp_servers)+" "+others.join(","))' "$a")"
+  { [ "$sup" = "none" ] || [ "$sup" = '["paperclip_tasks"] ' ]; } && pass "$a: the supervisor reads only the board and tasks, and nobody else assigns from the board" || fail "$a: the supervisor's servers or the assign tool changed: $sup"
   # Memory (D-61): only crew agents (with a persona) write memories; the scouts read the global rules only.
   mem_writers="$(awk '/^  [a-z0-9-]+:$/{agent=$1} /memory_(remember|propose)/{print agent}' "$a" | sort -u | tr '\n' ' ')"
   personas="$(awk '/^  [a-z0-9-]+:$/{agent=$1} /^    persona:/{print agent}' "$a" | sort -u | tr '\n' ' ')"
@@ -332,7 +335,8 @@ tools="$(grep -oE '^export const TOOLS = \[[^]]*\]' services/runner/src/repohelp
 [ "$tools" = 'export const TOOLS = ["repo", "status", "push", "pr", "merge", "engine", "primer", "pass", "ask", "later", "aws", "reset", "cleanup", "task", "tasks", "remember", "propose", "memory"]' ] \
   && [ "$(awk '/^async function agentTasks?\(/,/^}/' services/runner/src/main.mjs | grep -c '^  requireTaskReads(ctx);')" = 2 ] \
   && grep -q 'check: (ordered) => (command === "pr" ? allowPr(ctx, ordered) : allowWrite(ctx, command,' services/runner/src/main.mjs \
-  && grep -q '^  if (!ownWork(rows)) return allowWrite(ctx, "pr",' services/runner/src/main.mjs \
+  && grep -q '^  if (!ownWork(rows) || fromOthers(ctx.issue.id)) return allowWrite(ctx, "pr",' services/runner/src/main.mjs \
+  && grep -q '&& !fromOthers(ctx.issue.id);$' services/runner/src/main.mjs \
   && [ "$(grep -c 'own-pr:' services/runner/src/main.mjs)" = 4 ] && [ "$(grep -c 'state.set(`own-pr:${prUrl}`, issue.id);' services/runner/src/main.mjs)" = 1 ] \
   && [ "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "merge"' | cut -d: -f1)" -lt "$(awk '/^async function agentMerge/,/^}/' services/runner/src/main.mjs | grep -n 'ctx.merge = ' | cut -d: -f1)" ] \
   && [ "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'await allowWrite(ctx, "primer"' | cut -d: -f1)" -lt "$(awk '/^async function agentPrimer/,/^}/' services/runner/src/main.mjs | grep -n 'savePrimer(' | head -1 | cut -d: -f1)" ] \

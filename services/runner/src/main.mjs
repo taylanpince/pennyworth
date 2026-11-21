@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { FOR_OTHERS, RUNNER_MARKER, deliveredFrom, isAgentSubtask, isUserPart, ownRequest, findRepos, mentionedRepos, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, roleEngine, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveShells, stripHidden } from "./commands.mjs";
+import { FOR_OTHERS, RUNNER_MARKER, SUPERVISOR_MARKER, deliveredFrom, isAgentSubtask, isUserPart, ownRequest, findRepos, mentionedRepos, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, roleEngine, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { observes, runAgent } from "./engines.mjs";
 import { CAD_TOOLS, cadRuntime, isCadRole } from "./cad.mjs";
@@ -28,7 +28,6 @@ import { SignInRunner } from "./signins.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import * as merges from "./merges.mjs";
-import { idleCandidate, prepareInstructions } from "./idle.mjs";
 import { closingComment, declined, findingsComment, fixInstructions, reviewChain, reviewInstructions, reviewVerdict } from "./crossreview.mjs";
 import { DEFAULT_BOTS, HANDS_OFF, WATCH_QUERY, askComment, eventComment, eventInstructions, followUpComment, followUpInstructions, newWatch, parseAsk, parseNote, parsePr, parseWhen, primerComments, primerEventComment, primerInstructions, roundsLeft, slackEventComment, slackInstructions, slackReplies, slackThreads, slackTs, waitingOnUser, watchStep } from "./watches.mjs";
 import { State } from "./state.mjs";
@@ -98,10 +97,13 @@ async function poll() {
     lastSourceCheck = Date.now();
     await advanceSources().catch((err) => log("source check failed", { err: String(err.message ?? err).slice(0, 300) }));
   }
-  // Idle work: nothing running, so Alfred prepares the next task in Today (docs/design/automation.md, stage 4).
-  if (automation("idle") && Date.now() - lastIdleCheck >= 60_000) {
-    lastIdleCheck = Date.now();
-    await startIdleWork().catch((err) => log("idle check failed", { err: String(err.message ?? err).slice(0, 300) }));
+  // The supervisor's pass over the whole board (D-76), every two hours while it's on.
+  if (automation("supervisor") && Date.now() - Date.parse(state.get("supervisor:last") || 0) >= (cfg.supervisor?.interval_minutes ?? 120) * 60_000) {
+    state.set("supervisor:last", new Date().toISOString());
+    await pc.runRoutine(cfg.supervisor?.routine ?? "Supervise the board", {}).then(
+      () => log("supervisor pass started"),
+      (err) => log("supervisor pass failed to start", { err: String(err.message ?? err).slice(0, 300) }),
+    );
   }
   // Merges you asked for (D-46), at most once a minute.
   if (Date.now() - lastMergeCheck >= 60_000) {
@@ -355,11 +357,11 @@ async function closeReviewedTasks() {
  */
 const configAutomation = (() => {
   const a = cfg.automation ?? {};
-  return { enabled: a.enabled === true, prWatches: a.pr_watches !== false, crossReview: a.cross_review !== false, followUps: a.follow_ups !== false, idle: a.idle !== false };
+  return { enabled: a.enabled === true, prWatches: a.pr_watches !== false, crossReview: a.cross_review !== false, followUps: a.follow_ups !== false, supervisor: a.supervisor !== false };
 })();
 let automationNow = configAutomation;
 let lastAutomationSync = 0;
-/** Whether a part of the automation is on: prWatches, crossReview, followUps or idle. */
+/** Whether a part of the automation is on: prWatches, crossReview, followUps or supervisor. */
 const automation = (part) => automationNow.enabled && automationNow[part] !== false;
 
 async function syncAutomation() {
@@ -651,44 +653,22 @@ async function advancePrimer(part, who) {
   return true;
 }
 
-// ------------------------------------------------------------------ idle work (docs/design/automation.md, stage 4)
+// ------------------------------------------------------------------ the supervisor's parts (D-76)
 
-let lastIdleCheck = 0;
+/** A part the supervisor started on a task made from other people's words: its publishing waits for the user. */
+const fromOthers = (issueId) => state.get(`supervised:${issueId}`) === "others";
 
 /**
- * When nothing runs (a slot always left for the user's own requests), at any hour the runner is on (the
- * user's choice), under the day's cap: the next task in Today, then Tomorrow, that nobody is on goes to Alfred to prepare, once per task.
+ * An Engineer part the supervisor assigned: it starts now, with her instructions as the runner's (never the
+ * user's words). Whose words the task is decides, in code, whether its draft PRs and Primer documents wait.
  */
-async function startIdleWork() {
-  const idle = cfg.idle ?? {};
-  if (!boardApi || running.size + queue.length > Math.max((cfg.max_concurrent ?? 2) - 2, 0)) return;
-  const day = new Date().toLocaleDateString("en-CA");
-  let count = JSON.parse(state.get("idle:count") || "{}");
-  if (count.day !== day) count = { day, n: 0, last: 0 };
-  if (count.n >= (idle.per_day ?? 6) || Date.now() - count.last < (idle.gap_minutes ?? 20) * 60_000) return;
-  const alfred = (await pc.agents()).find((a) => a.metadata?.setupKey === "pennyworth:assistant");
-  if (!alfred) return;
-  const me = await pc.me();
-  const order = await boardApi.post("/internal/runner/order");
-  for (const id of [...(order.today ?? []), ...(order.tomorrow ?? [])]) {
-    if (state.get(`idle:${id}`)) continue;
-    const task = await pc.issue(id).catch(() => undefined);
-    if (!task || !idleCandidate(task, await pc.children(id, "backlog,todo,in_progress,in_review,blocked,done,cancelled"), me)) continue;
-    state.set(`idle:${id}`, new Date().toISOString());
-    // As the user (the board key), like "+ Add agent": Paperclip wakes Alfred on the assignment.
-    const part = await pc.createIssue({
-      title: task.title,
-      description: `${prepareInstructions(cfg.selfName, Boolean(ownRequest(task)))}\n\n${RUNNER_MARKER}`,
-      status: "todo",
-      priority: task.priority,
-      parentId: task.id,
-      assigneeAgentId: alfred.id,
-      allowDuplicate: true,
-    });
-    state.set("idle:count", JSON.stringify({ day, n: count.n + 1, last: Date.now() }));
-    log("idle work", { task: task.identifier, part: part.identifier, own: Boolean(ownRequest(task)) });
-    return;
-  }
+async function startSupervised(part) {
+  if (state.get(`supervised:${part.id}`)) return;
+  const task = part.parentId ? await pc.issue(part.parentId).catch(() => undefined) : undefined;
+  const own = Boolean(task && ownRequest(task));
+  state.set(`supervised:${part.id}`, own ? "own" : "others");
+  log("supervised part started", { issue: part.identifier, task: task?.identifier, own });
+  await dispatch({ issue: refOf(part), instructions: `${part.title}\n\n${stripHidden(part.description).trim()}`, event: "supervisor" });
 }
 
 // ------------------------------------------------------------------ cross-model review (docs/design/automation.md, stage 2)
@@ -815,6 +795,8 @@ async function handleIssue(issue, engineerIds) {
       if (isAgentSubtask(full)) return;
       // The runner's own parts (a cross-model review) start when the runner says.
       if (String(full.description ?? "").includes(RUNNER_MARKER)) return;
+      // The supervisor's (D-76) start now, as hers: on a task made from others' words, publishing waits for the user.
+      if (String(full.description ?? "").includes(SUPERVISOR_MARKER)) return startSupervised(full);
       if (!state.get(`greeted:${issue.id}`)) {
         state.set(`greeted:${issue.id}`, new Date().toISOString());
         await pc.comment(issue.id, "Ready. What would you like me to do, and in which repository? (Or write it in the task description.)");
@@ -1292,7 +1274,8 @@ function usedCommands(words) {
 const ownWork = (rows) => rows.every((r) => (!r.onGitHub || r.pushed) && (!r.prUrl || state.get(`own-pr:${r.prUrl}`)));
 
 async function allowPr(ctx, rows) {
-  if (!ownWork(rows)) return allowWrite(ctx, "pr", rows.map((r) => `${r.repo} \`${r.branch}\`${r.prUrl ? ` (PR ${r.prUrl})` : ""}`));
+  // Work the supervisor started on a task made from other people's words (D-76): even its own draft PRs wait for the user.
+  if (!ownWork(rows) || fromOthers(ctx.issue.id)) return allowWrite(ctx, "pr", rows.map((r) => `${r.repo} \`${r.branch}\`${r.prUrl ? ` (PR ${r.prUrl})` : ""}`));
   log("write unchecked", { issue: ctx.issue.identifier, action: "pr", targets: rows.length });
   const comments = await pc.comments(ctx.issue.id).catch(() => undefined);
   usedCommands(comments ? writeWords(comments) : ctx.words);
@@ -1367,8 +1350,8 @@ async function agentPrimer(ctx, args) {
   if (link && !target) throw new UserError("That isn't a link to a Primer document (…/d/<id>). Use the link the document has in Primer.");
   const record = primerRecord(ctx.issue.id);
   // A new document, or a new version of the one this task published, needs no go-ahead (D-70).
-  const own = !target || (record?.documentId === target.documentId && !record.linked);
-  if (!own) await allowWrite(ctx, "primer", [`a new version of the existing Primer document ${target.url} (its earlier versions stay in its history), made from the document the agent writes to ${PRIMER_FILES}`]);
+  const own = (!target || (record?.documentId === target.documentId && !record.linked)) && !fromOthers(ctx.issue.id);
+  if (!own) await allowWrite(ctx, "primer", [target ? `a new version of the existing Primer document ${target.url} (its earlier versions stay in its history), made from the document the agent writes to ${PRIMER_FILES}` : `a new Primer document from ${PRIMER_FILES}`]);
   if (target && record?.documentId !== target.documentId) savePrimer(ctx.issue.id, { documentId: target.documentId, url: target.url, linked: true });
   else if (!record) savePrimer(ctx.issue.id, {});
   return target

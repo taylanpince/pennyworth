@@ -407,7 +407,7 @@ const AUTOMATION_PARTS: { key: Exclude<keyof Automation, "enabled">; name: strin
   { key: "prWatches", name: "Act on reviews", what: "New reviews, comments and failed checks on the crew's own PRs start the author's next turn." },
   { key: "crossReview", name: "Cross-model review", what: "Linus reviews each of the crew's PRs on a model from another family; blocking findings go back to the author." },
   { key: "followUps", name: "Follow-ups, Slack and Primer", what: "Agents come back when they said they would, and when the task's Slack thread or Primer document gets new replies." },
-  { key: "idle", name: "Idle work", what: "When nothing runs, Alfred prepares the next task in Today that nobody is on. Code work waits for your Approve." },
+  { key: "supervisor", name: "Supervisor", what: "Margaret reviews the whole board every two hours and puts the crew on what's likely to come to something. On tasks from other people's words, PRs and Primer documents wait for you." },
 ];
 
 /** The automation switch: off unless turned on; what the user sets here wins over the runner's config. */

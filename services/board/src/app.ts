@@ -25,6 +25,7 @@ import { connectionsView, HostReportSchema, type HostReport } from "./connection
 import { RunnerPollSchema, SIGNIN_PROVIDERS, SignIns, type SignInProvider } from "./signins.js";
 import { BUCKETS, isBucket, localDate, type Bucket, type Store } from "./store.js";
 import { AUTOMATION_OFF, AutomationSchema, saveAutomation, storedAutomation, type Automation } from "./autosettings.js";
+import { SUPERVISOR_MARKER, SupervisorAssignSchema, recordSupervisorAssignment, supervisorAssignments, supervisorInstructions, supervisorRefusal, supervisorView } from "./supervisor.js";
 
 export interface AppOptions {
   paperclip: Paperclip;
@@ -254,6 +255,29 @@ export function createApp(opts: AppOptions): Server {
   }
 
   const usersOwn = (i: Issue, ctx: { me: string }) => i.assigneeUserId === ctx.me && !i.assigneeAgentId;
+
+  /** The board as the user sees it: every column's cards with their crew, from Paperclip and the board's SQLite. */
+  async function boardSnapshot() {
+    const ctx = await context();
+    const since = new Date(Date.now() - RECENT_MS).toISOString();
+    const [all, closed] = await Promise.all([pc.openIssues().then((l) => mine(l, ctx)), pc.closedSince(since).then((l) => mine(l, ctx))]);
+    const open = await closeLeftoverParts(all, closed, ctx);
+    mem.episodes(closed);
+    // Agents' sub-tasks are part of their parent's card (D-45): they never get a place of their own.
+    const folded = foldedChildren([...open, ...closed], ctx.assignees);
+    store.placeNew(open.filter((i) => !folded.has(i.id)).map((i) => ({ id: i.id, createdAt: i.createdAt, status: i.status })));
+    const recurring = new Map([...store.allRecurring()].map(([id, r]) => [id, { summary: recurringView(r, opts.timezone).summary, nextRun: r.nextRun, paused: r.paused }]));
+    const busy = await working(ctx);
+    const byId = new Map([...open, ...closed].map((i) => [i.id, i]));
+    const withSubtasks = [...new Set([...open, ...closed].filter((i) => folded.has(i.id) && usersOwn(i, ctx)).map((i) => folded.get(i.id)!))].flatMap((id) => byId.get(id) ?? []);
+    const subtasks = await subtaskCounts(withSubtasks);
+    const board = buildBoard({ subtasks, open, closed, placements: store.placements(), seen: store.allSeen(), schedules: store.schedules(), recurring, installedAt: store.meta("installed_at")!, assignees: ctx.assignees, crew: { working: busy.map, jobs: latestJobs(shared.runner) } });
+    for (const card of [...Object.values(board.buckets).flat(), ...board.recurring]) {
+      const w = busy.map.get(card.identifier);
+      if (w) card.working = w;
+    }
+    return { ctx, open, closed, board, busy };
+  }
   const closedIssue = (i: Issue) => i.status === "done" || i.status === "cancelled";
 
   /** A task that can take subtasks (D-68): the user's own, open, not repeating, and not a subtask itself. */
@@ -548,6 +572,35 @@ export function createApp(opts: AppOptions): Server {
       },
     },
     {
+      // Margaret's view of the board (D-76): every column, top to bottom, each card with where it came from,
+      // its crew and the start of its description. The tasks bridge checks that only Margaret asks.
+      method: "POST",
+      path: /^\/internal\/supervisor\/board$/,
+      handle: async () => {
+        const { open, board } = await boardSnapshot();
+        const byId = new Map(open.map((i) => [i.id, i]));
+        return { columns: supervisorView(board.buckets, byId), recent: supervisorAssignments(store) };
+      },
+    },
+    {
+      // Margaret assigns (D-76): one crew member on one of the user's tasks, with instructions and a reason,
+      // as a part marked as hers. The rules are here, not in her prompt.
+      method: "POST",
+      path: /^\/internal\/supervisor\/assign$/,
+      handle: async (_m, body) => {
+        const input = parse(SupervisorAssignSchema, body);
+        const { ctx, issue } = await ownIssue(input.task);
+        if (!usersOwn(issue, ctx) || closedIssue(issue)) throw new HttpError(400, "only the user's open tasks");
+        const refusal = supervisorRefusal({ issue, agentName: input.agent, assignees: ctx.assignees, parts: await pc.children(issue.id), recent: supervisorAssignments(store) });
+        if (refusal) throw new HttpError(400, refusal);
+        const agent = ctx.assignees.find((a) => a.persona?.name.toLowerCase() === input.agent.toLowerCase())!;
+        const part = await addToCrew(ctx, issue, agent, supervisorInstructions(input.instructions, input.why), {}, SUPERVISOR_MARKER);
+        recordSupervisorAssignment(store, { task: issue.identifier, part: part.identifier, partId: part.id, agent: agent.persona?.name ?? agent.name, at: new Date().toISOString() });
+        log.info({ issue: issue.identifier, part: part.identifier, agent: agent.name }, "supervisor assigned");
+        return { assigned: true, part: part.identifier, agent: agent.persona?.name ?? agent.name };
+      },
+    },
+    {
       // The automation switch (D-75): the runner sends its config's default and gets what applies.
       method: "POST",
       path: /^\/internal\/runner\/automation$/,
@@ -556,16 +609,6 @@ export function createApp(opts: AppOptions): Server {
         if (reported.success) shared.automationDefault = reported.data;
         const stored = storedAutomation(store);
         return { automation: stored ?? (reported.success ? reported.data : AUTOMATION_OFF), source: stored ? "settings" : "config" };
-      },
-    },
-    {
-      // The runner's idle work (docs/design/automation.md, stage 4): Today, then Tomorrow, top to bottom.
-      method: "POST",
-      path: /^\/internal\/runner\/order$/,
-      handle: async () => {
-        const placed = [...store.placements().entries()];
-        const column = (bucket: Bucket) => placed.filter(([, p]) => p.bucket === bucket).sort((a, b) => a[1].rank - b[1].rank).map(([id]) => id);
-        return { today: column("today"), tomorrow: column("tomorrow") };
       },
     },
     ...mem.internal,
@@ -817,24 +860,8 @@ export function createApp(opts: AppOptions): Server {
       method: "GET",
       path: /^\/api\/board$/,
       handle: async () => {
-        const ctx = await context();
-        const since = new Date(Date.now() - RECENT_MS).toISOString();
-        const [all, closed] = await Promise.all([pc.openIssues().then((l) => mine(l, ctx)), pc.closedSince(since).then((l) => mine(l, ctx))]);
-        const open = await closeLeftoverParts(all, closed, ctx);
-        mem.episodes(closed);
-        // Agents' sub-tasks are part of their parent's card (D-45): they never get a place of their own.
-        const folded = foldedChildren([...open, ...closed], ctx.assignees);
-        store.placeNew(open.filter((i) => !folded.has(i.id)).map((i) => ({ id: i.id, createdAt: i.createdAt, status: i.status })));
-        const recurring = new Map([...store.allRecurring()].map(([id, r]) => [id, { summary: recurringView(r, opts.timezone).summary, nextRun: r.nextRun, paused: r.paused }]));
-        const [busy, google, telegram, glean, grafana, clickhouse, cloudflare, jira] = await Promise.all([working(ctx), opts.google?.status(), opts.telegram?.status(), opts.glean?.status(), opts.grafana?.status(), opts.clickhouse?.status(), opts.cloudflare?.status(), opts.jira?.status()]);
-        const byId = new Map([...open, ...closed].map((i) => [i.id, i]));
-        const withSubtasks = [...new Set([...open, ...closed].filter((i) => folded.has(i.id) && usersOwn(i, ctx)).map((i) => folded.get(i.id)!))].flatMap((id) => byId.get(id) ?? []);
-        const subtasks = await subtaskCounts(withSubtasks);
-        const board = buildBoard({ subtasks, open, closed, placements: store.placements(), seen: store.allSeen(), schedules: store.schedules(), recurring, installedAt: store.meta("installed_at")!, assignees: ctx.assignees, crew: { working: busy.map, jobs: latestJobs(shared.runner) } });
-        for (const card of [...Object.values(board.buckets).flat(), ...board.recurring]) {
-          const w = busy.map.get(card.identifier);
-          if (w) card.working = w;
-        }
+        const { ctx, open, board, busy } = await boardSnapshot();
+        const [google, telegram, glean, grafana, clickhouse, cloudflare, jira] = await Promise.all([opts.google?.status(), opts.telegram?.status(), opts.glean?.status(), opts.grafana?.status(), opts.clickhouse?.status(), opts.cloudflare?.status(), opts.jira?.status()]);
         // Lists truncate long descriptions; the brief is read in full.
         const brief = open.find((i) => i.id === board.brief?.id);
         if (board.brief && brief?.descriptionTruncated) board.brief.description = displayText((await pc.issue(brief.id)).description);

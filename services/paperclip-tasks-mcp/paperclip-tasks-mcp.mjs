@@ -280,6 +280,12 @@ async function requireAssistant() {
   if (me?.metadata?.setupKey !== "pennyworth:assistant") throw new Error("only the Assistant can change the board");
 }
 
+/** The supervisor's tools (D-76) are hers alone (enabled_tools plus this check). */
+async function requireSupervisor() {
+  const me = await api("GET", "/api/agents/me");
+  if (me?.metadata?.setupKey !== "pennyworth:supervisor") throw new Error("only the supervisor reviews the board and assigns from it");
+}
+
 const issueRef = (v) => {
   const s = String(v ?? "").trim();
   if (!/^[A-Za-z0-9-]{1,64}$/.test(s)) throw new Error("invalid issue id or identifier");
@@ -806,6 +812,36 @@ const TOOLS = {
     run: async ({ issue, body }) => {
       const c = await api("POST", `/api/issues/${issueRef(issue)}/comments`, { body: String(body).slice(0, 20_000) });
       return { comment_id: c.id };
+    },
+  },
+  board_overview: {
+    description:
+      "Supervisor only: the user's whole board, column by column in their order (today, tomorrow, triage, backlog, later), top to bottom. Each task with where it came from (you = the user wrote it; slack, telegram, email, meeting, primer = made from other people's words; agent), its age and days since anything happened, labels, crew with their state, subtasks, and the start of its description. 'recent' lists your assignments so far (task, part, agent, when).",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+    run: async () => {
+      await requireSupervisor();
+      return boardApi("/internal/supervisor/board", {});
+    },
+  },
+  task_assign: {
+    description:
+      "Supervisor only: put one crew member on one of the user's tasks, by name, with self-contained instructions (what to do, what done looks like, where to start) and why this task and this agent. The agent starts on it; the board refuses tasks with the needs-review, recurring, daily-brief or hands-off label, your own reports, a crew member already on the task, the same task and agent twice, and more than 5 assignments in two hours or 15 a day.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "the task, e.g. PEN-12" },
+        agent: { type: "string", description: "the crew member's name, e.g. Ada" },
+        instructions: { type: "string", description: "20 to 4000 characters, written for that agent" },
+        why: { type: "string", description: "10 to 500 characters: why this task, now, and this agent; the user reads it" },
+      },
+      required: ["task", "agent", "instructions", "why"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    run: async ({ task, agent, instructions, why }) => {
+      await requireSupervisor();
+      return boardApi("/internal/supervisor/assign", { task: String(task ?? "").trim(), agent: String(agent ?? "").trim(), instructions: String(instructions ?? ""), why: String(why ?? "") });
     },
   },
   task_ask: {

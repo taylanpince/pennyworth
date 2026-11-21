@@ -119,7 +119,7 @@ describe("Settings: the connections routes", () => {
       // The automation switch (D-75): off with nothing set; the runner's config until Settings change it; then Settings.
       r = await (await call(app, "GET", "/api/automation", headers)).json();
       expect(r).toMatchObject({ automation: { enabled: false }, source: "default" });
-      const on = { enabled: true, prWatches: true, crossReview: false, followUps: true, idle: true };
+      const on = { enabled: true, prWatches: true, crossReview: false, followUps: true, supervisor: true };
       expect(await (await call(internal, "POST", "/internal/runner/automation", auth, { default: on })).json()).toEqual({ automation: on, source: "config" });
       expect(await (await call(app, "GET", "/api/automation", headers)).json()).toMatchObject({ automation: on, source: "config" });
       const off = { ...on, enabled: false };

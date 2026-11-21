@@ -496,13 +496,13 @@ export interface SignInSession {
   updatedAt: string;
 }
 
-/** The automation switch (D-75): PR watches, cross-model review, follow-ups and idle work. Off unless turned on. */
+/** The automation switch (D-75): PR watches, cross-model review, follow-ups and the supervisor (D-76). Off unless turned on. */
 export interface Automation {
   enabled: boolean;
   prWatches: boolean;
   crossReview: boolean;
   followUps: boolean;
-  idle: boolean;
+  supervisor: boolean;
 }
 export interface AutomationView {
   automation: Automation;

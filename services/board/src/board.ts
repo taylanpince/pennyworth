@@ -103,7 +103,8 @@ export function assignees(agents: Agent[]): Assignee[] {
   };
   const assistant = live.find((a) => a.metadata?.setupKey === "pennyworth:assistant");
   if (assistant) out.push(woken(assistant, "assistant"));
-  for (const a of live) if (a !== assistant && !isRole(a) && personaOf(a) && a.adapterType === "codex_local" && a.metadata?.setupKey?.startsWith("pennyworth:")) out.push(woken(a, "agent"));
+  // The supervisor (D-76) assigns the others; nobody assigns her.
+  for (const a of live) if (a !== assistant && !isRole(a) && personaOf(a) && a.adapterType === "codex_local" && a.metadata?.setupKey?.startsWith("pennyworth:") && a.metadata.setupKey !== "pennyworth:supervisor") out.push(woken(a, "agent"));
   const roles = live.filter((a) => isRole(a) && roleEngine(a));
   const rank = (a: Agent) => (ROLE_ORDER.includes(a.metadata?.setupKey ?? "") ? ROLE_ORDER.indexOf(a.metadata!.setupKey!) : ROLE_ORDER.length);
   roles.sort((a, b) => rank(a) - rank(b));

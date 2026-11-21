@@ -70,6 +70,11 @@ if (step === "commit" || step === "clone-commit") {
   writeFileSync(join(repo, "third.txt"), `third\n# ${Date.now()}\n`);
   git("add", "third.txt");
   git("commit", "-qm", "feat: third change");
+} else if (step === "fourth") {
+  git("switch", "-qc", "feat/fourth", "origin/main");
+  writeFileSync(join(repo, "fourth.txt"), "fourth\n");
+  git("add", "fourth.txt");
+  git("commit", "-qm", "feat: retry the RPC client");
 } else if (step === "amend") {
   // Rewrites the pushed commit, as a rebase does.
   git("switch", "-q", "fix/remove-telos");
