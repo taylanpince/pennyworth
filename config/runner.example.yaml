@@ -136,12 +136,21 @@ merges:
   gap_minutes: 15        # between merges, unless the request says otherwise
   timeout_minutes: 90    # stop the queue when a check or CI stays pending this long
 
+# Automation (docs/design/automation.md, D-71 to D-75): the crew acting without being asked. Off unless you
+# turn it on here or on the board's Settings page, which wins once you change it there. Each part is on with
+# the switch unless set false. The blocks below tune each part.
+automation:
+  enabled: false
+  pr_watches: true         # act on reviews, comments and failed checks on the crew's own PRs
+  cross_review: true       # Linus reviews the crew's PRs on another model
+  follow_ups: true         # pennyworth later, and the task's Slack thread and Primer document
+  idle: true               # Alfred prepares the next task in Today when nothing runs
+
 # The crew's own PRs (docs/design/automation.md): new reviews and failed checks start the author's next
 # turn without you. Read-only GraphQL with your gh login; the turn's writes are checked as always, and
 # the review's words never count as yours. The `hands-off` label on a task stops it; so does a question
 # the agent asked (`pennyworth ask`) until you answer.
 watches:
-  enabled: true
   interval_minutes: 2
   debounce_minutes: 3      # wait this long after the newest review comment, so a review is one turn
   rounds_per_day: 5        # automatic turns per PR in 24 hours; two in a row that change nothing wait for you
@@ -157,7 +166,6 @@ watches:
 # research, context and drafts on his part; code work proposed for an Engineer, waiting for your Approve.
 # Recurring, needs-review and hands-off tasks are left alone.
 idle:
-  enabled: true
   per_day: 6               # tasks a day
   gap_minutes: 20          # between two
 
@@ -166,7 +174,6 @@ idle:
 # engine; one that declines or fails hands over to the next. Blocking findings go back to the author, whose
 # new commits start the next round. Nothing goes to GitHub, and the PR stays a draft.
 cross_review:
-  enabled: true
   reviewer: reviewer       # the setup key of the role that reviews (Linus)
   rounds: 3                # review rounds per task before it's over to you
   # The author's engine → reviewers to try, in order. Leave out to use these defaults (never the same family).

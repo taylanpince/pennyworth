@@ -1,5 +1,5 @@
 import type { Agents, Board, Bucket, Cadence, IssueView, Models, RecurringView, TelegramStep, Update, Engine, Executor } from "./types";
-import type { Connections, SignInSession } from "./types";
+import type { Automation, AutomationView, Connections, SignInSession } from "./types";
 import type { Episode, Memory, MemoryKind, MemoryList, MemoryPatch, Sparklines, Stats, StatsRange } from "./types";
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -75,6 +75,8 @@ export const api = {
   handOver: (ref: string, from: string, to: string) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/handover`, { from, to }),
   models: (assignee: string, engine?: Engine) => call<Models>("GET", `/api/models/${assignee}${engine ? `?engine=${engine}` : ""}`),
   connections: () => call<Connections>("GET", "/api/connections"),
+  automation: () => call<AutomationView>("GET", "/api/automation"),
+  setAutomation: (value: Automation) => call<AutomationView>("POST", "/api/automation", value),
   hideBanner: (id: string, since: string) => call<{ hiddenBanners: Record<string, string> }>("POST", `/api/banners/${id}/hide`, { since }),
   showBanner: (id: string) => call<{ hiddenBanners: Record<string, string> }>("POST", `/api/banners/${id}/show`, {}),
   checkConnections: () => call<Connections>("POST", "/api/connections/check", {}),

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { TelegramSignIn } from "./components";
 import { ConnectionPanel } from "./Connections";
-import type { Connection, Connections, ConnectionState, SignInSession } from "./types";
+import type { Automation, AutomationView, Connection, Connections, ConnectionState, SignInSession } from "./types";
 import { WhatsAppPanel } from "./WhatsApp";
 
 const STATE_LABEL: Record<ConnectionState, string> = { ok: "Connected", attention: "Needs attention", off: "Not connected", unset: "Not set up", unknown: "Unknown" };
@@ -64,7 +64,7 @@ export function SettingsPage({ canConnect }: { canConnect: boolean }) {
       <header className="settings-page-heading">
         <div>
           <h1 id="settings-title">Settings</h1>
-          <p>Your connections: who each is signed in as, whether it works, and how to connect more.</p>
+          <p>What the crew does on its own, and your connections: who each is signed in as, whether it works, and how to connect more.</p>
         </div>
         <div className="settings-actions">
           <button className="btn" onClick={() => void checkNow()} disabled={checking || !data}>
@@ -76,6 +76,7 @@ export function SettingsPage({ canConnect }: { canConnect: boolean }) {
         </div>
       </header>
       {error && <p role="alert">{error}</p>}
+      <AutomationSettings />
       {!data && !error && <p role="status">Loading connections…</p>}
       {data && (
         <p className="settings-summary" role="status">
@@ -398,5 +399,73 @@ function CopyCode({ code }: { code: string }) {
         {copied ? "Copied" : "Copy"}
       </button>
     </>
+  );
+}
+
+/** The parts of the automation (D-75), each with what it does in a line. */
+const AUTOMATION_PARTS: { key: Exclude<keyof Automation, "enabled">; name: string; what: string }[] = [
+  { key: "prWatches", name: "Act on reviews", what: "New reviews, comments and failed checks on the crew's own PRs start the author's next turn." },
+  { key: "crossReview", name: "Cross-model review", what: "Linus reviews each of the crew's PRs on a model from another family; blocking findings go back to the author." },
+  { key: "followUps", name: "Follow-ups, Slack and Primer", what: "Agents come back when they said they would, and when the task's Slack thread or Primer document gets new replies." },
+  { key: "idle", name: "Idle work", what: "When nothing runs, Alfred prepares the next task in Today that nobody is on. Code work waits for your Approve." },
+];
+
+/** The automation switch: off unless turned on; what the user sets here wins over the runner's config. */
+function AutomationSettings() {
+  const [view, setView] = useState<AutomationView>();
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    api.automation().then(setView, (err) => setError((err as Error).message));
+  }, []);
+  async function save(next: Automation) {
+    setSaving(true);
+    try {
+      setView(await api.setAutomation(next));
+      setError("");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+  const a = view?.automation;
+  return (
+    <section className="automation" aria-labelledby="automation-title">
+      <h2 className="conn-group" id="automation-title">
+        Automation
+      </h2>
+      <p className="conn-group-note">
+        The crew acting without being asked. The write gates stay as they are: nothing goes to GitHub, Slack or anywhere else on its own beyond draft PRs of the crew's own work, and questions wait for you.
+        {view?.source === "config" && " Set by the runner's config until you change it here."}
+      </p>
+      {error && <p role="alert">{error}</p>}
+      {!a ? (
+        !error && <p role="status">Loading…</p>
+      ) : (
+        <div className="automation-card">
+          <label className="automation-master">
+            <input type="checkbox" checked={a.enabled} disabled={saving} onChange={(e) => void save({ ...a, enabled: e.target.checked })} />
+            <span>
+              <b>{a.enabled ? "On" : "Off"}</b> {a.enabled ? "the crew keeps going on its own, as set below" : "the crew only works when you ask"}
+            </span>
+          </label>
+          <ul className="automation-parts">
+            {AUTOMATION_PARTS.map((p) => (
+              <li key={p.key}>
+                <label>
+                  <input type="checkbox" checked={a[p.key]} disabled={saving || !a.enabled} onChange={(e) => void save({ ...a, [p.key]: e.target.checked })} />
+                  <span>
+                    <b>{p.name}</b>
+                    <span className="muted small">{p.what}</span>
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+          {!view.runnerSeenAt && <p className="muted small">The runner hasn't reported since the board started; it picks this up within a minute of its next poll.</p>}
+        </div>
+      )}
+    </section>
   );
 }

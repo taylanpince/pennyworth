@@ -24,6 +24,7 @@ import { readBackup } from "./backup.js";
 import { connectionsView, HostReportSchema, type HostReport } from "./connections.js";
 import { RunnerPollSchema, SIGNIN_PROVIDERS, SignIns, type SignInProvider } from "./signins.js";
 import { BUCKETS, isBucket, localDate, type Bucket, type Store } from "./store.js";
+import { AUTOMATION_OFF, AutomationSchema, saveAutomation, storedAutomation, type Automation } from "./autosettings.js";
 
 export interface AppOptions {
   paperclip: Paperclip;
@@ -45,7 +46,7 @@ export interface AppOptions {
   lan?: { clients: string[]; url: string };
   internalToken?: string;
   /** Shared by the listeners: the runner reports to the internal one, the board reads it on the others. */
-  activity?: { runner?: RunnerReport; host?: HostReport; checkHost?: boolean; signins?: SignIns };
+  activity?: { runner?: RunnerReport; host?: HostReport; checkHost?: boolean; signins?: SignIns; automationDefault?: Automation };
   /** Google sign-in state and re-consent (D-36); no banner and no reconnect without it. */
   google?: GoogleAuth;
   /** Telegram sign-in state and sign-in (D-37); no banner and no sign-in without it. */
@@ -547,6 +548,17 @@ export function createApp(opts: AppOptions): Server {
       },
     },
     {
+      // The automation switch (D-75): the runner sends its config's default and gets what applies.
+      method: "POST",
+      path: /^\/internal\/runner\/automation$/,
+      handle: async (_m, body) => {
+        const reported = AutomationSchema.safeParse((body as { default?: unknown } | null)?.default);
+        if (reported.success) shared.automationDefault = reported.data;
+        const stored = storedAutomation(store);
+        return { automation: stored ?? (reported.success ? reported.data : AUTOMATION_OFF), source: stored ? "settings" : "config" };
+      },
+    },
+    {
       // The runner's idle work (docs/design/automation.md, stage 4): Today, then Tomorrow, top to bottom.
       method: "POST",
       path: /^\/internal\/runner\/order$/,
@@ -681,6 +693,18 @@ export function createApp(opts: AppOptions): Server {
     };
   }
   const routes: { method: string; path: RegExp; maxBody?: number; handle: (m: RegExpMatchArray, body: unknown, url: URL, req: IncomingMessage) => Promise<unknown> }[] = [
+    {
+      // The automation switch for Settings (D-75): what the user set here, else the runner's config, else off.
+      method: "GET", path: /^\/api\/automation$/,
+      handle: async () => {
+        const stored = storedAutomation(store);
+        return { automation: stored ?? shared.automationDefault ?? AUTOMATION_OFF, source: stored ? "settings" : shared.automationDefault ? "config" : "default", runnerSeenAt: shared.runner?.at ?? null };
+      },
+    },
+    {
+      method: "POST", path: /^\/api\/automation$/,
+      handle: async (_m, body) => ({ automation: saveAutomation(store, parse(AutomationSchema, body)), source: "settings", runnerSeenAt: shared.runner?.at ?? null }),
+    },
     {
       // Every connection, for Settings: board sign-ins from their proxies, the laptop's from the runner's last check.
       method: "GET", path: /^\/api\/connections$/,

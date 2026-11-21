@@ -58,6 +58,7 @@ const engineLabel = (e) => {
 // ------------------------------------------------------------------ polling
 
 async function poll() {
+  await syncAutomation();
   const since = state.get("last_poll");
   const now = new Date().toISOString();
   // Overlap the window so comments landing during a poll are never missed (handled IDs dedupe).
@@ -84,21 +85,21 @@ async function poll() {
     await startRecurringRuns().catch((err) => log("recurring check failed", { err: String(err.message ?? err).slice(0, 300) }));
   }
   // The crew's own PRs (docs/design/automation.md): reviews and failed checks start the author's next turn.
-  if (cfg.watches?.enabled !== false && Date.now() - lastWatchCheck >= (cfg.watches?.interval_minutes ?? 2) * 60_000) {
+  if (automation("prWatches") && Date.now() - lastWatchCheck >= (cfg.watches?.interval_minutes ?? 2) * 60_000) {
     lastWatchCheck = Date.now();
     await advanceWatches().catch((err) => log("watch check failed", { err: String(err.stderr || err.message || err).slice(0, 300) }));
   }
   // Follow-ups agents set (`pennyworth later`), at most once a minute; Slack threads and Primer comments every few.
-  if (cfg.watches?.enabled !== false && Date.now() - lastFollowUpCheck >= 60_000) {
+  if (automation("followUps") && Date.now() - lastFollowUpCheck >= 60_000) {
     lastFollowUpCheck = Date.now();
     await advanceFollowUps().catch((err) => log("follow-up check failed", { err: String(err.message ?? err).slice(0, 300) }));
   }
-  if (cfg.watches?.enabled !== false && Date.now() - lastSourceCheck >= (cfg.watches?.sources_interval_minutes ?? 10) * 60_000) {
+  if (automation("followUps") && Date.now() - lastSourceCheck >= (cfg.watches?.sources_interval_minutes ?? 10) * 60_000) {
     lastSourceCheck = Date.now();
     await advanceSources().catch((err) => log("source check failed", { err: String(err.message ?? err).slice(0, 300) }));
   }
   // Idle work: nothing running, so Alfred prepares the next task in Today (docs/design/automation.md, stage 4).
-  if (cfg.idle?.enabled !== false && Date.now() - lastIdleCheck >= 60_000) {
+  if (automation("idle") && Date.now() - lastIdleCheck >= 60_000) {
     lastIdleCheck = Date.now();
     await startIdleWork().catch((err) => log("idle check failed", { err: String(err.message ?? err).slice(0, 300) }));
   }
@@ -346,6 +347,53 @@ async function closeReviewedTasks() {
   }
 }
 
+// ------------------------------------------------------------------ the automation switch (D-75)
+
+/**
+ * The runner's config: off unless `automation.enabled`, each part on with it unless set false. The board's
+ * Settings, once the user changes them there, win; the board answers with what applies on every poll.
+ */
+const configAutomation = (() => {
+  const a = cfg.automation ?? {};
+  return { enabled: a.enabled === true, prWatches: a.pr_watches !== false, crossReview: a.cross_review !== false, followUps: a.follow_ups !== false, idle: a.idle !== false };
+})();
+let automationNow = configAutomation;
+let lastAutomationSync = 0;
+/** Whether a part of the automation is on: prWatches, crossReview, followUps or idle. */
+const automation = (part) => automationNow.enabled && automationNow[part] !== false;
+
+async function syncAutomation() {
+  if (!boardApi || Date.now() - lastAutomationSync < 30_000) return;
+  lastAutomationSync = Date.now();
+  // The board unreachable: keep what applied last (the config's, until the board first answers).
+  const res = await boardApi.post("/internal/runner/automation", { default: configAutomation }).catch(() => undefined);
+  if (!res?.automation) return;
+  const was = automationNow;
+  automationNow = { ...configAutomation, ...res.automation };
+  if (JSON.stringify(was) === JSON.stringify(automationNow)) return;
+  log("automation", { ...automationNow, source: res.source });
+  automationTurnedOn(was);
+}
+
+/**
+ * A part just turned on: it starts from now. What happened on PRs, Slack threads and Primer documents
+ * while it was off is the user's to point at, as on the day each watch began.
+ */
+function automationTurnedOn(was) {
+  const on = (part) => automation(part) && !(was.enabled && was[part] !== false);
+  const now = new Date();
+  if (on("prWatches")) {
+    for (const url of activeWatches()) {
+      const watch = watchOf(url);
+      if (watch) saveWatch({ ...watch, cursor: now.toISOString(), baseline: true, rounds: [], idle: 0, paused: "" });
+    }
+  }
+  if (on("followUps")) {
+    for (const [key, value] of state.entries("slackw:")) state.set(key, JSON.stringify({ ...JSON.parse(value), cursor: slackTs(now.getTime()) }));
+    for (const [key, value] of state.entries("primerw:")) state.set(key, JSON.stringify({ ...JSON.parse(value), cursor: now.toISOString() }));
+  }
+}
+
 // ------------------------------------------------------------------ watches on the crew's own PRs (docs/design/automation.md)
 
 let lastWatchCheck = 0;
@@ -359,7 +407,7 @@ function saveWatch(watch) {
 
 /** Watch a PR the task opened: what happens on it from now on reaches the agent without the user. */
 function addWatch(issueId, url) {
-  if (cfg.watches?.enabled === false || watchOf(url) || !parsePr(url)) return;
+  if (watchOf(url) || !parsePr(url)) return;
   saveWatch(newWatch(issueId, url));
   log("watching PR", { url });
 }
@@ -414,6 +462,12 @@ async function advanceWatch(watch, gh) {
   const ref = parsePr(watch.url);
   const { stdout } = await execFileP(gh, ["api", "graphql", "-f", `query=${WATCH_QUERY}`, "-f", `owner=${ref.owner}`, "-f", `repo=${ref.repo}`, "-F", `number=${ref.number}`], { maxBuffer: 16 * 1024 * 1024 });
   const pr = JSON.parse(stdout).data?.repository?.pullRequest;
+  // Watching starts now (the switch just turned on): checks already failing on this head were there before.
+  if (watch.baseline) {
+    if (pr?.headRefOid) watch.checkedHead = pr.headRefOid;
+    watch.baseline = false;
+    return saveWatch(watch);
+  }
   const step = watchStep(watch, pr, { me: githubLogin, bots: cfg.watches?.bots ?? DEFAULT_BOTS, debounceMs: (cfg.watches?.debounce_minutes ?? 3) * 60_000 });
   if (step.end) return end(`PR ${step.end}`);
   if (step.failedSince) {
@@ -474,6 +528,7 @@ async function mayStart(issue) {
 
 /** `pennyworth later <when> <note>`: a turn on this task at that time, with the agent's own note. */
 async function agentLater(ctx, args) {
+  if (!automation("followUps")) throw new UserError(`Follow-ups are off here (Settings → Automation). Say in your reply what ${cfg.selfName} should check, and when.`);
   let at;
   let note;
   try {
@@ -648,7 +703,7 @@ const nameOf = (engineers, id, fallback) => personaFor(engineers.find((a) => a.i
  * model of the chain for the author's engine, in his part of the task (made by the runner, never the user).
  */
 async function maybeCrossReview(issue) {
-  if (cfg.cross_review?.enabled === false || state.get(`xreview-part:${issue.id}`)) return;
+  if (!automation("crossReview") || state.get(`xreview-part:${issue.id}`)) return;
   const engineers = await pc.engineerAgents();
   const reviewer = reviewerOf(engineers);
   const full = await pc.issue(issue.id);
@@ -1654,7 +1709,7 @@ async function startJob({ issue, instructions, event = false }) {
     const { thread, stand, words } = await conversation(issue, workspace, { instructions, resumed, persona });
     let prompt = resumed
       ? followUpPrompt({ user: cfg.selfName, instructions, event, workspace, repos, branches, files, primer, primerEnabled: cfg.primerEnabled && !cad, crew, observe, thread, stand, memory })
-      : firstPrompt({ user: cfg.selfName, task: full, event, workspace, repos, branches, shells: runShells, instructions, files, primer, primerEnabled: cfg.primerEnabled && !cad, persona, crew, observe, thread, stand, team: crewNames(await pc.agents().catch(() => engineers)), memory, restarted: Boolean(state.get(`restarted:${issue.id}`)) });
+      : firstPrompt({ user: cfg.selfName, task: full, event, followUps: automation("followUps"), workspace, repos, branches, shells: runShells, instructions, files, primer, primerEnabled: cfg.primerEnabled && !cad, persona, crew, observe, thread, stand, team: crewNames(await pc.agents().catch(() => engineers)), memory, restarted: Boolean(state.get(`restarted:${issue.id}`)) });
     if (runtime) prompt += `\n\n${runtime.instructions}\n\nThese CAD-specific workflow instructions replace the generic repository/commit and Primer guidance above. The current user request still defines what to design.\n`;
     if (!resumed) state.set(`restarted:${issue.id}`, "");
     const tipsBefore = await branchTips(workspace);

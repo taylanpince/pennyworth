@@ -115,6 +115,17 @@ describe("Settings: the connections routes", () => {
       expect(first).toEqual({ ok: true, checkConnections: true });
       const second = await (await call(internal, "POST", "/internal/runner/activity", auth, report)).json();
       expect(second).toEqual({ ok: true });
+
+      // The automation switch (D-75): off with nothing set; the runner's config until Settings change it; then Settings.
+      r = await (await call(app, "GET", "/api/automation", headers)).json();
+      expect(r).toMatchObject({ automation: { enabled: false }, source: "default" });
+      const on = { enabled: true, prWatches: true, crossReview: false, followUps: true, idle: true };
+      expect(await (await call(internal, "POST", "/internal/runner/automation", auth, { default: on })).json()).toEqual({ automation: on, source: "config" });
+      expect(await (await call(app, "GET", "/api/automation", headers)).json()).toMatchObject({ automation: on, source: "config" });
+      const off = { ...on, enabled: false };
+      expect((await call(app, "POST", "/api/automation", headers, { ...off, extra: 1 })).status).toBe(400);
+      expect(await (await call(app, "POST", "/api/automation", headers, off)).json()).toMatchObject({ automation: off, source: "settings" });
+      expect(await (await call(internal, "POST", "/internal/runner/automation", auth, { default: on })).json()).toEqual({ automation: off, source: "settings" });
     } finally {
       app.close();
       internal.close();

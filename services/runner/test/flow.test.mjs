@@ -113,6 +113,11 @@ function fakePaperclip({ parent, part, engineers, parentComments = [], others = 
         if (path.endsWith("/search")) return send({ memories: [{ id: 3, scope: "engineer-claude", kind: "playbook", text: "Removing a network from Sequence infra\n1. devops PRs, dev then prod" }], episodes: [{ identifier: "PEN-40", title: "Remove the Telos network", closedAt: "2026-11-01T10:00:00Z", summary: "Opened the devops and relayer PRs.", links: ["https://github.com/acme/devops/pull/7"] }] });
         return send({ id: 7, scope: "global", status: "active", duplicate: false, message: "Remembered for every agent as #7." });
       }
+      // The automation switch (D-75): the runner's config default in, what applies out.
+      if (path.endsWith("/runner/automation")) {
+        fake.automationDefault = JSON.parse(body).default;
+        return send(fake.automation ? { automation: fake.automation, source: "settings" } : {});
+      }
       // Today and Tomorrow, top to bottom, for idle work.
       if (path.endsWith("/runner/order")) return send(fake.order);
       if (path.endsWith("/pass")) {
@@ -124,7 +129,7 @@ function fakePaperclip({ parent, part, engineers, parentComments = [], others = 
     unknown.push(`${req.method} ${path}`);
     send({ error: "not found" }, 404);
   });
-  fake = { order: { today: [], tomorrow: [] }, slackThread: "=== THREAD PARENT MESSAGE ===\nNo thread messsages\n", server, engineers, issues, comments, patches, activity, usage, passed, attached, unknown, addComment, memory, memoryText: "### For every agent\n\n- [1] I always review on Primer directly." };
+  fake = { automation: undefined, automationDefault: undefined, order: { today: [], tomorrow: [] }, slackThread: "=== THREAD PARENT MESSAGE ===\nNo thread messsages\n", server, engineers, issues, comments, patches, activity, usage, passed, attached, unknown, addComment, memory, memoryText: "### For every agent\n\n- [1] I always review on Primer directly." };
   return fake;
 }
 
@@ -223,6 +228,8 @@ reviews:
   enabled: false
 recurring:
   enabled: false
+automation:
+  enabled: true
 watches:
   interval_minutes: 0
   debounce_minutes: 0
@@ -924,6 +931,22 @@ idle:
     assert.ok(!alfredParts().some((i) => [recurring.id, worked.id].includes(i.parentId)), "recurring tasks and tasks with crew are left alone");
     await new Promise((r) => setTimeout(r, 2500));
     assert.equal(alfredParts().filter((i) => i.parentId === read.id).length, 1, "once per task");
+  });
+
+  it("does nothing on its own once Settings turn automation off, and carries on when it's back on", async () => {
+    const state = new State(join(dir, "state"));
+    assert.deepEqual(paperclip.automationDefault, { enabled: true, prWatches: true, crossReview: true, followUps: true, idle: true }, "the runner sends its config");
+    paperclip.automation = { enabled: false, prWatches: true, crossReview: true, followUps: true, idle: true };
+    await waitFor("the runner to read the switch", () => output.includes('"msg":"automation","enabled":false'), 45_000);
+    const ada = paperclip.issues.get("fu-ada");
+    const runs = claudeRuns().length;
+    step("none");
+    state.set(`followups:${ada.id}`, JSON.stringify([{ at: new Date(Date.now() - 1000).toISOString(), note: "check-again", set: new Date().toISOString() }]));
+    await new Promise((r) => setTimeout(r, 4000));
+    assert.equal(claudeRuns().length, runs, "a follow-up that came due waits while automation is off");
+    paperclip.automation = { ...paperclip.automation, enabled: true };
+    await waitFor("the follow-up once it's back on", () => claudeRuns().some((r) => r.prompt.includes('"check-again"')), 60_000);
+    state.db.close();
   });
 
   it("never errors or asks for a repository along the way", () => {

@@ -495,3 +495,18 @@ export interface SignInSession {
   startedAt: string;
   updatedAt: string;
 }
+
+/** The automation switch (D-75): PR watches, cross-model review, follow-ups and idle work. Off unless turned on. */
+export interface Automation {
+  enabled: boolean;
+  prWatches: boolean;
+  crossReview: boolean;
+  followUps: boolean;
+  idle: boolean;
+}
+export interface AutomationView {
+  automation: Automation;
+  /** Where it comes from: set here, the runner's config, or nothing set (off). */
+  source: "settings" | "config" | "default";
+  runnerSeenAt: string | null;
+}
