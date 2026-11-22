@@ -946,6 +946,29 @@ watches:
     state.db.close();
   });
 
+  it("shares workspace files on the task right away, and nothing from outside it", async () => {
+    const before = paperclip.attached.length;
+    step("none\npennyworth share app/README.md ../../config/runner.yaml");
+    const reply = await turn("Share the README with Ursula.");
+    const shared = toolRuns().at(-1);
+    assert.equal(shared.code, 0, shared.out);
+    assert.match(shared.out, /Attached to PEN-2: README\.md\./);
+    assert.match(shared.out, /Not shared: \.\.\/\.\.\/config\/runner\.yaml \((outside the workspace|no such file in the workspace)\)/);
+    assert.deepEqual(paperclip.attached.slice(before), [{ issue: "part", name: "README.md" }]);
+    assert.ok(reply.comment);
+    assert.match(claudeRuns()[0].prompt, /pennyworth share <file>/, "a new session knows how");
+    assert.doesNotMatch(claudeRuns().at(-1).prompt, /## New since your session started/, "a session that began with it isn't told again");
+    // A session from before the tool hears about it once, on its next turn.
+    const state = new State(join(dir, "state"));
+    state.set("tools_seen:part", "0");
+    state.db.close();
+    step("none");
+    await turn("Anything else from the scan?");
+    assert.match(claudeRuns().at(-1).prompt, /## New since your session started\n\n- `pennyworth share <file>\.\.\.` attaches files/);
+    await turn("Thanks.");
+    assert.doesNotMatch(claudeRuns().at(-1).prompt, /## New since your session started/, "once");
+  });
+
   it("never errors or asks for a repository along the way", () => {
     assert.ok(!/"msg":"error"/.test(output), `the runner logged an error${context()}`);
     assert.ok(!partComments().some((c) => /Which repository|Runner error/.test(c)));

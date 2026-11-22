@@ -873,3 +873,14 @@ Ubuntu's `bwrap-userns-restrict` AppArmor profile strips capabilities from Bubbl
   - **Assign and report only:** she never moves, closes or edits tasks. Each run adds to one report task a day ("Board review — <date>", marker `supervisor:<date>`): what she assigned and why, what she left and why, stale tasks to close.
 - **Replaces** idle work (D-74): `idle.mjs` and the board's order route are gone.
 - **Verified:** the board's rules (`test/supervisor.test.ts`), the Settings switch, the runner's flow test (her part on a Slack task starts under her heading and its draft PR is refused), the security check (her servers, and nobody else has her tools).
+
+## D-77: The crew passes files, not pasted tables
+
+- **Problem:** on PEN-5787 (the Olderfall incident, 2026-11-22) the user asked Ada to have Ursula put the full per-wallet loss ledger in the refund report. Ada's data was in her workspace (`impact/losses_by_wallet.csv` and others, a few hundred KB); she said she had "no way to attach files to the task" and pasted the ledger into a reply. Ursula, reading it with `task_comments`, got it cut at 8,000 characters, published the report with the ledger missing, and asked for the files to be attached. A shared workspace isn't possible: Alfred and Ursula run in Paperclip's container with no shell.
+- **What was missing:** the runner already attached `.pennyworth/out/` after every run (D-54), but no prompt said so; Ursula had no way to see files on other parts of the task; comments were cut silently.
+- **Decision:**
+  - **`pennyworth share <file>...`** attaches workspace files to the agent's part right away (`shareable` in `services/runner/src/files.mjs`: inside the workspace after resolving symlinks, regular files up to 10 MB, 20 a call, never dotfiles or names that look like keys or credentials; a changed file replaces its earlier version). The Engineers' rules say when to use it, and `.pennyworth/out/` is named there too.
+  - **Resumed sessions hear about new tools once** (`TOOL_NEWS` in `prompt.mjs`, `tools_seen:<issue>` in the state): the rules are only in a session's first prompt, so an agent mid-task would otherwise never learn of them.
+  - **`task_files` with `crew: true`** lists the files on the user's task and all its parts, each with the task it's on and whose part it is; Alfred's and Ursula's prompts say to work from those files and to ask for one by name rather than rebuild the data.
+  - **`task_comments`** gives up to 20,000 characters per comment and marks a longer one `truncated`, pointing at the files.
+- **Also:** a cross-model review round that doesn't finish no longer posts the failure report and log lines on the reviewer's part; the handover line to the next model says it (D-72).

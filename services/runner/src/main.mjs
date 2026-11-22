@@ -13,13 +13,13 @@ import { observes, runAgent } from "./engines.mjs";
 import { CAD_TOOLS, cadRuntime, isCadRole } from "./cad.mjs";
 import { gcpSession } from "./gcp.mjs";
 import { awsSession, checkAwsCommand, runAwsWrite, showCommand } from "./aws.mjs";
-import { outputs, shareOutputs, syncFiles } from "./files.mjs";
+import { outputs, shareable, shareOutputs, syncFiles } from "./files.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureGuardHooks, git, remoteIsEmpty } from "./git.mjs";
 import { codexModels, readApproval, resolveModelAlias, resolveOpenRouterModel, withParent } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
 import { branchGuidance, checkBranchName, chooseBranchName, exampleBranches } from "./branch.mjs";
 import { cleanMessages, leakIn, leaksInternal, stripAttribution, writePrDescription } from "./describe.mjs";
-import { branchesFooter, slackSources, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, subtaskSummary, runOutcome, stripCommitLine } from "./prompt.mjs";
+import { TOOL_NEWS, TOOL_NEWS_LATEST, branchesFooter, slackSources, firstPrompt, followUpPrompt, latestReport, prSummary, prTitle, subtaskSummary, runOutcome, stripCommitLine } from "./prompt.mjs";
 import { PRIMER_FILES, primerCall, primerLink, publishDocument, readDocument } from "./primer.mjs";
 import { startRepoHelper } from "./repohelper.mjs";
 import { baseRef, branchChanges, carryOver, dirtyCheckouts, ensureRepo, findBranches, keepBranches, messagesSince, moveOffDefault, readManifest, signUnsigned, workspacePath, workspaceRepos } from "./workspace.mjs";
@@ -1379,6 +1379,26 @@ async function agentAsk(ctx, args) {
   return `Your question goes on the task right after your reply${ask.options.length ? ", with the options as buttons" : ""}, and nothing automatic runs on this task until ${cfg.selfName} answers. Finish your turn now: your reply should lead up to the question, not repeat it.`;
 }
 
+/**
+ * `pennyworth share <file>…`: attach workspace files to the agent's part now, for the user and the rest of
+ * the crew (Alfred and Ursula read them with task_files). They're internal to Pennyworth, like the files
+ * in `.pennyworth/out/` the runner attaches after each run (D-54); a changed file replaces its earlier version.
+ */
+async function agentShare(ctx, args) {
+  const paths = (Array.isArray(args.paths) ? args.paths : []).map(String).filter(Boolean);
+  if (!paths.length) throw new UserError("Name the files to share: `pennyworth share <file>...` (paths in your workspace).");
+  const { files, refused } = shareable(ctx.workspace, paths);
+  const res = files.length ? await shareOutputs(pc, ctx.issue, files, sharedOutputs(ctx.issue.id), log) : { attached: [], shared: sharedOutputs(ctx.issue.id) };
+  if (res.attached.length) state.set(`shared:${ctx.issue.id}`, JSON.stringify(res.shared));
+  log("files shared by the agent", { issue: ctx.issue.identifier, attached: res.attached.length, refused: refused.length });
+  const same = files.filter((f) => !res.attached.includes(f.name)).map((f) => f.name);
+  return [
+    res.attached.length ? `Attached to ${ctx.issue.identifier}: ${res.attached.join(", ")}. The user sees them on the task, and Alfred and Ursula read them with task_files; say which file holds what in your reply.` : "",
+    same.length ? `Already attached, unchanged: ${same.join(", ")}.` : "",
+    refused.length ? `Not shared: ${refused.map((r) => `${r.path} (${r.why})`).join("; ")}.` : "",
+  ].filter(Boolean).join("\n");
+}
+
 async function agentPass(ctx, args) {
   const to = String(args.to ?? "").trim();
   if (!to) throw new UserError("Name the agent: `pennyworth pass <name>`.");
@@ -1691,10 +1711,11 @@ async function startJob({ issue, instructions, event = false }) {
     // The conversation (all of it for a new session, what's new for a resumed one) and where the work stands.
     const { thread, stand, words } = await conversation(issue, workspace, { instructions, resumed, persona });
     let prompt = resumed
-      ? followUpPrompt({ user: cfg.selfName, instructions, event, workspace, repos, branches, files, primer, primerEnabled: cfg.primerEnabled && !cad, crew, observe, thread, stand, memory })
+      ? followUpPrompt({ user: cfg.selfName, instructions, event, news: TOOL_NEWS.filter((n) => n.version > Number(state.get(`tools_seen:${issue.id}`) || 0)), workspace, repos, branches, files, primer, primerEnabled: cfg.primerEnabled && !cad, crew, observe, thread, stand, memory })
       : firstPrompt({ user: cfg.selfName, task: full, event, followUps: automation("followUps"), workspace, repos, branches, shells: runShells, instructions, files, primer, primerEnabled: cfg.primerEnabled && !cad, persona, crew, observe, thread, stand, team: crewNames(await pc.agents().catch(() => engineers)), memory, restarted: Boolean(state.get(`restarted:${issue.id}`)) });
     if (runtime) prompt += `\n\n${runtime.instructions}\n\nThese CAD-specific workflow instructions replace the generic repository/commit and Primer guidance above. The current user request still defines what to design.\n`;
     if (!resumed) state.set(`restarted:${issue.id}`, "");
+    state.set(`tools_seen:${issue.id}`, String(TOOL_NEWS_LATEST));
     const tipsBefore = await branchTips(workspace);
     tools = { issue, workspace, words, instructions, event, kind: engine.kind, who: persona?.name, memoryScope: memoryOf, signal: controller.signal, ...(cad ? { allowedTools: CAD_TOOLS } : {}) };
     const helper = repoHelper.register(tools);
@@ -1744,6 +1765,9 @@ async function startJob({ issue, instructions, event = false }) {
       // The agent's reply, in its own words. None: a comment that needed no answer ("thanks").
       const reply = [outcome.silent ? "" : stripCommitLine(result.lastMessage), primerNote, sharedNote, ...(footer.length ? ["---", ...footer] : [])].filter(Boolean).join("\n\n");
       await pc.setStatus(issue.id, "in_review", reply.trim() ? `${REPLY_MARKER}${reply}` : undefined);
+    } else if (event && state.get(`xreview-part:${issue.id}`)) {
+      // A review round that didn't finish (D-72): the handover line to the next model says it, without the log.
+      await pc.setStatus(issue.id, "in_review");
     } else {
       // Failures also go to review (Paperclip refuses "blocked" without a blocker); the runner says what failed.
       const report = stripCommitLine(result.lastMessage);
@@ -2252,6 +2276,7 @@ const repoHelper = startRepoHelper(async ({ issue, workspace }, raw) => {
   pass: agentPass,
   ask: agentAsk,
   later: agentLater,
+  share: agentShare,
   aws: agentAws,
   reset: agentReset,
   cleanup: agentCleanup,

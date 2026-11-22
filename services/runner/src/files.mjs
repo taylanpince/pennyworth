@@ -2,15 +2,15 @@
 // can read them like any other file. A sub-task also gets its parent's: the Assistant splits a task
 // into Engineer sub-tasks (D-24), and the files that came with the request belong to all of them.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { extname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { basename, extname, join, resolve, sep } from "node:path";
 
 export const FILES_DIR = join(".pennyworth", "files");
 /** Files an Engineer makes for the user and the other agents (D-54): attached to its part after each run. */
 export const OUT_DIR = join(".pennyworth", "out");
 const MAX_SHARED = 10 * 1024 * 1024; // Paperclip's limit for one file
 const MAX_SHARED_FILES = 20;
-const TYPES = { md: "text/markdown", html: "text/html", txt: "text/plain", csv: "text/csv", json: "application/json", yaml: "text/plain", yml: "text/plain", log: "text/plain", pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+const TYPES = { md: "text/markdown", html: "text/html", txt: "text/plain", csv: "text/csv", tsv: "text/tab-separated-values", json: "application/json", yaml: "text/plain", yml: "text/plain", log: "text/plain", pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
 
 /** A file name that is safe on disk: no paths, control characters or leading dots. */
 export function diskName(name) {
@@ -89,6 +89,35 @@ export function outputs(workspace, primer) {
  * version. `shared` is the record of what's attached ({ name: { id, hash } }); resolves with the new one
  * and the names attached now.
  */
+/**
+ * Files the agent names with `pennyworth share`, checked: inside the workspace (no way out through `..` or a
+ * symlink), regular files up to Paperclip's limit, never a dotfile or something that looks like a key or
+ * credentials. Resolves with { files: [{ name, path, type }], refused: [{ path, why }] }.
+ */
+export function shareable(workspace, paths) {
+  const root = realpathSync(workspace);
+  const files = [];
+  const refused = [];
+  for (const p of paths.slice(0, MAX_SHARED_FILES)) {
+    const raw = String(p ?? "").trim();
+    let real;
+    try {
+      real = realpathSync(resolve(workspace, raw));
+    } catch {
+      refused.push({ path: raw, why: "no such file in the workspace" });
+      continue;
+    }
+    const name = basename(real);
+    if (real !== root && !real.startsWith(`${root}${sep}`)) refused.push({ path: raw, why: "outside the workspace" });
+    else if (!statSync(real).isFile()) refused.push({ path: raw, why: "not a file (share the files in a folder one by one)" });
+    else if (name.startsWith(".") || SECRETISH.test(name)) refused.push({ path: raw, why: "looks like a hidden, key or credentials file" });
+    else if (!statSync(real).size || statSync(real).size > MAX_SHARED) refused.push({ path: raw, why: "empty, or over 10 MB" });
+    else files.push({ name: diskName(name), path: real, type: TYPES[extname(name).slice(1).toLowerCase()] ?? "application/octet-stream" });
+  }
+  return { files, refused };
+}
+const SECRETISH = /(^|[._-])(env|secrets?|credentials?|token|id_(rsa|ed25519|ecdsa))([._-]|$)|\.(pem|key|p12|pfx|keystore|kdbx)$/i;
+
 export async function shareOutputs(pc, issue, files, shared = {}, log = () => {}) {
   const next = { ...shared };
   const attached = [];
