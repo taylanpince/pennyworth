@@ -3,7 +3,7 @@
 // into Engineer sub-tasks (D-24), and the files that came with the request belong to all of them.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { basename, extname, join, resolve, sep } from "node:path";
+import { basename, extname, join, relative, resolve, sep } from "node:path";
 
 export const FILES_DIR = join(".pennyworth", "files");
 /** Files an Engineer makes for the user and the other agents (D-54): attached to its part after each run. */
@@ -137,4 +137,41 @@ export async function shareOutputs(pc, issue, files, shared = {}, log = () => {}
     }
   }
   return { shared: next, attached };
+}
+
+/**
+ * Files a reply names by path that are deliverables in the workspace: `impact/summary.md`, `./report.csv`
+ * or the workspace's own absolute path, existing, shareable, and not inside one of its repositories
+ * (`api/waas/adoption.go:26` is a pointer into code, not something to download). Resolves with
+ * [{ mention, name, path, type }] in the order they appear, at most MAX_SHARED_FILES.
+ */
+export function mentionedFiles(text, workspace) {
+  const root = realpathSync(workspace);
+  const repos = existsSync(root) ? readdirSync(root).filter((d) => existsSync(join(root, d, ".git"))).map((d) => join(root, d)) : [];
+  const seen = new Set();
+  const out = [];
+  for (const m of String(text ?? "").matchAll(/`([^`\s]+\.[A-Za-z0-9]{1,8})`|\]\(([^)\s]+\.[A-Za-z0-9]{1,8})\)/g)) {
+    const mention = m[1] ?? m[2];
+    if (seen.has(mention) || /^[a-z]+:\/\//i.test(mention)) continue;
+    seen.add(mention);
+    const rel = mention.startsWith(`${root}/`) ? mention.slice(root.length + 1) : mention;
+    const { files } = shareable(root, [rel]);
+    const f = files[0];
+    if (!f || repos.some((r) => f.path === r || f.path.startsWith(`${r}${sep}`))) continue;
+    out.push({ mention, ...f });
+    if (out.length >= MAX_SHARED_FILES) break;
+  }
+  // Two files with one name (summary.md in two folders) are told apart by their folder.
+  const names = new Map();
+  for (const f of out) names.set(f.name, (names.get(f.name) ?? 0) + 1);
+  return out.map((f) => (names.get(f.name) > 1 ? { ...f, name: diskName(relative(root, f.path).replace(/[\\/]/g, "-")) } : f));
+}
+
+/** The reply with each mentioned file turned into a link to it (`links`: mention → URL). */
+export function linkFiles(text, links) {
+  return String(text ?? "").replace(/`([^`\s]+)`(?!\])/g, (all, mention, at, whole) => {
+    const url = links.get(mention);
+    // Already inside a link's text ([`x`](…)), or not a file we attached: as it was.
+    return url && whole[at - 1] !== "[" ? `[\`${mention}\`](${url})` : all;
+  });
 }

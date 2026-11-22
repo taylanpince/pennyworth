@@ -13,7 +13,7 @@ import { observes, runAgent } from "./engines.mjs";
 import { CAD_TOOLS, cadRuntime, isCadRole } from "./cad.mjs";
 import { gcpSession } from "./gcp.mjs";
 import { awsSession, checkAwsCommand, runAwsWrite, showCommand } from "./aws.mjs";
-import { outputs, shareable, shareOutputs, syncFiles } from "./files.mjs";
+import { linkFiles, mentionedFiles, outputs, shareable, shareOutputs, syncFiles } from "./files.mjs";
 import { changesSummary, defaultBranch, detectShells, ensureClone, ensureGuardHooks, git, remoteIsEmpty } from "./git.mjs";
 import { codexModels, readApproval, resolveModelAlias, resolveOpenRouterModel, withParent } from "./intake.mjs";
 import { Paperclip } from "./paperclip.mjs";
@@ -1390,6 +1390,8 @@ async function agentShare(ctx, args) {
   const { files, refused } = shareable(ctx.workspace, paths);
   const res = files.length ? await shareOutputs(pc, ctx.issue, files, sharedOutputs(ctx.issue.id), log) : { attached: [], shared: sharedOutputs(ctx.issue.id) };
   if (res.attached.length) state.set(`shared:${ctx.issue.id}`, JSON.stringify(res.shared));
+  // Listed under the agent's reply when the run ends, as downloads.
+  ctx.sharedNow = [...new Set([...(ctx.sharedNow ?? []), ...files.map((f) => f.name).filter((n) => res.shared[n])])];
   log("files shared by the agent", { issue: ctx.issue.identifier, attached: res.attached.length, refused: refused.length });
   const same = files.filter((f) => !res.attached.includes(f.name)).map((f) => f.name);
   return [
@@ -1755,7 +1757,7 @@ async function startJob({ issue, instructions, event = false }) {
     const rows = await branchRows(issue, workspace);
     const stillDirty = (await dirtyCheckouts(after)).length > 0;
     const primerNote = outcome.finished && !cad ? await publishToPrimer(issue, full, workspace) : "";
-    const sharedNote = outcome.finished ? await shareWork(issue, full, workspace) : "";
+    const shared = outcome.finished ? await shareWork(issue, full, workspace, { reply: result.lastMessage, sharedNow: tools.sharedNow ?? [] }) : { line: "", links: new Map() };
     const footer = [
       committedNow || tidy.notes.length ? branchesFooter(rows, { multiRepo: new Set(rows.map((r) => r.repo)).size > 1 }) : "",
       ...tidy.notes.map((n) => `_${n}_`),
@@ -1763,7 +1765,7 @@ async function startJob({ issue, instructions, event = false }) {
     ].filter(Boolean);
     if (outcome.finished) {
       // The agent's reply, in its own words. None: a comment that needed no answer ("thanks").
-      const reply = [outcome.silent ? "" : stripCommitLine(result.lastMessage), primerNote, sharedNote, ...(footer.length ? ["---", ...footer] : [])].filter(Boolean).join("\n\n");
+      const reply = [outcome.silent ? "" : linkFiles(stripCommitLine(result.lastMessage), shared.links), primerNote, shared.line, ...(footer.length ? ["---", ...footer] : [])].filter(Boolean).join("\n\n");
       await pc.setStatus(issue.id, "in_review", reply.trim() ? `${REPLY_MARKER}${reply}` : undefined);
     } else if (event && state.get(`xreview-part:${issue.id}`)) {
       // A review round that didn't finish (D-72): the handover line to the next model says it, without the log.
@@ -1835,12 +1837,23 @@ const sharedOutputs = (issueId) => (state.get(`shared:${issueId}`) ? JSON.parse(
  * to its task, so the user, the board and the other agents can read it (D-54). Resolves with a line for
  * the reply ("" when nothing changed).
  */
-async function shareWork(issue, full, workspace) {
-  const res = await shareOutputs(pc, issue, outputs(workspace, readDocument(workspace, full.title)), sharedOutputs(issue.id), log);
-  if (!res.attached.length) return "";
-  state.set(`shared:${issue.id}`, JSON.stringify(res.shared));
-  log("outputs attached", { issue: issue.identifier, files: res.attached.length });
-  return `_Attached to the task: ${res.attached.map((n) => `\`${n}\``).join(", ")}._`;
+async function shareWork(issue, full, workspace, { reply = "", sharedNow = [] } = {}) {
+  // Files the reply names by path become downloads too: the user gets the file, not a path on this machine.
+  let mentioned = [];
+  try {
+    mentioned = mentionedFiles(reply, workspace);
+  } catch (err) {
+    log("couldn't read the files a reply names", { issue: issue.identifier, err: String(err.message ?? err).slice(0, 200) });
+  }
+  const own = outputs(workspace, readDocument(workspace, full.title));
+  const res = await shareOutputs(pc, issue, [...own, ...mentioned.filter((m) => !own.some((o) => o.name === m.name))], sharedOutputs(issue.id), log);
+  if (res.attached.length) {
+    state.set(`shared:${issue.id}`, JSON.stringify(res.shared));
+    log("outputs attached", { issue: issue.identifier, files: res.attached.length, mentioned: mentioned.length });
+  }
+  const names = [...new Set([...res.attached, ...sharedNow, ...mentioned.map((m) => m.name)])].filter((n) => res.shared[n]);
+  const links = new Map(mentioned.filter((m) => res.shared[m.name]).map((m) => [m.mention, `/api/issues/${issue.id}/files/${res.shared[m.name].id}`]));
+  return { line: names.length ? `_Attached to the task: ${names.map((n) => `\`${n}\``).join(", ")}._` : "", links };
 }
 
 const primerRecord = (issueId) => (state.get(`primer:${issueId}`) ? JSON.parse(state.get(`primer:${issueId}`)) : undefined);

@@ -105,7 +105,13 @@ if (step === "commit" || step === "clone-commit") {
 } else if (step === "hold") {
   await new Promise((r) => setTimeout(r, 60_000));
 }
+let said = "";
 for (const line of tools) {
+  // "say <text>": the reply, instead of the default one.
+  if (line.startsWith("say ")) {
+    said = line.slice(4);
+    continue;
+  }
   const [cmd, ...cmdArgs] = line.split(" ");
   const res = spawnSync(cmd, cmdArgs, { cwd: process.cwd(), encoding: "utf8" });
   log("tool", { line, code: res.status, out: (res.stdout ?? "") + (res.stderr ?? "") });
@@ -115,7 +121,7 @@ const during = [];
 while (lines.length) during.push(take());
 if (during.length) log("claude-mid-run", during);
 const verdict = reviewing && existsSync(verdictFile) ? readFileSync(verdictFile, "utf8").trim() : "clean";
-const reply = reviewing ? `third.txt:1 has no newline at the end, and nothing tests it.\n\nVERDICT: ${verdict}` : step === "silent" ? "NO_REPLY" : "Checked every repository; nothing needed changing.";
+const reply = said ? said : reviewing ? `third.txt:1 has no newline at the end, and nothing tests it.\n\nVERDICT: ${verdict}` : step === "silent" ? "NO_REPLY" : "Checked every repository; nothing needed changing.";
 result({ result: during.length ? `${reply}\n\nAlso, as you asked while I worked: ${during.join(" / ")}` : reply });
 // Anything after this turn ended gets a turn of its own, until the runner closes the input.
 for (;;) {

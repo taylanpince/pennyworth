@@ -967,6 +967,14 @@ watches:
     assert.match(claudeRuns().at(-1).prompt, /## New since your session started\n\n- `pennyworth share <file>\.\.\.` attaches files/);
     await turn("Thanks.");
     assert.doesNotMatch(claudeRuns().at(-1).prompt, /## New since your session started/, "once");
+
+    // A file the reply names by path is attached and becomes a download in the reply, listed under it.
+    const n = paperclip.attached.length;
+    step("none\ncp app/README.md notes.md\nsay The notes are in `notes.md`; the code is `app/README.md`.");
+    const named = await turn("Where are the notes?");
+    assert.deepEqual(paperclip.attached.slice(n).map((f) => f.name), ["notes.md"], "the deliverable, not the repository file");
+    assert.match(named.comment, /The notes are in \[`notes\.md`\]\(\/api\/issues\/part\/files\/file-\d+\); the code is `app\/README\.md`\./);
+    assert.match(named.comment, /_Attached to the task: `notes\.md`\._/);
   });
 
   it("never errors or asks for a repository along the way", () => {

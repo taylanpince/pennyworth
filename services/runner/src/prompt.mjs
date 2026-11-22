@@ -41,6 +41,10 @@ export const TOOL_NEWS = [
     text: (user) => `- \`pennyworth share <file>...\` attaches files from your workspace to this task now, for ${user} and the rest of the crew (Alfred and Ursula read attached files; they can't read your workspace, and a long table pasted into a reply gets cut). Files in \`.pennyworth/out/\` are attached after every run too.
 - \`pennyworth ask "<question>" --option <text>... --recommend <n>\` puts a decision to ${user} as a card with buttons; nothing automatic starts on the task until they answer.`,
   },
+  {
+    version: 2,
+    text: (user) => `- Files you made for ${user}: name each by its path in your workspace, in backticks (\`impact/summary.md\`), in your reply. The runner attaches it to the task and turns the path into a download, so don't paste its contents.`,
+  },
 ];
 export const TOOL_NEWS_LATEST = TOOL_NEWS.at(-1).version;
 
@@ -55,7 +59,7 @@ const WORK = (user) => `## How to work
 
 const REPLY = (user) => `## Your reply
 
-Your final message is your reply to ${user} on the task, in plain language and as long as it needs to be, no longer. Say what you did or found and what's left, with the evidence that matters (file:line, commands and their results, short log excerpts) and the branches and PRs involved. No set sections or headings unless they help. If what ${user} wrote needs no answer ("thanks", "👍"), your final message is exactly ${NO_REPLY}.`;
+Your final message is your reply to ${user} on the task, in plain language and as long as it needs to be, no longer. Say what you did or found and what's left, with the evidence that matters (file:line, commands and their results, short log excerpts) and the branches and PRs involved. Files you made for ${user} (a report, a table, an export, a script): name each by its path in your workspace, in backticks (\`impact/summary.md\`); the runner attaches it to the task and turns the path into a download, so don't paste its contents. No set sections or headings unless they help. If what ${user} wrote needs no answer ("thanks", "👍"), your final message is exactly ${NO_REPLY}.`;
 
 /** The workspace part of a prompt: each repository with its branches, and how to use git (D-41). */
 export function workspaceSection({ workspace, repos, branches = [], git: withGit = true }) {
