@@ -30,7 +30,9 @@ export function reviewVerdict(reply) {
   return m ? m[1].toLowerCase() : undefined;
 }
 
-// What a model says when it won't do the review, and what its API says when it stops one.
+// What a model says when it won't do the review, and what its API says when it stops one. Codex's, seen on
+// 2026-11-22 reviewing a wallet-recovery tool: {"type":"error","message":"This content was flagged for possible
+// cybersecurity risk. …"} and then turn.failed.
 const DECLINE = /^\s*(I('m| am) (sorry|unable|not able)|I can(no|')t (help|assist|review|do|comply|provide)|I won't|Sorry, (but )?I can)/i;
 const STOPPED = /usage polic|content (policy|filter|management)|cyber|safety (system|policy)|flagged|invalid_prompt|refus/i;
 
@@ -38,6 +40,9 @@ const STOPPED = /usage polic|content (policy|filter|management)|cyber|safety (sy
  * Whether the reviewer declined: a run that ended without a reply and a policy or safety error in its
  * log, or a short reply that opens by declining and gives no verdict. Either way the next model tries.
  */
+/** Whether a run that ended without a reply was stopped by the model's own policy (a refusal, not a failure). */
+export const refusedByPolicy = ({ finished, logTail = "" }) => !finished && STOPPED.test(logTail);
+
 export function declined({ finished, reply, logTail = "" }) {
   const text = String(reply ?? "").trim();
   if (!finished) return STOPPED.test(logTail);

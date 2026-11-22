@@ -28,7 +28,7 @@ import { SignInRunner } from "./signins.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import * as merges from "./merges.mjs";
-import { closingComment, declined, findingsComment, fixInstructions, reviewChain, reviewInstructions, reviewVerdict } from "./crossreview.mjs";
+import { closingComment, declined, refusedByPolicy, findingsComment, fixInstructions, reviewChain, reviewInstructions, reviewVerdict } from "./crossreview.mjs";
 import { DEFAULT_BOTS, HANDS_OFF, WATCH_QUERY, askComment, eventComment, eventInstructions, followUpComment, followUpInstructions, newWatch, parseAsk, parseNote, parsePr, parseWhen, primerComments, primerEventComment, primerInstructions, roundsLeft, slackEventComment, slackInstructions, slackReplies, slackThreads, slackTs, waitingOnUser, watchStep } from "./watches.mjs";
 import { State } from "./state.mjs";
 import { REPLY_MARKER, fence, prSnapshot, stateSection, threadEntries, threadSection, transcript, wordsAround } from "./thread.mjs";
@@ -758,7 +758,7 @@ async function afterCrossReview(part, ended) {
       return void (await pc.comment(authorId, closingComment({ outcome: "failed", reviewer: reviewerName, tried, author: authorName })));
     }
     saveReview(authorId, { ...review, step, tried });
-    await pc.comment(part.id, `${model} ${ended.finished ? "declined the review" : "didn't finish the review"}; ${engineLabel(next)} takes it.`);
+    await pc.comment(part.id, `${model} ${ended.finished ? "declined the review" : refusedByPolicy(ended) ? "refused the review (its provider flagged the content)" : "didn't finish the review"}; ${engineLabel(next)} takes it.`);
     await pc.setPicker(part.id, pickerFor(next, engineers, part.assigneeAgentId));
     return dispatch({ issue: { id: part.id, identifier: part.identifier, assigneeAgentId: part.assigneeAgentId }, instructions: ended.instructions, event: true });
   }

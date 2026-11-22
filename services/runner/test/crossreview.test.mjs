@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { closingComment, declined, findingsComment, fixInstructions, reviewChain, reviewInstructions, reviewVerdict } from "../src/crossreview.mjs";
+import { closingComment, declined, refusedByPolicy, findingsComment, fixInstructions, reviewChain, reviewInstructions, reviewVerdict } from "../src/crossreview.mjs";
 
 describe("cross-model review", () => {
   it("never reviews a model with its own family by default", () => {
@@ -31,6 +31,11 @@ describe("cross-model review", () => {
     assert.ok(!declined({ finished: true, reply: "The retry loop never stops.\n\nVERDICT: blocking" }));
     assert.ok(declined({ finished: false, reply: "", logTail: 'error: {"code":"invalid_prompt","message":"flagged as potentially violating our usage policy"}' }));
     assert.ok(!declined({ finished: false, reply: "", logTail: "ECONNRESET" }), "a plain failure isn't a refusal (it still moves on, as a failure)");
+    // Codex's own words on 2026-11-22, reviewing a wallet-recovery tool.
+    const codex = '{"type":"error","message":"This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request."}\n{"type":"turn.failed","error":{"message":"This content was flagged for possible cybersecurity risk."}}';
+    assert.ok(declined({ finished: false, reply: "", logTail: codex }));
+    assert.ok(refusedByPolicy({ finished: false, logTail: codex }));
+    assert.ok(!refusedByPolicy({ finished: false, logTail: "ECONNRESET" }));
   });
 
   it("writes the runner's own instructions, never as the user", () => {
