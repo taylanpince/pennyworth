@@ -362,7 +362,7 @@ routines:
       answered or unpinned, then close this task with a count summary.
     concurrency: skip_if_active
     schedules:
-      - { cron: "*/30 8-20 * * 1-5", timezone: Europe/Madrid, label: "work hours" }
+      - { cron: "*/30 * * * *", timezone: Europe/Madrid, label: "every 30 minutes" }
 
   telegram-scan:
     title: Telegram scan
