@@ -23,10 +23,13 @@ export const ROUTES: { method: Method; path: RegExp }[] = [
   { method: "POST", path: /^\/rest\/api\/3\/issue$/ },
   { method: "POST", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/comment$`) },
   { method: "POST", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/transitions$`) },
+  // D-69: changing an existing issue in an allowed project: its parent, its assignee, its status.
+  { method: "PUT", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}$`) },
+  { method: "PUT", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/assignee$`) },
   { method: "POST", path: /^\/rest\/api\/3\/search\/jql$/ },
 ];
 
-type Method = "GET" | "POST";
+type Method = "GET" | "POST" | "PUT";
 
 /** Body fields each request may carry: a new issue only its fixed set of fields, a comment only its body, a search its JQL, a transition only its id. */
 const BODY_FIELDS: { path: RegExp; method: Method; fields: string[] }[] = [
@@ -34,6 +37,8 @@ const BODY_FIELDS: { path: RegExp; method: Method; fields: string[] }[] = [
   { method: "POST", path: /\/comment$/, fields: ["body"] },
   { method: "POST", path: /\/transitions$/, fields: ["transition"] },
   { method: "POST", path: /\/search\/jql$/, fields: ["jql", "maxResults", "fields"] },
+  { method: "PUT", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/assignee$`), fields: ["accountId"] },
+  { method: "PUT", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}$`), fields: ["fields"] },
 ];
 const ISSUE_FIELDS = ["project", "issuetype", "summary", "description", "labels", "parent", "assignee"];
 
@@ -51,6 +56,11 @@ export function guard(method: string, path: string, body?: unknown): void {
   if (method === "POST" && /^\/rest\/api\/3\/issue$/.test(path)) {
     const fields = Object.keys((body as { fields?: object } | undefined)?.fields ?? {});
     if (fields.some((f) => !ISSUE_FIELDS.includes(f))) throw new JiraRefused(`refused an issue with fields that aren't allowed: ${fields.join(", ")}`);
+  }
+  // Changing an existing issue only sets its parent here; the assignee goes through her own endpoint.
+  if (method === "PUT" && new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}$`).test(path)) {
+    const fields = Object.keys((body as { fields?: object } | undefined)?.fields ?? {});
+    if (fields.some((f) => f !== "parent")) throw new JiraRefused(`refused changing fields that aren't allowed: ${fields.join(", ")}`);
   }
   // A transition only names the transition id the code picked from the issue's own list.
   if (method === "POST" && /\/transitions$/.test(path) && body !== undefined) {
@@ -229,6 +239,57 @@ export class Jira {
 
   private writable(project: string, what: string): void {
     if (!this.writeProjects.has(project.toUpperCase())) throw new JiraRefused(`${what} is limited to ${[...this.writeProjects].join(", ") || "no projects"}; ${project} is read-only`);
+  }
+
+  /**
+   * Changes an existing issue (D-69): its parent, its assignee, its status (through a transition).
+   * Everything that can be refused (project, assignee name, the transition) is checked before the
+   * first write, and the result reports what changed and the issue's state after.
+   */
+  async updateIssue(ref: { key?: string; url?: string }, input: { parent?: string; assignee?: string; status?: string }): Promise<unknown> {
+    const key = parseRef(ref);
+    const before = await this.issue(key);
+    this.writable(before.fields.project.key, "changing issues");
+    const done: string[] = [];
+    // Preflight: resolve everything before anything is written.
+    const parent = input.parent ? parseRef({ key: input.parent }) : undefined;
+    const accountId = input.assignee ? await this.resolveAssignee(input.assignee) : undefined;
+    let transition: { id: string; to: string } | undefined;
+    if (input.status) {
+      const ts = await this.transitions(key);
+      transition = ts.find((t) => Jira.nameKey(t.to) === Jira.nameKey(input.status!)) ?? ts.find((t) => Jira.nameKey(t.name) === Jira.nameKey(input.status!));
+      if (!transition) throw new JiraRefused(`no transition to "${input.status}"; its transitions are: ${ts.map((t) => t.to).join(", ") || "(none)"}`);
+    }
+    if (parent) {
+      if (before.fields.parent?.key === parent) done.push(`parent already ${parent}`);
+      else {
+        await this.request("PUT", `/rest/api/3/issue/${encodeURIComponent(key)}`, { body: { fields: { parent: { key: parent } } } });
+        done.push(`parent ${parent}`);
+      }
+    }
+    if (accountId) {
+      if (input.assignee && before.fields.assignee?.displayName?.toLowerCase() === input.assignee.trim().toLowerCase()) done.push(`already assigned to ${before.fields.assignee.displayName}`);
+      else {
+        await this.request("PUT", `/rest/api/3/issue/${encodeURIComponent(key)}/assignee`, { body: { accountId } });
+        done.push(`assigned ${input.assignee!.trim()}`);
+      }
+    }
+    if (transition) {
+      if (Jira.nameKey(before.fields.status?.name ?? "") === Jira.nameKey(transition.to)) done.push(`already ${transition.to}`);
+      else {
+        await this.request("POST", `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`, { body: { transition: { id: transition.id } } });
+        done.push(`status ${transition.to}`);
+      }
+    }
+    const after = await this.issue(key);
+    return {
+      key: after.key,
+      url: this.browse(after.key),
+      parent: after.fields.parent?.key ?? null,
+      assignee: after.fields.assignee?.displayName ?? null,
+      status: after.fields.status?.name,
+      done: done.length ? done : ["nothing to change"],
+    };
   }
 
   async comment(ref: { key?: string; url?: string }, body: string): Promise<{ url: string }> {

@@ -324,13 +324,16 @@ bad_jira="$(echo "$jira_routes" | grep -v '{ method: "GET", path: ' | grep -vxF 
   -e '  { method: "POST", path: /^\/rest\/api\/3\/issue$/ },' \
   -e '  { method: "POST", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/comment$`) },' \
   -e '  { method: "POST", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/transitions$`) },' \
-  -e '  { method: "POST", path: /^\/rest\/api\/3\/search\/jql$/ },' || true)"
+  -e '  { method: "POST", path: /^\/rest\/api\/3\/search\/jql$/ },' \
+  -e '  { method: "PUT", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}$`) },' \
+  -e '  { method: "PUT", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/assignee$`) },' || true)"
 jira_fields="$(sed -n '/^const BODY_FIELDS/,/^\];/p' services/jira-mcp/src/jira.ts)"
 [ -n "$jira_routes" ] && [ -z "$bad_jira" ] && grep -q 'guard(method, path, opts.body)' services/jira-mcp/src/jira.ts && [ "$(grep -c 'fetchImpl(' services/jira-mcp/src/jira.ts)" = 1 ] \
-  && [ "$(echo "$jira_fields" | grep -c 'fields: \[')" = 4 ] && grep -q 'this.writable(issue.fields.project.key, "commenting")' services/jira-mcp/src/jira.ts \
+  && [ "$(echo "$jira_fields" | grep -c 'fields: \[')" = 6 ] && grep -q 'this.writable(issue.fields.project.key, "commenting")' services/jira-mcp/src/jira.ts \
   && grep -q 'this.writable(input.project, "opening issues")' services/jira-mcp/src/jira.ts \
   && grep -qF '{ body: { transition: { id: t.id } } }' services/jira-mcp/src/jira.ts \
-  && pass "jira-mcp: every request goes through the guard; the only writes are creating an issue (parent, assignee, one transition to its status) and commenting, in the allowed projects, checked in code (services/jira-mcp/src/jira.ts)" || fail "jira-mcp: unexpected Jira requests allowed: $bad_jira"
+  && grep -q 'this.writable(before.fields.project.key, "changing issues")' services/jira-mcp/src/jira.ts \
+  && pass "jira-mcp: every request goes through the guard; the only writes are creating an issue (parent, assignee, one transition to its status), changing one (parent, assignee, transition) and commenting, in the allowed projects, checked in code (services/jira-mcp/src/jira.ts)" || fail "jira-mcp: unexpected Jira requests allowed: $bad_jira"
 # The runner merges the PRs a task lists (D-46): its only GitHub writes are merge and update-branch (REST, checked
 # against merges.WRITES) and marking a draft ready (one fixed GraphQL mutation). Pushes and draft PRs stay on the exact word.
 merge_writes="$(sed -n '/^export const WRITES/,/^\];/p' services/runner/src/merges.mjs | grep -oE 'method: "[A-Z]+", path: /[^ ]+/' | tr '\n' ' ')"

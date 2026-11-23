@@ -42,12 +42,16 @@ describe("guard", () => {
 
   it("refuses everything else", () => {
     expect(() => guard("DELETE", "/rest/api/3/issue/PROJ-1")).toThrow(JiraRefused);
-    expect(() => guard("PUT", "/rest/api/3/issue/PROJ-1")).toThrow(JiraRefused);
+    expect(() => guard("PUT", "/rest/api/3/issue/PROJ-1")).not.toThrow();
+    expect(() => guard("PUT", "/rest/api/3/issue/PROJ-1/assignee")).not.toThrow();
     expect(() => guard("GET", "/rest/api/3/users")).toThrow(JiraRefused);
     expect(() => guard("GET", "/rest/api/3/issue/PROJ-123/worklog")).toThrow(JiraRefused);
-    expect(() => guard("PUT", "/rest/api/3/issue/PROJ-1/assignee")).toThrow(JiraRefused);
     expect(() => guard("POST", "/rest/api/3/issue/PROJ-1/transitions", { transition: { id: "31" }, fields: {} })).toThrow(JiraRefused);
     expect(() => guard("POST", "/rest/api/3/issue/PROJ-1/transitions", { update: {} })).toThrow(JiraRefused);
+    expect(() => guard("PUT", "/rest/api/3/issue/PROJ-1/assignee", { accountId: "a", extra: true })).toThrow(JiraRefused);
+    expect(() => guard("PUT", "/rest/api/3/issue/PROJ-1", { fields: { parent: { key: "P-1" } } })).not.toThrow();
+    expect(() => guard("PUT", "/rest/api/3/issue/PROJ-1", { fields: { summary: "x" } })).toThrow(JiraRefused);
+    expect(() => guard("DELETE", "/rest/api/3/issue/PROJ-1")).toThrow(JiraRefused);
   });
 
   it("limits bodies to their fixed fields", () => {
@@ -165,6 +169,35 @@ describe("Jira", () => {
     await expect(jira.createIssue({ project: "PROJ", summary: "S", description: "", assignee: "Ada Lovelace" })).rejects.toThrow(/several users/);
     await expect(jira.createIssue({ project: "PROJ", summary: "S", description: "", assignee: "Nobody" })).rejects.toThrow(/no user "Nobody"/);
     expect(calls.filter((c) => c.method === "POST" && c.url.pathname === "/rest/api/3/issue")).toHaveLength(0);
+  });
+
+  it("changes an existing issue: parent, assignee and status, prechecked", async () => {
+    const issue = { key: "PROJ-1077", fields: { project: { key: "PROJ" }, issuetype: { name: "Task" }, status: { name: "To Do" }, summary: "S", description: null, assignee: null, reporter: null, created: "c", updated: "u", priority: null, labels: [], comment: { total: 0, comments: [] } } };
+    const { impl, calls } = fake({
+      "GET /rest/api/3/issue/PROJ-1077": issue,
+      "GET /rest/api/3/user/search": [{ accountId: "acc-1", displayName: "Nicholas Gioachini", active: true }],
+      "GET /rest/api/3/issue/PROJ-1077/transitions": { transitions: [{ id: "31", name: "Done", to: { name: "Done" } }] },
+      "PUT /rest/api/3/issue/PROJ-1077": {},
+      "PUT /rest/api/3/issue/PROJ-1077/assignee": {},
+      "POST /rest/api/3/issue/PROJ-1077/transitions": {},
+    });
+    const jira = new Jira(authFile({}), new Set(["PROJ"]), impl);
+    const out = (await jira.updateIssue({ key: "PROJ-1077" }, { parent: "PROJ-966", assignee: "Nicholas Gioachini", status: "Done" })) as Record<string, unknown>;
+    expect(out).toMatchObject({ key: "PROJ-1077", done: ["parent PROJ-966", "assigned Nicholas Gioachini", "status Done"] });
+    const paths = calls.filter((c) => c.method !== "GET").map((c) => `${c.method} ${c.url.pathname}`);
+    expect(paths).toEqual(["PUT /rest/api/3/issue/PROJ-1077", "PUT /rest/api/3/issue/PROJ-1077/assignee", "POST /rest/api/3/issue/PROJ-1077/transitions"]);
+  });
+
+  it("refuses changing an issue outside the allowed projects, or with a status the workflow doesn't offer", async () => {
+    const { impl, calls } = fake({
+      "GET /rest/api/3/issue/OTHER-1": { key: "OTHER-1", fields: { project: { key: "OTHER" }, comment: { total: 0, comments: [] } } },
+      "GET /rest/api/3/issue/PROJ-1": { key: "PROJ-1", fields: { project: { key: "PROJ" }, status: { name: "To Do" }, assignee: null, comment: { total: 0, comments: [] } } },
+      "GET /rest/api/3/issue/PROJ-1/transitions": { transitions: [{ id: "11", name: "In Progress", to: { name: "In Progress" } }] },
+    });
+    const jira = new Jira(authFile({}), new Set(["PROJ"]), impl);
+    await expect(jira.updateIssue({ key: "OTHER-1" }, { status: "Done" })).rejects.toThrow(JiraRefused);
+    await expect(jira.updateIssue({ key: "PROJ-1" }, { status: "Done" })).rejects.toThrow(/no transition to "Done"/);
+    expect(calls.filter((c) => c.method !== "GET")).toHaveLength(0);
   });
 
   it("assigns 'me' as the signed-in account", async () => {

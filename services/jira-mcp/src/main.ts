@@ -92,6 +92,24 @@ function buildServer(): McpServer {
     }),
   );
   server.registerTool(
+    "jira_issue_update",
+    {
+      description: `Change an existing Jira issue, as the user: set its parent, assign it, or move it to a status (e.g. Done, through the project's own workflow). Only when the user asked in their own comment or task. Only projects in: ${projects}. The summary, description and type can't be changed from here.`,
+      inputSchema: {
+        ...ref,
+        parent: z.string().max(100).optional().describe("Parent issue key or URL to set, e.g. PROJ-966"),
+        assignee: z.string().max(200).optional().describe("Who to assign it to: their full name, 'me', or an Atlassian accountId"),
+        status: z.string().max(100).optional().describe("Status to move it to, e.g. Done; only the project's own transitions"),
+      },
+      annotations: write,
+    },
+    run("jira_issue_update", async (a: { key?: string; url?: string; parent?: string; assignee?: string; status?: string }) => {
+      const out = await jira.updateIssue(a, { parent: a.parent, assignee: a.assignee, status: a.status });
+      log.info({ key: a.key, assignee: a.assignee ? 1 : 0, status: a.status, parent: a.parent ? 1 : 0 }, "Jira issue changed");
+      return out;
+    }),
+  );
+  server.registerTool(
     "jira_issue_comment",
     {
       description: `Comment on a Jira issue, as the user. Only when the user asked in their own comment or task. Only projects in: ${projects}. Markdown is not supported; plain text.`,
