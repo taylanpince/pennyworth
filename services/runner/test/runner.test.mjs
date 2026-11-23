@@ -491,6 +491,27 @@ describe("executor picker (Engineer agents)", async () => {
     assert.deepEqual(pickedEngine(fields, roles, cfg), { kind: "openrouter", model: "deepseek/deepseek-v4-pro" });
   });
 
+  it("reads the reviewer's two models from the task, and keeps the second when the first moves (D-80)", async () => {
+    const { pickedReviewers, roleReviewers } = await import("../src/commands.mjs");
+    const linus = { id: "linus", adapterType: "opencode_local", adapterConfig: {}, metadata: { runnerEngine: true, role: { engine: "openrouter", model: "openrouter/moonshotai/kimi-k3", second: { engine: "openrouter", model: "openrouter/deepseek/deepseek-v4.1-flash" } } } };
+    const ada = { id: "ada", adapterType: "claude_local", adapterConfig: {}, metadata: { runnerEngine: true, role: { engine: "claude", model: "claude-opus-5-5" } } };
+    const roles = [linus, ada];
+    const kimi = { kind: "openrouter", model: "moonshotai/kimi-k3" };
+    const deepseek = { kind: "openrouter", model: "deepseek/deepseek-v4.1-flash" };
+    assert.deepEqual(roleReviewers(linus, cfg), [kimi, deepseek]);
+    assert.equal(roleReviewers(ada, cfg), undefined);
+    assert.deepEqual(pickedReviewers({ assigneeAgentId: "linus" }, roles, cfg), [kimi, deepseek]);
+    assert.equal(pickedReviewers({ assigneeAgentId: "ada" }, roles, cfg), undefined, "only the reviewer has a pair");
+    // Opus and Kimi: the first on another engine, the second's model on the same engine.
+    const opusKimi = { assigneeAgentId: "linus", assigneeAdapterOverrides: { adapterConfig: { engine: "claude", model: "claude-opus-5-5", secondModel: "openrouter/moonshotai/kimi-k3" } } };
+    assert.deepEqual(pickedReviewers(opusKimi, roles, cfg), [{ kind: "claude", model: "claude-opus-5-5" }, kimi]);
+    // A second on another engine without a model takes that engine's default from the config.
+    assert.deepEqual(pickedReviewers({ assigneeAgentId: "linus", assigneeAdapterOverrides: { adapterConfig: { secondEngine: "codex" } } }, roles, cfg)[1], { kind: "codex", model: cfg.engines?.codex?.model || undefined });
+    // The runner moving the first reviewer (a comment naming a model) keeps the second.
+    assert.deepEqual(pickerFor({ kind: "codex", model: "gpt-6-astra" }, roles, "linus", opusKimi.assigneeAdapterOverrides.adapterConfig), { assigneeAgentId: "linus", assigneeAdapterOverrides: { adapterConfig: { engine: "codex", model: "gpt-6-astra", secondModel: "openrouter/moonshotai/kimi-k3" } } });
+    assert.deepEqual(pickerFor({ kind: "claude", model: "claude-opus-5-5" }, roles, "ada", { secondModel: "x" }), { assigneeAgentId: "ada", assigneeAdapterOverrides: null }, "never on another role");
+  });
+
   it("passes the effort to Codex and Claude Code", () => {
     const codex = buildCommand({ cfg: { ...cfg, sandbox: { extra_writable_roots: [] } }, engine: { kind: "codex", model: "gpt-5.6-sol", effort: "high" }, worktree: "/w", lastMessageFile: "/x" }).argv;
     assert.ok(codex.includes('model_reasoning_effort="high"'));

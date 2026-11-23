@@ -68,6 +68,38 @@ describe("assignees", () => {
     expect(paperclipUpdate(issue(), { assignee: ursula, effort: "medium" }, c).assigneeAdapterOverrides).toBeNull();
     expect(() => paperclipUpdate(issue(), { assignee: ursula, engine: "claude" }, c)).toThrow(/runs on codex/);
   });
+
+  it("picks the reviewer's two models, Kimi K3 and DeepSeek unless changed (D-80)", () => {
+    const linusId = "00000000-0000-0000-0000-0000000000d2";
+    const linusAgent = {
+      id: linusId,
+      name: "Reviewer",
+      status: "idle",
+      adapterType: "opencode_local",
+      adapterConfig: {},
+      metadata: { setupKey: "pennyworth:reviewer", runnerEngine: true, role: { job: "Reviews PRs.", engine: "openrouter", model: "openrouter/moonshotai/kimi-k3", second: { engine: "openrouter", model: "openrouter/deepseek/deepseek-v4.1-flash" } }, persona: { name: "Linus", voice: "v", avatar: "linus" } },
+    } as unknown as Agent;
+    const crew = assignees([agents[0]!, linusAgent, agents.find((a) => a.id === CLAUDE)!]);
+    const c = { me: "user-1", assignees: crew, labels: [] };
+    expect(crew.find((a) => a.key === linusId)).toMatchObject({ engine: "openrouter", defaultModel: "openrouter/moonshotai/kimi-k3", second: { engine: "openrouter", model: "openrouter/deepseek/deepseek-v4.1-flash" } });
+    expect(crew.find((a) => a.key === CLAUDE)?.second).toBeUndefined();
+    // The defaults: nothing in the override.
+    expect(paperclipUpdate(issue(), { assignee: linusId }, c).assigneeAdapterOverrides).toBeNull();
+    expect(paperclipUpdate(issue(), { assignee: linusId, engine: "openrouter", model: "", secondEngine: "openrouter", secondModel: "" }, c).assigneeAdapterOverrides).toBeNull();
+    // Opus + Kimi.
+    const opusKimi = paperclipUpdate(issue(), { assignee: linusId, engine: "claude", model: "claude-opus-5-5", secondModel: "moonshotai/kimi-k3" }, c).assigneeAdapterOverrides;
+    expect(opusKimi).toEqual({ adapterConfig: { engine: "claude", model: "claude-opus-5-5", secondModel: "openrouter/moonshotai/kimi-k3" } });
+    const onIt = issue({ assigneeAgentId: linusId, assigneeUserId: null, assigneeAdapterOverrides: opusKimi as never });
+    expect(executorOf(onIt, crew)).toEqual({ engine: "claude", model: "claude-opus-5-5", secondModel: "openrouter/moonshotai/kimi-k3", pair: true });
+    // Changing the first keeps the second, and a second on another engine drops its old model.
+    expect(paperclipUpdate(onIt, { engine: "codex" }, c).assigneeAdapterOverrides).toEqual({ adapterConfig: { engine: "codex", secondModel: "openrouter/moonshotai/kimi-k3" } });
+    expect(paperclipUpdate(onIt, { secondEngine: "codex" }, c).assigneeAdapterOverrides).toEqual({ adapterConfig: { engine: "claude", model: "claude-opus-5-5", secondEngine: "codex" } });
+    // The runner's own review parts run one model each; only the reviewer has a second.
+    const part = issue({ assigneeAgentId: linusId, assigneeUserId: null, description: "Cross-model review.\n\n<!-- pennyworth-runner -->", assigneeAdapterOverrides: { adapterConfig: { engine: "claude", model: "claude-opus-5-5" } } });
+    expect(executorOf(part, crew)).toEqual({ engine: "claude", model: "claude-opus-5-5", pair: false });
+    expect(() => paperclipUpdate(issue(), { assignee: CLAUDE, secondModel: "x" }, c)).toThrow(/only the reviewer/);
+    expect(UpdateSchema.safeParse({ secondEngine: "bogus" }).success).toBe(false);
+  });
 });
 
 describe("store", () => {

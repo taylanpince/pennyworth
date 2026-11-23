@@ -8,7 +8,7 @@ import type { Logger } from "pino";
 import { z } from "zod";
 import { RunnerReportSchema, agentsView, runTasks, workingOn, type RunContext, type RunnerReport } from "./activity.js";
 import { RecurringSchema, RunStateSchema, ScheduleSchema, changeRecurring, claimDue, recurringView, scheduleMove } from "./automation.js";
-import { AddAgentSchema, AssignSubtasksSchema, BadRequest, CreateSchema, MAX_SUBTASKS, ParentSchema, SubtaskSchema, EFFORTS, ENGINE_ADAPTER, type Engine, HandOverSchema, PassSchema, RUNNER_MARKER, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
+import { AddAgentSchema, AssignSubtasksSchema, BadRequest, CreateSchema, MAX_SUBTASKS, ParentSchema, SubtaskSchema, EFFORTS, ENGINE_ADAPTER, type Engine, HandOverSchema, PassSchema, RUNNER_MARKER, UpdateSchema, assignees, buildBoard, commentView, displayText, executorOf, type Executor, paperclipUpdate, replyTarget, toCard, type Assignee } from "./board.js";
 import { FOR_OTHERS, crewOf, deliveredFrom, deliveredText, foldedChildren, fromMarker, handOverText, isSubtask, mentionedAgents, partsToClose, subtaskCount, summaryOf, type DeliveredFrom } from "./crew.js";
 import { inNetworks } from "./config.js";
 import { INLINE_TYPES, MAX_UPLOAD_BODY, UploadSchema, decode, fileType, fileViews, isPdf, pdfText, safeName } from "./files.js";
@@ -216,7 +216,7 @@ export function createApp(opts: AppOptions): Server {
    * description as the user's request (D-45). An agent already on the task gets the instructions as a
    * comment on its part instead: one part per agent.
    */
-  async function addToCrew(ctx: Awaited<ReturnType<typeof context>>, parent: Issue, agent: Assignee, instructions: string, executor: { engine?: Engine; model?: string; effort?: string }, marker = "") {
+  async function addToCrew(ctx: Awaited<ReturnType<typeof context>>, parent: Issue, agent: Assignee, instructions: string, executor: Executor, marker = "") {
     // The user's words lose any hidden markers; only the board's own (where a message came from, D-54) stay.
     const text = marker ? `${displayText(instructions)}\n\n${marker}` : displayText(instructions);
     const existing = (await pc.children(parent.id)).find((k) => k.assigneeAgentId === agent.key && !["done", "cancelled"].includes(k.status));
@@ -227,7 +227,7 @@ export function createApp(opts: AppOptions): Server {
     }
     const assign = paperclipUpdate(
       { ...parent, assigneeAgentId: null, assigneeAdapterOverrides: null },
-      { assignee: agent.key, ...(executor.engine ? { engine: executor.engine } : {}), ...(executor.model ? { model: executor.model } : {}), ...(executor.effort ? { effort: executor.effort } : {}) },
+      { assignee: agent.key, ...(executor.engine ? { engine: executor.engine } : {}), ...(executor.model ? { model: executor.model } : {}), ...(executor.effort ? { effort: executor.effort } : {}), ...(executor.secondEngine ? { secondEngine: executor.secondEngine } : {}), ...(executor.secondModel ? { secondModel: executor.secondModel } : {}) },
       ctx,
     );
     // Every part carries the task's title, which Paperclip would take for a duplicate of the first one.
@@ -936,7 +936,7 @@ export function createApp(opts: AppOptions): Server {
         const input = parse(AddAgentSchema, body);
         const agent = ctx.assignees.find((a) => a.key === input.agent && a.kind !== "me");
         if (!agent) throw new HttpError(400, "unknown agent");
-        await addToCrew(ctx, issue, agent, input.instructions, { engine: input.engine, model: input.model, effort: input.effort });
+        await addToCrew(ctx, issue, agent, input.instructions, { engine: input.engine, model: input.model, effort: input.effort, secondEngine: input.secondEngine, secondModel: input.secondModel });
         return issueView(issue.id);
       },
     },
@@ -978,7 +978,7 @@ export function createApp(opts: AppOptions): Server {
         const open = new Map((await pc.children(issue.id)).filter((k) => isSubtask(k, issue) && !closedIssue(k)).map((k) => [k.id, k]));
         const subs = [...new Set(input.subtasks)].map((id) => open.get(id));
         if (subs.some((k) => !k)) throw new HttpError(400, "pick open subtasks of this task");
-        for (const k of subs) await addToCrew(ctx, k!, agent, input.instructions, { engine: input.engine, model: input.model, effort: input.effort });
+        for (const k of subs) await addToCrew(ctx, k!, agent, input.instructions, { engine: input.engine, model: input.model, effort: input.effort, secondEngine: input.secondEngine, secondModel: input.secondModel });
         log.info({ issue: issue.identifier, agent: agent.name, subtasks: subs.length }, "agent on subtasks");
         return issueView(issue.id);
       },
@@ -1133,9 +1133,11 @@ export function createApp(opts: AppOptions): Server {
         if (!engine) throw new HttpError(400, `${a.persona?.name ?? a.name} runs on ${(a.engines ?? [a.engine]).join(", ")}`);
         let listed = (await pc.models(ENGINE_ADAPTER[engine]).catch(() => [])).map((x) => x.id);
         if (engine === "openrouter") listed = listed.filter((x) => x.startsWith("openrouter/"));
-        const own = engine === a.engine ? a.defaultModel : undefined;
+        // ?slot=2 is the reviewer's second model (D-80): its own default, and no effort.
+        const second = url?.searchParams.get("slot") === "2" ? a.second : undefined;
+        const own = second ? (engine === second.engine ? second.model : undefined) : engine === a.engine ? a.defaultModel : undefined;
         const models = [...new Set([...(own ? [own] : []), ...(a.catalog?.[engine] ?? []), ...listed])];
-        return { engine, default: own ?? null, defaultEffort: engine === a.engine ? (a.defaultEffort ?? null) : null, models, efforts: EFFORTS[engine] };
+        return { engine, default: own ?? null, defaultEffort: !second && engine === a.engine ? (a.defaultEffort ?? null) : null, models, efforts: second ? [] : EFFORTS[engine] };
       },
     },
     ...mem.api,

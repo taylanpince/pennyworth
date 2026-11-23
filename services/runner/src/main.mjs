@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { FOR_OTHERS, RUNNER_MARKER, SUPERVISOR_MARKER, deliveredFrom, isAgentSubtask, isUserPart, ownRequest, findRepos, mentionedRepos, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, roleEngine, parseCommand, pickedEngine, pickerFor, repoAllowed, resolveEngine, resolveShells, stripHidden } from "./commands.mjs";
+import { FOR_OTHERS, RUNNER_MARKER, SUPERVISOR_MARKER, deliveredFrom, isAgentSubtask, isUserPart, ownRequest, findRepos, mentionedRepos, isClaudeModel, normalizeRepo, openrouterModels, crewNames, personaFor, roleEngine, parseCommand, pickedEngine, pickedReviewers, pickerFor, repoAllowed, roleReviewers, resolveEngine, resolveShells, stripHidden } from "./commands.mjs";
 import { loadConfig } from "./config.mjs";
 import { observes, runAgent } from "./engines.mjs";
 import { CAD_TOOLS, cadRuntime, isCadRole } from "./cad.mjs";
@@ -28,7 +28,7 @@ import { SignInRunner } from "./signins.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import * as merges from "./merges.mjs";
-import { closingComment, declined, refusedByPolicy, findingsComment, fixInstructions, panelComment, repoMode, reviewInstructions, reviewPanel, reviewVerdict, roundOutcome, roundSlots } from "./crossreview.mjs";
+import { closingComment, declined, refusedByPolicy, findingsComment, fixInstructions, pairPanel, panelComment, repoMode, reviewInstructions, reviewPanel, reviewVerdict, roundOutcome, roundSlots } from "./crossreview.mjs";
 import { DEFAULT_BOTS, HANDS_OFF, WATCH_QUERY, askComment, eventComment, eventInstructions, followUpComment, followUpInstructions, newWatch, parseAsk, parseNote, parsePr, parseWhen, primerComments, primerEventComment, primerInstructions, roundsLeft, slackEventComment, slackInstructions, slackReplies, slackThreads, slackTs, waitingOnUser, watchStep } from "./watches.mjs";
 import { State } from "./state.mjs";
 import { REPLY_MARKER, fence, prSnapshot, stateSection, threadEntries, threadSection, transcript, wordsAround } from "./thread.mjs";
@@ -684,8 +684,17 @@ const reviewOf = (authorId) => {
 const saveReview = (authorId, review) => state.set(`xreview:${authorId}`, JSON.stringify(review));
 const reviewerOf = (engineers) => engineers.find((a) => a.metadata?.setupKey === `pennyworth:${cfg.cross_review?.reviewer ?? "reviewer"}`);
 const nameOf = (engineers, id, fallback) => personaFor(engineers.find((a) => a.id === id))?.name ?? fallback;
-// A review the user asked for is keyed by Linus's own engine on the task (`panelKey`), or `panels.manual`.
-const panelFor = (authorId, review = reviewOf(authorId)) => reviewPanel(review.panelKey ?? state.task(authorId)?.engine?.kind, cfg.cross_review);
+// A round keeps the panel it started with (D-80); one from before that is the author's engine's.
+const panelFor = (authorId, review = reviewOf(authorId)) => review.panel ?? reviewPanel(state.task(authorId)?.engine?.kind, cfg.cross_review);
+/**
+ * The panel for a crew PR (D-80): `cross_review.panels` for the author's engine when configured, else Linus's own
+ * pair (Kimi K3 and DeepSeek by default), else D-78's defaults for the author's engine.
+ */
+function crewPanel(authorKind, reviewer) {
+  const configured = cfg.cross_review?.panels?.[authorKind] ?? cfg.cross_review?.chains?.[authorKind];
+  const pair = !configured && roleReviewers(reviewer, cfg);
+  return pair ? pairPanel(pair, cfg.cross_review?.fallbacks) : reviewPanel(authorKind, cfg.cross_review);
+}
 const busy = (id) => running.has(id) || queue.some((j) => j.issue.id === id);
 
 /** The open PRs among `urls`, each with its head commit. */
@@ -702,8 +711,8 @@ async function openHeads(urls) {
 
 /**
  * A review the user asks Linus for on a task of his own (not a crew PR's round): the open PRs it names get
- * the same panel as the crew's (D-78), keyed by Linus's engine on the task (or `panels.manual`), and both
- * reviews come back to the user. The first request uses the task's PRs; later, a round starts only when the
+ * a panel round as the crew's do (D-78), on the two reviewers picked on the task (D-80), and both reviews
+ * come back to the user. The first request uses the task's PRs; later, a round starts only when the
  * user's comment names a PR that moved since, so "post it" or a question stays Linus's own turn. It's the
  * user's request, so the automation switch (D-75) doesn't apply. True when a round started.
  */
@@ -718,8 +727,10 @@ async function manualReview(issue, full, instructions, latest) {
   if (review.pending && Object.values(review.parts ?? {}).some(busy)) return false;
   const heads = await openHeads(named.map((p) => p.url));
   if (!Object.keys(heads).some((url) => review.heads?.[url] !== heads[url])) return false;
-  const panelKey = cfg.cross_review?.panels?.manual ? "manual" : pickedEngine(full, engineers, cfg)?.kind;
-  const started = await startRound(full, { review, heads, engineers, reviewer, request: instructions, panelKey });
+  // The pair picked on the task (D-80); a reviewer role from before pairs reviews on its engine's panel.
+  const pair = pickedReviewers(full, engineers, cfg);
+  const panel = pair ? pairPanel(pair, cfg.cross_review?.fallbacks) : reviewPanel(pickedEngine(full, engineers, cfg)?.kind, cfg.cross_review);
+  const started = await startRound(full, { review, heads, engineers, reviewer, request: instructions, panel });
   if (started) await pc.startWork(issue.id, `Reviewing on ${started.map(engineLabel).join(" and ")}${started.length > 1 ? ", each on its own" : ""}; the review${started.length > 1 ? "s land" : " lands"} here.`);
   return Boolean(started);
 }
@@ -752,7 +763,7 @@ async function maybeCrossReview(issue) {
     saveReview(issue.id, { ...review, capNoted: true });
     return void (await pc.comment(issue.id, closingComment({ outcome: "capped", reviewer: reviewerName, rounds, author })));
   }
-  await startRound(full, { review, heads, engineers, reviewer, author });
+  await startRound(full, { review, heads, engineers, reviewer, author, panel: crewPanel(state.task(issue.id)?.engine?.kind, reviewer) });
 }
 
 /**
@@ -760,8 +771,7 @@ async function maybeCrossReview(issue) {
  * never the user, each started with the same instructions. With no `author` it's a review the user asked
  * Linus for (`request`): the verdicts come back to the user. The engines started, or false when none.
  */
-async function startRound(full, { review, heads, engineers, reviewer, author, request, panelKey }) {
-  const panel = reviewPanel(panelKey ?? review.panelKey ?? state.task(full.id)?.engine?.kind, cfg.cross_review);
+async function startRound(full, { review, heads, engineers, reviewer, author, request, panel }) {
   const prs = Object.keys(heads);
   const modes = prs.map((url) => repoMode(url, cfg.cross_review?.repos));
   const slots = roundSlots(panel, modes);
@@ -770,7 +780,7 @@ async function startRound(full, { review, heads, engineers, reviewer, author, re
   for (const i of slots) if (parts[i] && busy(parts[i])) return false;
   const round = (review.round ?? 0) + 1;
   // Claimed before the parts are made: a second turn ending meanwhile doesn't start the round twice.
-  saveReview(full.id, { ...review, round, pending: heads, startedAt: new Date().toISOString(), slots: Object.fromEntries(slots.map((i) => [i, { step: 0, tried: [] }])), capNoted: false, ...(author ? {} : { manual: true, panelKey }) });
+  saveReview(full.id, { ...review, round, pending: heads, startedAt: new Date().toISOString(), slots: Object.fromEntries(slots.map((i) => [i, { step: 0, tried: [] }])), capNoted: false, panel, ...(author ? {} : { manual: true }) });
   const instructions = reviewInstructions({ prs: prs.filter((_, n) => modes[n] === "full"), light: prs.filter((_, n) => modes[n] === "light"), author, user: cfg.selfName, round, request });
   const started = [];
   for (const i of slots) {
@@ -816,7 +826,7 @@ async function afterCrossReview(part, ended) {
   const slot = review.slots?.[index];
   if (review.parts?.[index] !== part.id || !review.pending || !slot || slot.result) return;
   const model = engineLabel(ended.engine);
-  const chain = panelFor(authorId)[index] ?? [];
+  const chain = panelFor(authorId, review)[index] ?? [];
   let next;
   if (!ended.finished || declined(ended)) {
     const tried = [...(slot.tried ?? []), model];
@@ -846,7 +856,7 @@ async function afterCrossReview(part, ended) {
   const outcome = roundOutcome(results);
   log("cross review round", { issue: author.identifier, round: review.round, outcome, manual: Boolean(review.manual), results: results.map((r) => (r.failed ? `failed (${r.tried.join(", ")})` : `${r.model}: ${r.verdict ?? "none"}`)) });
   // A review the user asked for: every review goes back to them, on the task they asked on.
-  if (review.manual) return void (await pc.setStatus(authorId, "in_review", panelComment({ reviewer: reviewerName, results, round: review.round })));
+  if (review.manual) return void (await pc.setStatus(authorId, "in_review", panelComment({ reviewer: reviewerName, results, round: review.round, poster: personaFor((await pc.agents()).find((a) => a.metadata?.setupKey === "pennyworth:assistant"))?.name })));
   if (outcome !== "blocking") return void (await pc.comment(authorId, closingComment({ outcome, reviewer: reviewerName, results, round: review.round, author: authorName })));
   const blocking = results.filter((r) => r.verdict === "blocking");
   await pc.comment(authorId, findingsComment({ reviewer: reviewerName, reviews: blocking, round: review.round, author: authorName }));
@@ -1261,7 +1271,7 @@ async function syncPicker(issue, full, task, named) {
   const chosen = task.engine && ((named && (task.engine.kind !== picked.kind || task.engine.model)) || (!state.get(seenKey) && task.engine.kind !== picked.kind));
   let engine = picked;
   if (chosen) {
-    const fields = pickerFor({ ...task.engine, ...(task.engine.kind === picked.kind && picked.effort ? { effort: picked.effort } : {}) }, engineers, full.assigneeAgentId);
+    const fields = pickerFor({ ...task.engine, ...(task.engine.kind === picked.kind && picked.effort ? { effort: picked.effort } : {}) }, engineers, full.assigneeAgentId, full.assigneeAdapterOverrides?.adapterConfig);
     if (fields) {
       await pc.setPicker(issue.id, fields);
       engine = pickedEngine({ ...full, ...fields }, engineers, cfg);
@@ -1902,7 +1912,8 @@ async function afterTurn(issue, tools) {
   if (tools.reset || tools.engine) state.updateTask(issue.id, { session_id: null });
   if (tools.engine) {
     const engineers = await pc.engineerAgents();
-    const fields = pickerFor(tools.engine, engineers, (await pc.issue(issue.id)).assigneeAgentId);
+    const current = await pc.issue(issue.id);
+    const fields = pickerFor(tools.engine, engineers, current.assigneeAgentId, current.assigneeAdapterOverrides?.adapterConfig);
     if (fields) await pc.setPicker(issue.id, fields);
     state.updateTask(issue.id, { engine: tools.engine });
     state.set(`picker:${issue.id}`, new Date().toISOString());

@@ -36,6 +36,8 @@ export interface Assignee {
   efforts?: string[];
   /** The crew member's name, voice and avatar (D-45), from config/paperclip.yaml via setup. */
   persona?: Persona;
+  /** The reviewer's own second model (D-80): its engine and model are the first reviewer. */
+  second?: { engine: Engine; model: string };
 }
 
 /** One of the runner's crew roles: set up as one (D-60), or an Engineer from before roles. */
@@ -52,6 +54,12 @@ export function roleEngine(a: Agent): { engine: Engine; model?: string; effort?:
   const engine = ADAPTER_ENGINE[a.adapterType];
   const model = typeof a.adapterConfig?.model === "string" ? a.adapterConfig.model : "";
   return engine ? { engine, ...(model ? { model } : {}) } : undefined;
+}
+
+/** The reviewer role's own second model (metadata `role.second`, D-80). */
+export function roleSecond(a: Agent): { engine: Engine; model: string } | undefined {
+  const second = (a.metadata as { role?: { second?: { engine?: unknown; model?: unknown } } } | null | undefined)?.role?.second;
+  return second && ENGINES.includes(second.engine as Engine) && typeof second.model === "string" && second.model ? { engine: second.engine as Engine, model: second.model } : undefined;
 }
 
 const roleOf = (a: Agent): string | undefined => {
@@ -112,6 +120,7 @@ export function assignees(agents: Agent[]): Assignee[] {
     const own = roleEngine(a)!;
     const role = roleOf(a);
     const catalog = catalogOf(a);
+    const second = roleSecond(a);
     out.push({
       key: a.id,
       kind: "engineer",
@@ -124,6 +133,7 @@ export function assignees(agents: Agent[]): Assignee[] {
       ...(own.effort ? { defaultEffort: own.effort } : {}),
       ...(Object.keys(catalog).length ? { catalog } : {}),
       efforts: EFFORTS[own.engine],
+      ...(second ? { second } : {}),
       ...withPersona(a),
     });
   }
@@ -140,8 +150,22 @@ export function assigneeKey(issue: Issue, list: Assignee[]): string | null {
   return issue.assigneeUserId ? "me" : null;
 }
 
-/** The task's executor override (D-60), when it's assigned to the crew: another engine than the role's, a model, an effort. */
-export function executorOf(issue: Issue, list: Assignee[]): { engine?: Engine; model?: string; effort?: string } | undefined {
+/** How a crew member runs a task (D-60), and for the reviewer the second model (D-80). */
+export interface Executor {
+  engine?: Engine;
+  model?: string;
+  effort?: string;
+  secondEngine?: Engine;
+  secondModel?: string;
+  /** Whether the task is reviewed by a pair: the reviewer's, except the runner's own review parts. */
+  pair?: boolean;
+}
+
+/**
+ * The task's executor override (D-60), when it's assigned to the crew: another engine than the role's, a model,
+ * an effort, and the reviewer's second model (D-80). The runner's own review parts run one model each.
+ */
+export function executorOf(issue: Issue, list: Assignee[]): Executor | undefined {
   const a = list.find((x) => x.key === issue.assigneeAgentId && x.kind !== "me");
   if (!a?.engine) return undefined;
   const config = issue.assigneeAdapterOverrides?.adapterConfig ?? {};
@@ -149,7 +173,12 @@ export function executorOf(issue: Issue, list: Assignee[]): { engine?: Engine; m
   const key = EFFORT_KEY[named ?? a.engine];
   const model = typeof config.model === "string" && config.model.trim() ? config.model.trim() : undefined;
   const effort = key && typeof config[key] === "string" && config[key] ? String(config[key]) : undefined;
-  return { ...(named ? { engine: named } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
+  const out: Executor = { ...(named ? { engine: named } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
+  if (!a.second) return out;
+  if (String(issue.description ?? "").includes(RUNNER_MARKER)) return { ...out, pair: false };
+  const secondEngine = ENGINES.includes(config.secondEngine as Engine) && config.secondEngine !== a.second.engine ? (config.secondEngine as Engine) : undefined;
+  const secondModel = typeof config.secondModel === "string" && config.secondModel.trim() ? config.secondModel.trim() : undefined;
+  return { ...out, ...(secondEngine ? { secondEngine } : {}), ...(secondModel ? { secondModel } : {}), pair: true };
 }
 
 export interface Card {
@@ -343,6 +372,9 @@ export const UpdateSchema = z
     engine: z.enum(["codex", "claude", "openrouter"]),
     model: z.string().trim().max(120).regex(/^[A-Za-z0-9._:/\[\]-]*$/),
     effort: z.string().max(10),
+    /** The reviewer's second model (D-80). */
+    secondEngine: z.enum(["codex", "claude", "openrouter"]),
+    secondModel: z.string().trim().max(120).regex(/^[A-Za-z0-9._:/\[\]-]*$/),
     labelIds: z.array(id).max(20),
     /** Closing a task with open subtasks (D-68): close them too, or leave them open as cards. */
     subtasks: z.enum(["close", "keep"]),
@@ -373,8 +405,9 @@ export function paperclipUpdate(issue: Issue, u: Update, ctx: { me: string; assi
     if (target.kind === "me") Object.assign(body, { assigneeUserId: ctx.me, assigneeAgentId: null, assigneeAdapterOverrides: null });
     else Object.assign(body, { assigneeAgentId: target.key, assigneeUserId: null, assigneeAdapterOverrides: null });
   }
-  if (u.engine !== undefined || u.model !== undefined || u.effort !== undefined) {
+  if (u.engine !== undefined || u.model !== undefined || u.effort !== undefined || u.secondEngine !== undefined || u.secondModel !== undefined) {
     if (!target || target.kind === "me" || !target.engine) throw new BadRequest("the engine, model and effort only apply to the crew");
+    if ((u.secondEngine !== undefined || u.secondModel !== undefined) && !target.second) throw new BadRequest(`only the reviewer has a second model`);
     const current = u.assignee !== undefined ? {} : executorOf(issue, ctx.assignees) ?? {};
     const engine = u.engine ?? current.engine ?? target.engine;
     if (!(target.engines ?? [target.engine]).includes(engine)) throw new BadRequest(`${target.persona?.name ?? target.name} runs on ${(target.engines ?? [target.engine]).join(", ")}`);
@@ -384,11 +417,22 @@ export function paperclipUpdate(issue: Issue, u: Update, ctx: { me: string; assi
     if (model && engine === "openrouter" && !model.startsWith("openrouter/")) model = `openrouter/${model}`;
     const effort = u.effort !== undefined ? u.effort : switched ? "" : current.effort ?? "";
     if (effort && !EFFORTS[engine].includes(effort)) throw new BadRequest(`effort must be one of ${EFFORTS[engine].join(", ") || "(none)"}`);
-    // Only these keys ever go in the override: Paperclip merges it into a woken agent's run config.
+    // Only these keys ever go in the override: Paperclip merges it into a woken agent's run config. The second
+    // reviewer's two (D-80) are only ever on the reviewer, a runner role Paperclip never wakes.
     const config: Record<string, string> = {};
     if (engine !== target.engine) config.engine = engine;
     if (model && (engine !== target.engine || model !== target.defaultModel)) config.model = model;
     if (effort && (engine !== target.engine || effort !== target.defaultEffort)) config[EFFORT_KEY[engine]!] = effort;
+    if (target.second) {
+      const own = target.second;
+      const before = current.secondEngine ?? own.engine;
+      const secondEngine = u.secondEngine ?? before;
+      if (!(target.engines ?? [target.engine]).includes(secondEngine)) throw new BadRequest(`${target.persona?.name ?? target.name} runs on ${(target.engines ?? [target.engine]).join(", ")}`);
+      let secondModel = u.secondModel !== undefined ? u.secondModel : secondEngine !== before ? "" : current.secondModel ?? "";
+      if (secondModel && secondEngine === "openrouter" && !secondModel.startsWith("openrouter/")) secondModel = `openrouter/${secondModel}`;
+      if (secondEngine !== own.engine) config.secondEngine = secondEngine;
+      if (secondModel && (secondEngine !== own.engine || secondModel !== own.model)) config.secondModel = secondModel;
+    }
     body.assigneeAdapterOverrides = Object.keys(config).length ? { adapterConfig: config } : null;
   }
   return body;
@@ -410,6 +454,8 @@ export const AddAgentSchema = z
     engine: z.enum(["codex", "claude", "openrouter"]).optional(),
     model: z.string().trim().max(120).regex(/^[A-Za-z0-9._:/\[\]-]*$/).optional(),
     effort: z.string().trim().max(20).optional(),
+    secondEngine: z.enum(["codex", "claude", "openrouter"]).optional(),
+    secondModel: z.string().trim().max(120).regex(/^[A-Za-z0-9._:/\[\]-]*$/).optional(),
   })
   .strict();
 

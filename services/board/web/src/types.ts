@@ -22,6 +22,8 @@ export interface Assignee {
   efforts?: string[];
   /** The crew member's name, voice and portrait (D-45). */
   persona?: Persona;
+  /** The reviewer's own second model (D-80): its engine and model are the first reviewer. */
+  second?: { engine: Engine; model: string };
 }
 
 export type Engine = "codex" | "claude" | "openrouter";
@@ -31,6 +33,11 @@ export interface Executor {
   engine?: Engine;
   model?: string;
   effort?: string;
+  /** The reviewer's second model, when not its own (D-80). */
+  secondEngine?: Engine;
+  secondModel?: string;
+  /** False on the runner's own review parts, which run one model each. */
+  pair?: boolean;
 }
 
 export interface Persona {
@@ -289,6 +296,8 @@ export interface Update {
   engine?: Engine;
   model?: string;
   effort?: string;
+  secondEngine?: Engine;
+  secondModel?: string;
   labelIds?: string[];
   /** Closing a task with open subtasks (D-68): close them too, or keep them open. */
   subtasks?: "close" | "keep";

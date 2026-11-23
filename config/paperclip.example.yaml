@@ -306,8 +306,11 @@ agents:
     title: Pull request and spec reviews (pennyworth-runner)
     instructions: config/agents/engineer.md
     adapter: opencode_local
-    engine: codex
-    model: gpt-6-sol
+    # The two models that review (D-80): engine and model are the first, which also answers you; the
+    # picker on each task can change either.
+    engine: openrouter
+    model: openrouter/moonshotai/kimi-k3
+    second_reviewer: { engine: openrouter, model: openrouter/deepseek/deepseek-v4.1-flash }
     dispatch: runner
     mcp_servers: []
 

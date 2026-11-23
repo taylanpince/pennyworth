@@ -1033,7 +1033,7 @@ function Executor({ issue, assignee, disabled, update }: { issue: IssueView; ass
       assignee={assignee}
       value={value}
       disabled={disabled}
-      onChange={(x) => void update({ engine: x.engine ?? assignee.engine, model: x.model ?? "", effort: x.effort ?? "" })}
+      onChange={(x) => void update({ engine: x.engine ?? assignee.engine, model: x.model ?? "", effort: x.effort ?? "", ...(assignee.second && value.pair !== false ? { secondEngine: x.secondEngine ?? assignee.second.engine, secondModel: x.secondModel ?? "" } : {}) })}
     />
   );
 }

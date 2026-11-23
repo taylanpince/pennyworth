@@ -39,6 +39,20 @@ export function reviewPanel(authorKind, { panels, chains } = {}) {
   return list.map(asEngines).filter((chain) => chain.length);
 }
 
+/** Models tried in order when a picked reviewer declines or fails (D-80), leaving out the pair's own. */
+export const DEFAULT_FALLBACKS = [{ engine: "openrouter", model: "moonshotai/kimi-k3" }, { engine: "openrouter", model: "z-ai/glm-5.3" }];
+
+/**
+ * A round's reviewers from the pair picked for Linus (D-80), each a chain: the picked model, then the
+ * fallbacks (`cross_review.fallbacks`) that aren't one of the pair. The second is the light round's one.
+ */
+export function pairPanel(pair, fallbacks = DEFAULT_FALLBACKS) {
+  const picked = pair.filter((e) => e?.kind);
+  const same = (a, b) => a.kind === b.kind && a.model === b.model;
+  const backups = asEngines(fallbacks).filter((b) => !picked.some((p) => same(p, b)));
+  return picked.map((first) => [first, ...backups]);
+}
+
 /**
  * How a PR is reviewed, by its repository: "full", or what `cross_review.repos` says. "light" is for
  * config changes posted for another team to approve (checked once, for what would break a deploy);
@@ -127,15 +141,15 @@ export function findingsComment({ reviewer, reviews, round, author }) {
 /**
  * The runner's comment on the task the user asked for the review on, once the round is in: every review
  * ({ model, verdict, reply }) quoted under its model, blocking first, and a line for a reviewer no model
- * could take ({ failed, tried }). Nothing here reaches GitHub.
+ * could take ({ failed, tried }). Nothing here reaches GitHub: `poster` (the Assistant) does that, on the user's word.
  */
-export function panelComment({ reviewer, results, round }) {
+export function panelComment({ reviewer, results, round, poster = "the Assistant" }) {
   const reviews = results.filter((r) => !r.failed).sort((a, b) => Number(b.verdict === "blocking") - Number(a.verdict === "blocking"));
   const failed = results.filter((r) => r.failed).map((r) => `_No model could take the other review (tried ${r.tried.join(", ")})._`);
   const verdict = (r) => (r.verdict === "blocking" ? "blocking findings" : r.verdict === "clean" ? "no blocking findings" : "no verdict");
   const quoted = reviews.map((r) => `**On ${r.model}: ${verdict(r)}.**\n\n> ${quote(r.reply, reviews.length === 1 ? 12_000 : 8_000)}`);
   const head = reviews.length
-    ? `**${reviewer} reviewed the PR on ${models(reviews)}${round > 1 ? ` (round ${round})` : ""}**, each model on its own. Ask ${reviewer} here to post it on GitHub, or to look again.`
+    ? `**${reviewer} reviewed the PR on ${models(reviews)}${round > 1 ? ` (round ${round})` : ""}**, each model on its own. Ask ${reviewer} here about a finding or to look again; ${poster} posts it on GitHub when you say.`
     : `No model could review the PR; ${reviewer}'s chat says what happened. Ask ${reviewer} here to try again.`;
   return [head, ...quoted, ...failed, EVENT_MARKER].join("\n\n");
 }

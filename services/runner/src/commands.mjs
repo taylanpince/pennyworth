@@ -151,12 +151,50 @@ export function pickedEngine(issue, engineers, cfg) {
   return { kind, model, ...(EFFORTS.has(effort) ? { effort } : {}) };
 }
 
+/** Where a task's second reviewer is kept in its override (D-80), beside the first's engine and model. */
+export const SECOND_KEYS = ["secondEngine", "secondModel"];
+
+const runnable = (kind, model) => {
+  const v = typeof model === "string" ? model.trim() : "";
+  return kind === "openrouter" ? v.replace(/^openrouter\//, "") : v;
+};
+
+/** The reviewer role's own second reviewer (metadata `role.second`), or undefined for any other role. */
+export function roleSecond(agent) {
+  const second = agent?.metadata?.role?.second;
+  return second && KINDS.includes(second.engine) ? { kind: second.engine, model: runnable(second.engine, second.model) } : undefined;
+}
+
+/**
+ * The two reviewers picked on a task assigned to the reviewer role (D-80): the first is the role's picker
+ * (it also takes the user's own turns), the second the override's `secondEngine`/`secondModel`, else the
+ * role's own second. Undefined for a task assigned to any other role.
+ */
+export function pickedReviewers(issue, engineers, cfg) {
+  const agent = engineers.find((a) => a.id === issue?.assigneeAgentId);
+  const own = roleSecond(agent);
+  if (!own) return undefined;
+  const override = issue.assigneeAdapterOverrides?.adapterConfig ?? {};
+  const kind = KINDS.includes(override.secondEngine) ? override.secondEngine : own.kind;
+  const model = runnable(kind, override.secondModel) || (kind === own.kind ? own.model : "") || cfg.engines?.[kind]?.model || undefined;
+  return [pickedEngine(issue, engineers, cfg), { kind, model }];
+}
+
+/** The role's own two reviewers, before any task picks others (the crew's own PRs, D-80). */
+export function roleReviewers(agent, cfg) {
+  const second = roleSecond(agent);
+  const first = roleEngine(agent);
+  if (!second || !first) return undefined;
+  return [{ kind: first.kind, model: runnable(first.kind, first.model) || cfg.engines?.[first.kind]?.model || undefined }, second];
+}
+
 /**
  * The Paperclip fields that show `engine` as the task's picker: the role (the task's own, else the first
  * whose engine it is) as assignee, and an override for whatever differs from that role's own engine,
- * model and effort. Undefined if no role can run it.
+ * model and effort. Undefined if no role can run it. `keep` is the task's override: its second reviewer
+ * (D-80) stays when the first changes.
  */
-export function pickerFor(engine, engineers, agentId) {
+export function pickerFor(engine, engineers, agentId, keep) {
   const agent = engineers.find((a) => a.id === agentId && isRole(a)) ?? engineers.find((a) => roleEngine(a)?.kind === engine.kind) ?? engineers.find(isRole);
   const own = roleEngine(agent);
   if (!own) return undefined;
@@ -166,6 +204,7 @@ export function pickerFor(engine, engineers, agentId) {
     ...(model && (engine.kind !== own.kind || model !== own.model) ? { model } : {}),
     ...(engine.effort && EFFORT_KEY[engine.kind] && (engine.kind !== own.kind || engine.effort !== own.effort) ? { [EFFORT_KEY[engine.kind]]: engine.effort } : {}),
   };
+  if (agent.id === agentId && roleSecond(agent)) for (const k of SECOND_KEYS) if (typeof keep?.[k] === "string" && keep[k]) config[k] = keep[k];
   return { assigneeAgentId: agent.id, assigneeAdapterOverrides: Object.keys(config).length ? { adapterConfig: config } : null };
 }
 

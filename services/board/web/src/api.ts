@@ -73,7 +73,7 @@ export const api = {
   setParent: (ref: string, parent: string | null) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/parent`, { parent }),
   merge: (ref: string, into: string) => call<{ merged: string; into: string; files: number }>("POST", `/api/issues/${encodeURIComponent(ref)}/merge`, { into }),
   handOver: (ref: string, from: string, to: string) => call<IssueView>("POST", `/api/issues/${encodeURIComponent(ref)}/handover`, { from, to }),
-  models: (assignee: string, engine?: Engine) => call<Models>("GET", `/api/models/${assignee}${engine ? `?engine=${engine}` : ""}`),
+  models: (assignee: string, engine?: Engine, slot?: 2) => call<Models>("GET", `/api/models/${assignee}?${new URLSearchParams({ ...(engine ? { engine } : {}), ...(slot ? { slot: String(slot) } : {}) })}`),
   connections: () => call<Connections>("GET", "/api/connections"),
   automation: () => call<AutomationView>("GET", "/api/automation"),
   setAutomation: (value: Automation) => call<AutomationView>("POST", "/api/automation", value),

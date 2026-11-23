@@ -3,7 +3,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { api } from "./api";
-import { BUCKETS, BUCKET_NAMES, type Assignee, type Board, type Bucket, type Card, type CrewMember, type CrewState, type Executor, type Models, type PlanItem, type Working } from "./types";
+import { BUCKETS, BUCKET_NAMES, type Assignee, type Board, type Bucket, type Card, type CrewMember, type CrewState, type Engine, type Executor, type Models, type PlanItem, type Working } from "./types";
 import { ENGINE_NAMES, SOURCE_NAMES, STATUS_BADGE, addDays, agentShort, ago, elapsed, matches, shortDate, shortName, snoozeOptions, todayIn } from "./util";
 
 /** A crew member's portrait (D-45), or a coloured letter for you and agents without one. */
@@ -819,40 +819,76 @@ export function ClickHouseBanner({ clickhouse, canConnect }: { clickhouse: Board
 
 /**
  * How a crew member runs this (D-60): the engine, model and effort, shown as you assign, with the role's
- * own preselected. Picking another engine drops the model and effort: they belong to an engine.
+ * own preselected. Picking another engine drops the model and effort: they belong to an engine. The reviewer
+ * shows the two models that review (D-80).
  */
 export function ExecutorPicker({ assignee, value, onChange, disabled }: { assignee: Assignee; value: Executor; onChange: (x: Executor) => void; disabled?: boolean }) {
+  const { secondEngine, secondModel, pair, ...first } = value;
+  const keep = { ...(secondEngine ? { secondEngine } : {}), ...(secondModel ? { secondModel } : {}), ...(pair !== undefined ? { pair } : {}) };
+  const firstSlot = (
+    <ExecutorSlot
+      assignee={assignee}
+      own={{ engine: assignee.engine, model: assignee.defaultModel, effort: assignee.defaultEffort }}
+      value={first}
+      disabled={disabled}
+      onChange={(x) => onChange({ ...x, ...keep })}
+    />
+  );
+  // The reviewer (D-80): the two models that review, the first also answering you. The runner's own review parts run one.
+  const second = assignee.second;
+  if (!second || pair === false) return <div className="executor">{firstSlot}</div>;
+  return (
+    <div className="executor">
+      <div className="exec-head">
+        Reviewer 1 <span className="muted">· also answers you</span>
+      </div>
+      {firstSlot}
+      <div className="exec-head">Reviewer 2</div>
+      <ExecutorSlot
+        assignee={assignee}
+        slot={2}
+        own={{ engine: second.engine, model: second.model }}
+        value={{ ...(secondEngine ? { engine: secondEngine } : {}), ...(secondModel ? { model: secondModel } : {}) }}
+        disabled={disabled}
+        onChange={(x) => onChange({ ...first, ...(x.engine ? { secondEngine: x.engine } : {}), ...(x.model ? { secondModel: x.model } : {}), ...(pair !== undefined ? { pair } : {}) })}
+      />
+    </div>
+  );
+}
+
+/** One engine, model and effort to pick: a crew member's, or the reviewer's second model (`slot` 2, D-80). */
+function ExecutorSlot({ assignee, own, value, onChange, disabled, slot }: { assignee: Assignee; own: { engine?: Engine; model?: string; effort?: string }; value: Executor; onChange: (x: Executor) => void; disabled?: boolean; slot?: 2 }) {
   const engines = assignee.engines ?? (assignee.engine ? [assignee.engine] : []);
-  const engine = value.engine ?? assignee.engine;
+  const engine = value.engine ?? own.engine;
   const [models, setModels] = useState<Models | null>(null);
   const [model, setModel] = useState(value.model ?? "");
   useEffect(() => setModel(value.model ?? ""), [value.model]);
   useEffect(() => {
     let live = true;
     setModels(null);
-    api.models(assignee.key, engine).then((m) => live && setModels(m), () => {});
+    api.models(assignee.key, engine, slot).then((m) => live && setModels(m), () => {});
     return () => {
       live = false;
     };
-  }, [assignee.key, engine]);
+  }, [assignee.key, engine, slot]);
   if (!engine) return null;
-  const efforts = models?.efforts ?? (engine === assignee.engine ? (assignee.efforts ?? []) : []);
-  const fallback = models ? models.default : engine === assignee.engine ? assignee.defaultModel : undefined;
-  const ownEffort = models ? models.defaultEffort : engine === assignee.engine ? assignee.defaultEffort : undefined;
-  const listId = `models-${assignee.key}-${engine}`;
+  const efforts = slot ? [] : (models?.efforts ?? (engine === own.engine ? (assignee.efforts ?? []) : []));
+  const fallback = models ? models.default : engine === own.engine ? own.model : undefined;
+  const ownEffort = models ? models.defaultEffort : engine === own.engine ? own.effort : undefined;
+  const listId = `models-${assignee.key}-${slot ?? 1}-${engine}`;
   const commit = () => {
     if (model.trim() !== (value.model ?? "")) onChange({ ...value, model: model.trim() || undefined });
   };
   return (
-    <div className="executor">
+    <>
       {engines.length > 1 && (
         <div className="exec-row">
           <span className="exec-name">Engine</span>
           <div className="seg">
             {engines.map((e) => (
-              <button type="button" key={e} disabled={disabled} className={engine === e ? "on" : ""} title={e === assignee.engine ? `${shortName(assignee)}'s own engine` : undefined} onClick={() => engine !== e && onChange(e === assignee.engine ? {} : { engine: e })}>
+              <button type="button" key={e} disabled={disabled} className={engine === e ? "on" : ""} title={e === own.engine ? `${shortName(assignee)}'s own engine` : undefined} onClick={() => engine !== e && onChange(e === own.engine ? {} : { engine: e })}>
                 {ENGINE_NAMES[e]}
-                {e === assignee.engine && <span className="exec-own"> ★</span>}
+                {e === own.engine && <span className="exec-own"> ★</span>}
               </button>
             ))}
           </div>
@@ -889,6 +925,6 @@ export function ExecutorPicker({ assignee, value, onChange, disabled }: { assign
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

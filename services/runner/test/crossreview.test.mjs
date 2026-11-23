@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { closingComment, declined, refusedByPolicy, findingsComment, fixInstructions, panelComment, repoMode, reviewInstructions, reviewPanel, reviewVerdict, roundOutcome, roundSlots } from "../src/crossreview.mjs";
+import { closingComment, declined, refusedByPolicy, findingsComment, fixInstructions, pairPanel, panelComment, repoMode, reviewInstructions, reviewPanel, reviewVerdict, roundOutcome, roundSlots } from "../src/crossreview.mjs";
 
 describe("cross-model review", () => {
   it("reviews on two models at once by default, never with the author's family", () => {
@@ -108,9 +108,21 @@ describe("cross-model review", () => {
     assert.match(reviewInstructions({ prs: ["a"], user: "Taylan", round: 2 }), /This is round 2: your earlier review is in the conversation\. Review what changed since/);
   });
 
+  it("reviews on the pair picked for Linus, each falling back to a model outside the pair (D-80)", () => {
+    const kimi = { kind: "openrouter", model: "moonshotai/kimi-k3" };
+    const glm = { kind: "openrouter", model: "z-ai/glm-5.3" };
+    const deepseek = { kind: "openrouter", model: "deepseek/deepseek-v4.1-flash" };
+    const opus = { kind: "claude", model: "claude-opus-5-5" };
+    assert.deepEqual(pairPanel([kimi, deepseek]), [[kimi, glm], [deepseek, glm]]);
+    assert.deepEqual(pairPanel([opus, kimi]), [[opus, glm], [kimi, glm]]);
+    assert.deepEqual(pairPanel([opus, deepseek]), [[opus, kimi, glm], [deepseek, kimi, glm]]);
+    assert.deepEqual(pairPanel([opus, deepseek], [{ engine: "codex", model: "gpt-6-astra" }]), [[opus, { kind: "codex", model: "gpt-6-astra" }], [deepseek, { kind: "codex", model: "gpt-6-astra" }]], "fallbacks from config");
+    assert.deepEqual(roundSlots(pairPanel([opus, deepseek]), ["light"]), [1], "a light round takes the second");
+  });
+
   it("brings every review back to the user, blocking first, under each model", () => {
-    const c = panelComment({ reviewer: "Linus", results: [{ model: "A", verdict: "clean", reply: "fine\n\nVERDICT: clean" }, { model: "B", verdict: "blocking", reply: "bug\n\nVERDICT: blocking" }], round: 1 });
-    assert.match(c, /^\*\*Linus reviewed the PR on B and A\*\*, each model on its own\. Ask Linus here to post it on GitHub, or to look again\.\n\n\*\*On B: blocking findings\.\*\*\n\n> bug[\s\S]*\*\*On A: no blocking findings\.\*\*\n\n> fine/);
+    const c = panelComment({ reviewer: "Linus", results: [{ model: "A", verdict: "clean", reply: "fine\n\nVERDICT: clean" }, { model: "B", verdict: "blocking", reply: "bug\n\nVERDICT: blocking" }], round: 1, poster: "Alfred" });
+    assert.match(c, /^\*\*Linus reviewed the PR on B and A\*\*, each model on its own\. Ask Linus here about a finding or to look again; Alfred posts it on GitHub when you say\.\n\n\*\*On B: blocking findings\.\*\*\n\n> bug[\s\S]*\*\*On A: no blocking findings\.\*\*\n\n> fine/);
     assert.match(c, /<!-- pennyworth-event -->$/);
     const one = panelComment({ reviewer: "Linus", results: [{ model: "A", reply: "hm" }, { failed: true, tried: ["X", "Y"] }], round: 2 });
     assert.match(one, /on A \(round 2\)\*\*[\s\S]*On A: no verdict\.[\s\S]*No model could take the other review \(tried X, Y\)/);

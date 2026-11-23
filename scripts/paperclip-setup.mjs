@@ -262,7 +262,11 @@ function runnerAgentBody(key, a, existing) {
   if (adapterType === "claude_local") adapterConfig.dangerouslySkipPermissions = false;
   // opencode agents need a model in Paperclip's eyes: the role's, else the first OpenRouter one listed.
   if (adapterType === "opencode_local") adapterConfig.model = engine === "openrouter" && model ? model : (engineCatalog().openrouter?.[0] ?? existing?.adapterConfig?.model ?? "openrouter/z-ai/glm-5.3-flash");
-  const role = { job: roleOf(key, a) ?? "", engine, ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(a.workflow ? { workflow: a.workflow } : {}) };
+  // The reviewer's second model (D-80): its engine and model are the first reviewer, this the second.
+  const second = a.second_reviewer;
+  if (second !== undefined && (!ENGINES.includes(second?.engine) || typeof second.model !== "string" || !second.model.trim())) fail(`agent ${key}: second_reviewer needs an engine (${ENGINES.join(", ")}) and a model`);
+  if (second?.engine === "openrouter" && !/^openrouter\/\S+$/.test(second.model)) fail(`agent ${key}: an openrouter model is openrouter/<model>`);
+  const role = { job: roleOf(key, a) ?? "", engine, ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(a.workflow ? { workflow: a.workflow } : {}), ...(second ? { second: { engine: second.engine, model: second.model.trim() } } : {}) };
   return {
     name: a.name,
     role: "general",

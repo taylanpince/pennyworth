@@ -909,19 +909,21 @@ watches:
     assert.match(adaComments().find((c) => c.includes("no blocking findings")), /^\*\*Linus reviewed the PR on Claude Code \(claude-opus-5-5\) \(round 1\): no blocking findings\.\*\* The PR stays a draft/);
   });
 
-  it("reviews a PR the user asked Linus for on the same two-model panel, and answers 'post it' as Linus", async () => {
-    // Linus is on Claude Sonnet here, so the panel is Claude's (configured to two other Claude models for the fake).
+  it("reviews a PR the user asked Linus for on the two models picked on the task, and answers 'post it' on the first (D-80)", async () => {
     const configFile = join(runnerOptions.env.PENNYWORTH_CONFIG_DIR, "runner.yaml");
     const config = readFileSync(configFile, "utf8");
-    writeFileSync(configFile, `${config.slice(0, config.indexOf("cross_review:"))}cross_review:\n  panels:\n    claude:\n      - [{ engine: claude, model: claude-opus-5-5 }]\n      - [{ engine: claude, model: claude-fable-5-1 }]\n`);
+    writeFileSync(configFile, `${config.slice(0, config.indexOf("cross_review:"))}cross_review:\n  rounds: 3\n`);
     const exited = new Promise((resolve) => runner.once("exit", resolve));
     runner.kill("SIGTERM");
     await exited;
+    // Linus's own pair (Kimi K3 and DeepSeek) would run on OpenRouter; this task picks two Claude models for the fake.
+    const reviewer = paperclip.engineers.find((a) => a.id === "reviewer");
+    reviewer.metadata.role = { engine: "openrouter", model: "openrouter/moonshotai/kimi-k3", second: { engine: "openrouter", model: "openrouter/deepseek/deepseek-v4.1-flash" } };
     writeFileSync(join(dir, "review-verdict"), JSON.stringify({ "claude-opus-5-5": "blocking", "claude-fable-5-1": "clean" }));
     step("none");
     const pr = "https://github.com/acme/app/pull/42";
     const task = { id: "mr-task", identifier: "PEN-95", title: "Review Lee's retry PR", status: "todo", assigneeUserId: USER, createdByUserId: USER, createdByAgentId: null, labels: [], description: `Lee asked for a review: ${pr}` };
-    const linus = { id: "mr-linus", identifier: "PEN-96", title: task.title, status: "todo", parentId: task.id, assigneeAgentId: "reviewer", assigneeUserId: null, assigneeAdapterOverrides: { adapterConfig: { engine: "claude", model: "claude-sonnet-5" } }, createdByUserId: USER, createdByAgentId: null, labels: [], description: `Review ${pr}, mostly the backoff.` };
+    const linus = { id: "mr-linus", identifier: "PEN-96", title: task.title, status: "todo", parentId: task.id, assigneeAgentId: "reviewer", assigneeUserId: null, assigneeAdapterOverrides: { adapterConfig: { engine: "claude", model: "claude-opus-5-5", secondEngine: "claude", secondModel: "claude-fable-5-1" } }, createdByUserId: USER, createdByAgentId: null, labels: [], description: `Review ${pr}, mostly the backoff.` };
     for (const i of [task, linus]) paperclip.issues.set(i.id, i), paperclip.comments.set(i.id, []);
     launch();
     const linusComments = () => paperclip.comments.get(linus.id).map((c) => c.body);
@@ -932,7 +934,7 @@ watches:
     const reviews = claudeRuns().filter((r) => r.prompt.includes("Review the pull request adversarially"));
     assert.deepEqual(reviews.map((r) => ["claude-opus-5-5", "claude-fable-5-1"].find((m) => r.argv.includes(m))).sort(), ["claude-fable-5-1", "claude-opus-5-5"]);
     assert.ok(reviews.every((r) => /Taylan asked for this review:\n\n> Review Lee's retry PR[\s\S]*mostly the backoff/.test(r.prompt)), reviews[0].prompt);
-    assert.ok(!claudeRuns().some((r) => r.argv.includes("claude-sonnet-5") && r.prompt.includes("mostly the backoff")), "Linus's own chat doesn't review alongside the panel");
+    assert.ok(!claudeRuns().some((r) => r.prompt.includes("mostly the backoff") && !r.prompt.includes("Review the pull request adversarially")), "Linus's own chat doesn't review alongside the pair");
     assert.ok(linusComments().some((c) => /^Reviewing on Claude Code \(claude-opus-5-5\) and Claude Code \(claude-fable-5-1\), each on its own/.test(c)));
     const verdict = linusComments().find((c) => c.includes("each model on its own"));
     assert.match(verdict, /^\*\*Linus reviewed the PR on Claude Code \(claude-opus-5-5\) and Claude Code \(claude-fable-5-1\)\*\*[\s\S]*\*\*On Claude Code \(claude-opus-5-5\): blocking findings\.\*\*[\s\S]*\*\*On Claude Code \(claude-fable-5-1\): no blocking findings\.\*\*/);
@@ -940,7 +942,7 @@ watches:
 
     // Same head, no PR named: Linus's own turn, with both reviews in the conversation, and no new round.
     paperclip.addComment(linus.id, "Good, post it.");
-    await waitFor("Linus's own turn", () => claudeRuns().some((r) => r.argv.includes("claude-sonnet-5") && r.prompt.includes("Good, post it.")));
+    await waitFor("Linus's own turn, on the first reviewer's model", () => claudeRuns().some((r) => r.argv.includes("claude-opus-5-5") && r.prompt.includes("Good, post it.")));
     const own = claudeRuns().find((r) => r.prompt.includes("Good, post it."));
     assert.match(own.prompt, /On Claude Code \(claude-opus-5-5\): blocking findings/);
     await new Promise((r) => setTimeout(r, 1500));
