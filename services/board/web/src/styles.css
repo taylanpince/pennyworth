@@ -161,6 +161,7 @@ kbd {
 .banner-wrap:has(> .alert.ok) { background: #d3f9d8; }
 .banner-wrap:has(> .alert.ok) .banner-hide { display: none; }
 .banner-hide { flex: none; margin: 6px 12px 6px 0; padding: 3px 10px; font-size: 12px; background: transparent; color: #7a1414; border-color: rgba(122, 20, 20, 0.35); }
+@media (prefers-color-scheme: dark) { .banner-wrap { background: #3d1518; } .banner-wrap:has(> .alert.ok) { background: #13361b; } .banner-hide { color: #f5c2c2; border-color: rgba(245, 194, 194, 0.35); box-shadow: none; } }
 @media (prefers-color-scheme: dark) { .alert.ok { background: #13361b; color: #b2f2bb; } }
 .alert-field { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 200px; max-width: 360px; }
 .alert-field input { font: inherit; padding: 5px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text); }
@@ -969,6 +970,7 @@ span.mem-kind { display: inline-flex; align-items: center; }
 @media (forced-colors: active) { .chart rect, .chart path { forced-color-adjust: none; } }
 /* A question an agent asked (docs/design/automation.md): its options, until you answer. */
 .ask-options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.ask-options .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
 /* The automation switch in Settings (D-75). */
 .automation-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 24px; }
 .automation-master { display: flex; gap: 10px; align-items: center; }
