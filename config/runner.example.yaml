@@ -166,18 +166,29 @@ supervisor:
   interval_minutes: 120
   routine: Supervise the board
 
-# Cross-model review (docs/design/automation.md, stage 2): when an Engineer opens or updates a PR, the
-# reviewer role reviews it in its own part of the task, on the first model of the chain for the author's
-# engine; one that declines or fails hands over to the next. Blocking findings go back to the author, whose
-# new commits start the next round. Nothing goes to GitHub, and the PR stays a draft.
+# Cross-model review (docs/design/automation.md, stage 2; D-78): when an Engineer opens or updates a PR,
+# the reviewer role reviews it on two models from other families at once, each in its own part of the task;
+# a reviewer whose model declines or fails hands over to the next in its chain. Blocking findings from either
+# go back to the author, whose new commits start the next round. Nothing goes to GitHub, and the PR stays a draft.
 cross_review:
   reviewer: reviewer       # the setup key of the role that reviews (Linus)
   rounds: 3                # review rounds per task before it's over to you
-  # The author's engine → reviewers to try, in order. Leave out to use these defaults (never the same family).
-  # chains:
-  #   claude:     [{ engine: codex, model: gpt-6-astra }, { engine: openrouter, model: deepseek/deepseek-v4.1-flash }, { engine: openrouter, model: moonshotai/kimi-k3 }]
-  #   codex:      [{ engine: claude, model: claude-opus-5-5 }, { engine: openrouter, model: deepseek/deepseek-v4.1-flash }]
-  #   openrouter: [{ engine: claude, model: claude-opus-5-5 }, { engine: codex, model: gpt-6-astra }]
+  # Repositories of config changes posted for another team to approve: "light" is one check by the last
+  # (cheap) reviewer for what would break the deploy, "skip" is no review.
+  # repos:
+  #   your-org/devops: light
+  # The author's engine → the reviewers of a round, each a chain of models to try in order. Leave out to
+  # use these defaults (never the same family; the cheap one last, as a light round takes only the last).
+  # panels:
+  #   claude:
+  #     - [{ engine: codex, model: gpt-6-astra }, { engine: openrouter, model: moonshotai/kimi-k3 }]
+  #     - [{ engine: openrouter, model: deepseek/deepseek-v4.1-flash }, { engine: openrouter, model: z-ai/glm-5.3 }]
+  #   codex:
+  #     - [{ engine: claude, model: claude-opus-5-5 }, { engine: openrouter, model: moonshotai/kimi-k3 }]
+  #     - [{ engine: openrouter, model: deepseek/deepseek-v4.1-flash }, { engine: openrouter, model: z-ai/glm-5.3 }]
+  #   openrouter:
+  #     - [{ engine: claude, model: claude-opus-5-5 }]
+  #     - [{ engine: codex, model: gpt-6-astra }]
 
 # Your comments on your own open tasks → the Assistant ("Process task replies" routine).
 replies:

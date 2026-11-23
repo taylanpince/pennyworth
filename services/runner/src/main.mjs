@@ -28,7 +28,7 @@ import { SignInRunner } from "./signins.mjs";
 import { ACTIVITY_QUERY, Board, activityComment, activitySearches, formatRepo } from "./recurring.mjs";
 import { PR_QUERY, reviewOutcome, reviewTarget } from "./reviews.mjs";
 import * as merges from "./merges.mjs";
-import { closingComment, declined, refusedByPolicy, findingsComment, fixInstructions, reviewChain, reviewInstructions, reviewVerdict } from "./crossreview.mjs";
+import { closingComment, declined, refusedByPolicy, findingsComment, fixInstructions, repoMode, reviewInstructions, reviewPanel, reviewVerdict, roundOutcome, roundSlots } from "./crossreview.mjs";
 import { DEFAULT_BOTS, HANDS_OFF, WATCH_QUERY, askComment, eventComment, eventInstructions, followUpComment, followUpInstructions, newWatch, parseAsk, parseNote, parsePr, parseWhen, primerComments, primerEventComment, primerInstructions, roundsLeft, slackEventComment, slackInstructions, slackReplies, slackThreads, slackTs, waitingOnUser, watchStep } from "./watches.mjs";
 import { State } from "./state.mjs";
 import { REPLY_MARKER, fence, prSnapshot, stateSection, threadEntries, threadSection, transcript, wordsAround } from "./thread.mjs";
@@ -671,16 +671,26 @@ async function startSupervised(part) {
   await dispatch({ issue: refOf(part), instructions: `${part.title}\n\n${stripHidden(part.description).trim()}`, event: "supervisor" });
 }
 
-// ------------------------------------------------------------------ cross-model review (docs/design/automation.md, stage 2)
+// ------------------------------------------------------------------ cross-model review (docs/design/automation.md, stage 2; D-78)
 
-const reviewOf = (authorId) => JSON.parse(state.get(`xreview:${authorId}`) || "{}");
+// A task's review: { round, heads, parts: { [reviewer index]: part id }, pending, slots: { [index]: { step, tried, result } } }.
+// Reviews from before panels had one part (`partId`) and its `step`/`tried` on the review itself.
+const reviewOf = (authorId) => {
+  const r = JSON.parse(state.get(`xreview:${authorId}`) || "{}");
+  if (!r.partId) return r;
+  const { partId, step, tried, ...rest } = r;
+  return { ...rest, parts: { 0: partId }, ...(rest.pending ? { slots: { 0: { step: step ?? 0, tried: tried ?? [] } } } : {}) };
+};
 const saveReview = (authorId, review) => state.set(`xreview:${authorId}`, JSON.stringify(review));
 const reviewerOf = (engineers) => engineers.find((a) => a.metadata?.setupKey === `pennyworth:${cfg.cross_review?.reviewer ?? "reviewer"}`);
 const nameOf = (engineers, id, fallback) => personaFor(engineers.find((a) => a.id === id))?.name ?? fallback;
+const panelFor = (authorId) => reviewPanel(state.task(authorId)?.engine?.kind, cfg.cross_review);
+const busy = (id) => running.has(id) || queue.some((j) => j.issue.id === id);
 
 /**
- * After an Engineer's turn: if its open PRs moved since the last review, Linus reviews them on the first
- * model of the chain for the author's engine, in his part of the task (made by the runner, never the user).
+ * After an Engineer's turn, or a push or PR it was asked for: if its open PRs moved since the last review,
+ * Linus reviews them on each reviewer of the panel for the author's engine at once, each in a part of the
+ * task of its own (made by the runner, never the user), so neither reads the other's review first.
  */
 async function maybeCrossReview(issue) {
   if (!automation("crossReview") || state.get(`xreview-part:${issue.id}`)) return;
@@ -688,7 +698,8 @@ async function maybeCrossReview(issue) {
   const reviewer = reviewerOf(engineers);
   const full = await pc.issue(issue.id);
   if (!reviewer || full.assigneeAgentId === reviewer.id || ["done", "cancelled"].includes(full.status)) return;
-  const urls = state.entries("own-pr:").filter(([, id]) => id === issue.id).map(([key]) => key.slice("own-pr:".length));
+  const urls = state.entries("own-pr:").filter(([, id]) => id === issue.id).map(([key]) => key.slice("own-pr:".length))
+    .filter((url) => repoMode(url, cfg.cross_review?.repos) !== "skip");
   if (!urls.length) return;
   const gh = await findRealGh();
   const heads = {};
@@ -698,7 +709,9 @@ async function maybeCrossReview(issue) {
     if (pr?.state === "OPEN" && pr.headRefOid) heads[url] = pr.headRefOid;
   }
   const review = reviewOf(issue.id);
-  if (!Object.keys(heads).some((url) => review.heads?.[url] !== heads[url])) return;
+  // A round under way waits for its reviewers; one whose jobs were lost (a restart) gives way after a while.
+  const underWay = review.pending && (Object.values(review.parts ?? {}).some(busy) || Date.now() - Date.parse(review.startedAt ?? "") < 10 * 60_000);
+  if (underWay || !Object.keys(heads).some((url) => review.heads?.[url] !== heads[url])) return;
   if ((await handsOff(full)) || waitingOnUser(await pc.comments(issue.id), Paperclip.isUserInstruction)) return;
   const author = nameOf(engineers, full.assigneeAgentId, "the Engineer");
   const reviewerName = nameOf(engineers, reviewer.id, "The reviewer");
@@ -708,66 +721,93 @@ async function maybeCrossReview(issue) {
     saveReview(issue.id, { ...review, capNoted: true });
     return void (await pc.comment(issue.id, closingComment({ outcome: "capped", reviewer: reviewerName, rounds, author })));
   }
-  const chain = reviewChain(state.task(issue.id)?.engine?.kind, cfg.cross_review?.chains);
-  if (!chain.length) return;
-  let part = review.partId ? await pc.issue(review.partId).catch(() => undefined) : undefined;
-  if (part && (running.has(part.id) || queue.some((j) => j.issue.id === part.id))) return;
-  const picker = pickerFor(chain[0], engineers, reviewer.id);
-  if (!part || ["done", "cancelled"].includes(part.status)) {
-    // Crew parts carry their task's title, which Paperclip would otherwise take for a duplicate (D-45).
-    part = await pc.createIssue({
-      title: full.title,
-      description: `Cross-model review of ${author}'s PRs on this task: the runner asks for one each time they change, on a model from another family.\n\n${RUNNER_MARKER}`,
-      status: "todo",
-      priority: full.priority,
-      parentId: full.parentId ?? full.id,
-      allowDuplicate: true,
-      ...picker,
-    });
-    state.set(`xreview-part:${part.id}`, issue.id);
-    log("review part created", { issue: issue.identifier, part: part.identifier });
-  } else await pc.setPicker(part.id, picker);
+  const panel = panelFor(issue.id);
+  const prs = Object.keys(heads);
+  const modes = prs.map((url) => repoMode(url, cfg.cross_review?.repos));
+  const slots = roundSlots(panel, modes);
+  if (!slots.length) return;
+  const parts = { ...review.parts };
+  for (const i of slots) if (parts[i] && busy(parts[i])) return;
   const round = (review.round ?? 0) + 1;
-  saveReview(issue.id, { ...review, partId: part.id, round, pending: heads, step: 0, tried: [], capNoted: false });
-  log("cross review started", { issue: issue.identifier, part: part.identifier, round, engine: chain[0].kind, model: chain[0].model });
-  await dispatch({ issue: { id: part.id, identifier: part.identifier, assigneeAgentId: reviewer.id }, instructions: reviewInstructions({ prs: Object.keys(heads), author, user: cfg.selfName, round }), event: true });
+  // Claimed before the parts are made: a second turn ending meanwhile doesn't start the round twice.
+  saveReview(issue.id, { ...review, round, pending: heads, startedAt: new Date().toISOString(), slots: Object.fromEntries(slots.map((i) => [i, { step: 0, tried: [] }])), capNoted: false });
+  const instructions = reviewInstructions({ prs: prs.filter((_, n) => modes[n] === "full"), light: prs.filter((_, n) => modes[n] === "light"), author, user: cfg.selfName, round });
+  const started = [];
+  for (const i of slots) {
+    const picker = pickerFor(panel[i][0], engineers, reviewer.id);
+    let part = parts[i] ? await pc.issue(parts[i]).catch(() => undefined) : undefined;
+    if (!part || ["done", "cancelled"].includes(part.status)) {
+      // Crew parts carry their task's title, which Paperclip would otherwise take for a duplicate (D-45).
+      part = await pc.createIssue({
+        title: full.title,
+        description: `Cross-model review of ${author}'s PRs on this task${slots.length > 1 || panel.length > 1 ? `, reviewer ${i + 1} of ${panel.length}` : ""}: the runner asks for one each time they change, on a model from another family.\n\n${RUNNER_MARKER}`,
+        status: "todo",
+        priority: full.priority,
+        parentId: full.parentId ?? full.id,
+        allowDuplicate: true,
+        ...picker,
+      });
+      state.set(`xreview-part:${part.id}`, issue.id);
+      state.set(`xreview-slot:${part.id}`, String(i));
+      log("review part created", { issue: issue.identifier, part: part.identifier, reviewer: i });
+    } else await pc.setPicker(part.id, picker);
+    parts[i] = part.id;
+    started.push({ part, engine: panel[i][0] });
+  }
+  saveReview(issue.id, { ...reviewOf(issue.id), parts });
+  for (const { part, engine } of started) {
+    log("cross review started", { issue: issue.identifier, part: part.identifier, round, engine: engine.kind, model: engine.model, light: !modes.includes("full") });
+    await dispatch({ issue: { id: part.id, identifier: part.identifier, assigneeAgentId: reviewer.id }, instructions, event: true });
+  }
 }
 
 /**
- * After a review round on Linus's part: a model that declined or failed hands over to the next one; a
- * verdict goes to the author (blocking findings as its next turn), and the user hears when it's over.
+ * After a review turn on one of Linus's parts: a model that declined or failed hands that reviewer over to
+ * the next in its chain. Once every reviewer of the round has a result, the round's verdict goes to the
+ * author (blocking findings from either as its next turn), and the user hears when it's over.
  */
 async function afterCrossReview(part, ended) {
   const authorId = state.get(`xreview-part:${part.id}`);
   if (!authorId || !ended?.event) return; // the user's own turns on Linus's part aren't rounds
+  const index = Number(state.get(`xreview-slot:${part.id}`) ?? 0);
+  // Read and written before anything awaits: two reviewers can finish at once.
   const review = reviewOf(authorId);
-  if (review.partId !== part.id || !review.pending) return;
-  const engineers = await pc.engineerAgents();
-  const author = await pc.issue(authorId);
-  const authorName = nameOf(engineers, author.assigneeAgentId, "the Engineer");
-  const reviewerName = nameOf(engineers, part.assigneeAgentId, "The reviewer");
+  const slot = review.slots?.[index];
+  if (review.parts?.[index] !== part.id || !review.pending || !slot || slot.result) return;
   const model = engineLabel(ended.engine);
+  const chain = panelFor(authorId)[index] ?? [];
+  let next;
   if (!ended.finished || declined(ended)) {
-    const chain = reviewChain(state.task(authorId)?.engine?.kind, cfg.cross_review?.chains);
-    const step = (review.step ?? 0) + 1;
-    const tried = [...(review.tried ?? []), model];
-    const next = chain[step];
+    const tried = [...(slot.tried ?? []), model];
+    next = chain[(slot.step ?? 0) + 1];
+    slot.tried = tried;
+    if (next) slot.step = (slot.step ?? 0) + 1;
+    else slot.result = { failed: true, tried };
     log("cross review declined", { part: part.identifier, engine: model, next: next ? engineLabel(next) : "" });
-    if (!next) {
-      saveReview(authorId, { ...review, pending: undefined, tried });
-      return void (await pc.comment(authorId, closingComment({ outcome: "failed", reviewer: reviewerName, tried, author: authorName })));
-    }
-    saveReview(authorId, { ...review, step, tried });
+  } else {
+    slot.result = { model, verdict: reviewVerdict(ended.reply), reply: String(ended.reply ?? "").slice(0, 20_000) };
+    log("cross review verdict", { part: part.identifier, verdict: slot.result.verdict ?? "none", engine: model });
+  }
+  const done = Object.values(review.slots).every((s) => s.result);
+  const results = Object.keys(review.slots).sort().map((i) => review.slots[i].result);
+  saveReview(authorId, done ? { ...review, heads: { ...review.heads, ...review.pending }, pending: undefined, slots: undefined, last: results.map(({ reply, ...r }) => r) } : review);
+
+  const engineers = await pc.engineerAgents();
+  if (next) {
     await pc.comment(part.id, `${model} ${ended.finished ? "declined the review" : refusedByPolicy(ended) ? "refused the review (its provider flagged the content)" : "didn't finish the review"}; ${engineLabel(next)} takes it.`);
     await pc.setPicker(part.id, pickerFor(next, engineers, part.assigneeAgentId));
     return dispatch({ issue: { id: part.id, identifier: part.identifier, assigneeAgentId: part.assigneeAgentId }, instructions: ended.instructions, event: true });
   }
-  const verdict = reviewVerdict(ended.reply);
-  saveReview(authorId, { ...review, heads: { ...review.heads, ...review.pending }, pending: undefined, tried: [] });
-  log("cross review verdict", { part: part.identifier, verdict: verdict ?? "none", engine: model });
-  if (verdict !== "blocking") return void (await pc.comment(authorId, closingComment({ outcome: verdict === "clean" ? "clean" : "unclear", reviewer: reviewerName, model, round: review.round })));
-  await pc.comment(authorId, findingsComment({ reviewer: reviewerName, model, round: review.round, reply: ended.reply, author: authorName }));
-  await dispatch({ issue: { id: author.id, identifier: author.identifier, assigneeAgentId: author.assigneeAgentId }, instructions: fixInstructions({ reviewer: reviewerName, model, user: cfg.selfName }), event: true });
+  if (!done) return;
+  const author = await pc.issue(authorId);
+  const authorName = nameOf(engineers, author.assigneeAgentId, "the Engineer");
+  const reviewerName = nameOf(engineers, part.assigneeAgentId, "The reviewer");
+  const outcome = roundOutcome(results);
+  log("cross review round", { issue: author.identifier, round: review.round, outcome, results: results.map((r) => (r.failed ? `failed (${r.tried.join(", ")})` : `${r.model}: ${r.verdict ?? "none"}`)) });
+  if (outcome !== "blocking") return void (await pc.comment(authorId, closingComment({ outcome, reviewer: reviewerName, results, round: review.round, author: authorName })));
+  const blocking = results.filter((r) => r.verdict === "blocking");
+  await pc.comment(authorId, findingsComment({ reviewer: reviewerName, reviews: blocking, round: review.round, author: authorName }));
+  await dispatch({ issue: { id: author.id, identifier: author.identifier, assigneeAgentId: author.assigneeAgentId }, instructions: fixInstructions({ reviewer: reviewerName, model: blocking.map((r) => r.model).join(" and "), user: cfg.selfName }), event: true });
 }
 
 async function handleIssue(issue, engineerIds) {
@@ -1504,9 +1544,11 @@ async function crewContext(full) {
   const [agents, kids, own] = await Promise.all([pc.agents(), pc.children(parent.id, ALL_STATUSES), pc.comments(full.id)]);
   const from = new Set([full.description, ...own.filter((c) => Paperclip.isUserInstruction(c)).map((c) => c.body)].map(deliveredFrom).filter(Boolean));
   const others = [];
+  // Each reviewer of a cross-model round reviews on its own, without the other's review (D-78).
+  const reviewing = Boolean(state.get(`xreview-part:${full.id}`));
   for (const k of kids) {
     const persona = agents.find((a) => a.id === k.assigneeAgentId)?.metadata?.persona;
-    if (k.id === full.id || typeof persona?.name !== "string") continue;
+    if (k.id === full.id || typeof persona?.name !== "string" || (reviewing && state.get(`xreview-part:${k.id}`))) continue;
     const comments = await pc.comments(k.id);
     const report = [...comments].reverse().find((c) => !Paperclip.isUserInstruction(c));
     if (from.has(k.identifier)) others.push({ name: persona.name, identifier: k.identifier, conversation: transcript(threadEntries(comments, { user: cfg.selfName, agents, replyBy: persona.name }), { budget: 20_000 }) });
@@ -2014,6 +2056,8 @@ async function runCommand(issue, task, command, { onPublish = () => {} } = {}) {
     running.delete(issue.id);
     reportActivity();
   }
+  // A PR opened or moved by the user's own push or pr is reviewed like one from a turn (D-78).
+  if (!stopping) void maybeCrossReview(issue).catch((err) => log("cross review failed", { issue: issue.identifier, err: String(err.stderr || err.message || err).slice(0, 300) }));
   drainQueue();
 }
 

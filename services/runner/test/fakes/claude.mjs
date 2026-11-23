@@ -75,6 +75,11 @@ if (step === "commit" || step === "clone-commit") {
   writeFileSync(join(repo, "fourth.txt"), "fourth\n");
   git("add", "fourth.txt");
   git("commit", "-qm", "feat: retry the RPC client");
+} else if (step === "fifth") {
+  git("switch", "-qc", "feat/fifth", "origin/main");
+  writeFileSync(join(repo, "fifth.yaml"), "replicas: 2\n");
+  git("add", "fifth.yaml");
+  git("commit", "-qm", "chore: two replicas");
 } else if (step === "amend") {
   // Rewrites the pushed commit, as a rebase does.
   git("switch", "-q", "fix/remove-telos");
@@ -120,7 +125,9 @@ for (const line of tools) {
 const during = [];
 while (lines.length) during.push(take());
 if (during.length) log("claude-mid-run", during);
-const verdict = reviewing && existsSync(verdictFile) ? readFileSync(verdictFile, "utf8").trim() : "clean";
+// The file holds one verdict, or a JSON map of model → verdict for a round with several reviewers.
+const verdictText = reviewing && existsSync(verdictFile) ? readFileSync(verdictFile, "utf8").trim() : "clean";
+const verdict = verdictText.startsWith("{") ? JSON.parse(verdictText)[process.argv[process.argv.indexOf("--model") + 1]] ?? "clean" : verdictText;
 const reply = said ? said : reviewing ? `third.txt:1 has no newline at the end, and nothing tests it.\n\nVERDICT: ${verdict}` : step === "silent" ? "NO_REPLY" : "Checked every repository; nothing needed changing.";
 result({ result: during.length ? `${reply}\n\nAlso, as you asked while I worked: ${during.join(" / ")}` : reply });
 // Anything after this turn ended gets a turn of its own, until the runner closes the input.

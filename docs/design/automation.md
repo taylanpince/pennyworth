@@ -73,6 +73,8 @@ Checks run on the runner's poll: PRs every 2 minutes (one batched GraphQL query 
 
 ### 2. Cross-model review of the crew's own PRs
 
+> **Since D-78 (2026-11-23):** two reviewers at once, each on its own chain (`cross_review.panels`), each in its own part, and a light check (or none) for config repositories (`cross_review.repos`). The sketch below is the first version.
+
 When an Engineer opens a PR, or pushes to one after a review round, the runner asks **Linus** for a review of it, on a model from a **different family** than the one that wrote it. The pairing is config, not prompt:
 
 ```yaml
