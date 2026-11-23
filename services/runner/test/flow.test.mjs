@@ -909,6 +909,45 @@ watches:
     assert.match(adaComments().find((c) => c.includes("no blocking findings")), /^\*\*Linus reviewed the PR on Claude Code \(claude-opus-5-5\) \(round 1\): no blocking findings\.\*\* The PR stays a draft/);
   });
 
+  it("reviews a PR the user asked Linus for on the same two-model panel, and answers 'post it' as Linus", async () => {
+    // Linus is on Claude Sonnet here, so the panel is Claude's (configured to two other Claude models for the fake).
+    const configFile = join(runnerOptions.env.PENNYWORTH_CONFIG_DIR, "runner.yaml");
+    const config = readFileSync(configFile, "utf8");
+    writeFileSync(configFile, `${config.slice(0, config.indexOf("cross_review:"))}cross_review:\n  panels:\n    claude:\n      - [{ engine: claude, model: claude-opus-5-5 }]\n      - [{ engine: claude, model: claude-fable-5-1 }]\n`);
+    const exited = new Promise((resolve) => runner.once("exit", resolve));
+    runner.kill("SIGTERM");
+    await exited;
+    writeFileSync(join(dir, "review-verdict"), JSON.stringify({ "claude-opus-5-5": "blocking", "claude-fable-5-1": "clean" }));
+    step("none");
+    const pr = "https://github.com/acme/app/pull/42";
+    const task = { id: "mr-task", identifier: "PEN-95", title: "Review Lee's retry PR", status: "todo", assigneeUserId: USER, createdByUserId: USER, createdByAgentId: null, labels: [], description: `Lee asked for a review: ${pr}` };
+    const linus = { id: "mr-linus", identifier: "PEN-96", title: task.title, status: "todo", parentId: task.id, assigneeAgentId: "reviewer", assigneeUserId: null, assigneeAdapterOverrides: { adapterConfig: { engine: "claude", model: "claude-sonnet-5" } }, createdByUserId: USER, createdByAgentId: null, labels: [], description: `Review ${pr}, mostly the backoff.` };
+    for (const i of [task, linus]) paperclip.issues.set(i.id, i), paperclip.comments.set(i.id, []);
+    launch();
+    const linusComments = () => paperclip.comments.get(linus.id).map((c) => c.body);
+    const parts = () => [...paperclip.issues.values()].filter((i) => i.parentId === task.id && i.id !== linus.id && i.assigneeAgentId === "reviewer");
+    await waitFor("both reviews back on Linus's task", () => linusComments().some((c) => c.includes("each model on its own")));
+    assert.equal(parts().length, 2, "a part for each reviewer, as for the crew's PRs");
+    assert.ok(parts().every((p) => /Cross-model review of the PRs Taylan asked for on PEN-96[\s\S]*<!-- pennyworth-runner -->/.test(p.description)));
+    const reviews = claudeRuns().filter((r) => r.prompt.includes("Review the pull request adversarially"));
+    assert.deepEqual(reviews.map((r) => ["claude-opus-5-5", "claude-fable-5-1"].find((m) => r.argv.includes(m))).sort(), ["claude-fable-5-1", "claude-opus-5-5"]);
+    assert.ok(reviews.every((r) => /Taylan asked for this review:\n\n> Review Lee's retry PR[\s\S]*mostly the backoff/.test(r.prompt)), reviews[0].prompt);
+    assert.ok(!claudeRuns().some((r) => r.argv.includes("claude-sonnet-5") && r.prompt.includes("mostly the backoff")), "Linus's own chat doesn't review alongside the panel");
+    assert.ok(linusComments().some((c) => /^Reviewing on Claude Code \(claude-opus-5-5\) and Claude Code \(claude-fable-5-1\), each on its own/.test(c)));
+    const verdict = linusComments().find((c) => c.includes("each model on its own"));
+    assert.match(verdict, /^\*\*Linus reviewed the PR on Claude Code \(claude-opus-5-5\) and Claude Code \(claude-fable-5-1\)\*\*[\s\S]*\*\*On Claude Code \(claude-opus-5-5\): blocking findings\.\*\*[\s\S]*\*\*On Claude Code \(claude-fable-5-1\): no blocking findings\.\*\*/);
+    assert.equal(linus.status, "in_review");
+
+    // Same head, no PR named: Linus's own turn, with both reviews in the conversation, and no new round.
+    paperclip.addComment(linus.id, "Good, post it.");
+    await waitFor("Linus's own turn", () => claudeRuns().some((r) => r.argv.includes("claude-sonnet-5") && r.prompt.includes("Good, post it.")));
+    const own = claudeRuns().find((r) => r.prompt.includes("Good, post it."));
+    assert.match(own.prompt, /On Claude Code \(claude-opus-5-5\): blocking findings/);
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.equal(claudeRuns().filter((r) => r.prompt.includes("Review the pull request adversarially")).length, 2, "no second round");
+    assert.equal(parts().length, 2);
+  });
+
   it("comes back to a task when the agent asked to, and when the Slack thread it came from moves", async () => {
     const state = new State(join(dir, "state"));
     const task = { id: "fu-task", identifier: "PEN-90", title: "Fund the partners", status: "todo", assigneeUserId: USER, createdByUserId: USER, createdByAgentId: null, labels: [], description: "From Slack.\n\n<!-- source:slack:C0FUND:1795097499.513849 -->" };

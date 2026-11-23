@@ -913,3 +913,13 @@ Ubuntu's `bwrap-userns-restrict` AppArmor profile strips capabilities from Bubbl
   - **Long drafts are files:** the bridge's `task_attach` (Alfred and Ursula) attaches a `.md`, `.txt`, `.csv`, `.json` or `.html` the agent wrote to its own part, up to 10 MB, replacing its earlier file of that name. Ursula's rules: a draft that fits one comment goes in a comment; a longer one is attached with a few lines on what changed, never split across comments; a piece published to Primer is commented as its link and what changed.
 - **When upstream fixes it:** drop the matching edit from `patch.mjs`, and the image with it once nothing is left.
 - **Verified:** the patch on a copy of PEN-5797's history (378 KB of messages down to 45 KB, the newest 8 kept); Ursula's retried run on PEN-5797 started with a 55 KB wake; the bridge test for `task_attach`.
+
+## D-80: A PR review the user asks Linus for gets the same two-model panel
+
+- **Problem:** D-78's panel only started on the crew's own PRs (`own-pr:` in the runner's state). When the user assigned Linus a colleague's PR, the runner ran one job on Linus's engine, as before D-72: 24 such tasks from 2026-11-01 to 11-23, nearly all on Codex `gpt-6-sol`, so they missed what D-78's backtest found two vendors catch together.
+- **Decision (the user's: "same as the automatic panel"):**
+  - **A request to Linus that names open PRs starts a panel round** (`manualReview` in `services/runner/src/main.mjs`), through the same `startRound` as the crew's: a part per reviewer, made by the runner with `RUNNER_MARKER`, neither reading the other's review, chains and light repositories as configured. The panel is the one for Linus's engine on the task (`pickedEngine`), or `cross_review.panels.manual` when set. Linus's own chat doesn't review alongside it.
+  - **The first request takes the task's PRs** (title, description and comment); after that a round starts only when the user's comment names a PR whose head moved since the last round. Anything else ("post it", a question, a round still under way) is Linus's own turn, with both reviews in the conversation. No classifier.
+  - **Both reviews come back to the user** on the task they asked on (`panelComment`: blocking first, each under its model, and a line for a reviewer no model could take), and the task goes to review. Nothing is handed to an author, there's no round cap, and posting to GitHub stays Linus's, on the user's word.
+  - **The user's request goes into the reviewers' instructions** under its own line, for what to look at. It can't authorize anything: `authorize()` reads only the user's comments on the reviewer's own part, and there are none.
+  - **Not behind the automation switch (D-75):** it's the user's own request.

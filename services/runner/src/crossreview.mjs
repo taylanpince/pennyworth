@@ -2,7 +2,8 @@
 // opens or updates a PR, Linus reviews it on two models from other families at once, each in a part of
 // its own, since reviewers on different models miss different bugs. A refusal or failure moves that
 // reviewer to the next model in its chain; blocking findings from either go back to the author, whose fix
-// starts the next round. Repositories of config changes get one light check, or none.
+// starts the next round. Repositories of config changes get one light check, or none. A review the user
+// asks Linus for gets the same panel, and both reviews come back to the user rather than to an author.
 // Pure functions (unit-tested): Paperclip, GitHub and the jobs are in main.mjs.
 
 import { EVENT_MARKER } from "./watches.mjs";
@@ -85,21 +86,28 @@ export function declined({ finished, reply, logTail = "" }) {
 
 const list = (prs) => prs.map((p) => `- ${p}`).join("\n");
 
-/** The reviewer's instructions for one round: fixed text from the runner, never the user's words. */
-export function reviewInstructions({ prs, light = [], author, user, round }) {
+/**
+ * The reviewer's instructions for one round: fixed text from the runner. A review the user asked for has no
+ * author on the crew, and carries the user's request (`request`) for what to look at.
+ */
+export function reviewInstructions({ prs, light = [], author, user, round, request }) {
   const all = [...prs, ...light];
   // Config changes posted for another team to approve (D-78): only what would break a deploy matters there.
   const lightAsk = `check only what would break the deploy or the service: a name or reference that doesn't exist, the wrong environment, account or region, a missing role, permission or secret, a value that won't parse. Leave everything else about them out.`;
   const scope = !prs.length
     ? ` ${all.length === 1 ? "It's a configuration change" : "They're configuration changes"} posted for another team to approve, not for a detailed review: ${lightAsk}`
     : ` Look for bugs, security problems, broken edge cases, missing or wrong tests, and changes the task didn't ask for; leave style alone unless it hides a bug. Check claims against the code rather than the PR description. Where you can, show a blocking finding: a failing test or a small probe run in your workspace (not committed), or say why one can't be written.${light.length ? `\n\nThese are configuration changes posted for another team to approve, not for a detailed review; for them, ${lightAsk}\n\n${list(light)}` : ""}`;
-  return `Review ${author}'s pull request${all.length === 1 ? "" : "s"} on this task adversarially, as a second engineer on another model:
+  const again = !(round > 1) ? "" : author
+    ? ` This is round ${round}: your earlier findings and ${author}'s answers are in the conversation. Check they were addressed, and don't repeat a finding ${author} gave a sound reason to keep.`
+    : ` This is round ${round}: your earlier review is in the conversation. Review what changed since, and say which earlier findings still stand.`;
+  const asked = request ? `\n\n${user} asked for this review:\n\n> ${String(request).trim().replace(/\n/g, "\n> ")}` : "";
+  return `Review ${author ? `${author}'s pull request${all.length === 1 ? "" : "s"} on this task` : `the pull request${all.length === 1 ? "" : "s"}`} adversarially, as a second engineer on another model:
 
-${list(prs.length ? prs : light)}
+${list(prs.length ? prs : light)}${asked}
 
-Read ${all.length === 1 ? "it" : "each"} with \`gh pr view <link>\` and \`gh pr diff <link>\`, and the code around the change (\`pennyworth repo <org/repo>\` clones a repository you don't have).${scope}${round > 1 ? ` This is round ${round}: your earlier findings and ${author}'s answers are in the conversation. Check they were addressed, and don't repeat a finding ${author} gave a sound reason to keep.` : ""}
+Read ${all.length === 1 ? "it" : "each"} with \`gh pr view <link>\` and \`gh pr diff <link>\`, and the code around the change (\`pennyworth repo <org/repo>\` clones a repository you don't have).${scope}${again}
 
-Don't change code, commit, push or comment on GitHub: your findings go on this task, where ${author} and ${user} read them. For each finding give file:line, what goes wrong and when, and a fix, and mark it **blocking** (it must be fixed before people review the PR) or **non-blocking**. Then end your reply with exactly one line: \`VERDICT: blocking\` if any finding is blocking, otherwise \`VERDICT: clean\`.`;
+Don't change code, commit, push or comment on GitHub: your findings go on this task, where ${author ? `${author} and ${user} read them` : `${user} reads them`}. For each finding give file:line, what goes wrong and when, and a fix, and mark it **blocking** (it must be fixed before people review the PR) or **non-blocking**. Then end your reply with exactly one line: \`VERDICT: blocking\` if any finding is blocking, otherwise \`VERDICT: clean\`.`;
 }
 
 const quote = (text, max = 12_000) => {
@@ -114,6 +122,22 @@ export function findingsComment({ reviewer, reviews, round, author }) {
   const one = reviews.length === 1;
   const quoted = reviews.map((r) => `${one ? "" : `**On ${r.model}:**\n\n`}> ${quote(r.reply, one ? 12_000 : 8_000)}`).join("\n\n");
   return `**${reviewer} reviewed the PR on ${models(reviews)} (round ${round}) and found blocking issues**: passed to ${author}.\n\n${quoted}\n\n${EVENT_MARKER}`;
+}
+
+/**
+ * The runner's comment on the task the user asked for the review on, once the round is in: every review
+ * ({ model, verdict, reply }) quoted under its model, blocking first, and a line for a reviewer no model
+ * could take ({ failed, tried }). Nothing here reaches GitHub.
+ */
+export function panelComment({ reviewer, results, round }) {
+  const reviews = results.filter((r) => !r.failed).sort((a, b) => Number(b.verdict === "blocking") - Number(a.verdict === "blocking"));
+  const failed = results.filter((r) => r.failed).map((r) => `_No model could take the other review (tried ${r.tried.join(", ")})._`);
+  const verdict = (r) => (r.verdict === "blocking" ? "blocking findings" : r.verdict === "clean" ? "no blocking findings" : "no verdict");
+  const quoted = reviews.map((r) => `**On ${r.model}: ${verdict(r)}.**\n\n> ${quote(r.reply, reviews.length === 1 ? 12_000 : 8_000)}`);
+  const head = reviews.length
+    ? `**${reviewer} reviewed the PR on ${models(reviews)}${round > 1 ? ` (round ${round})` : ""}**, each model on its own. Ask ${reviewer} here to post it on GitHub, or to look again.`
+    : `No model could review the PR; ${reviewer}'s chat says what happened. Ask ${reviewer} here to try again.`;
+  return [head, ...quoted, ...failed, EVENT_MARKER].join("\n\n");
 }
 
 /**

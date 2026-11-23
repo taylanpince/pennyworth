@@ -170,6 +170,8 @@ supervisor:
 # the reviewer role reviews it on two models from other families at once, each in its own part of the task;
 # a reviewer whose model declines or fails hands over to the next in its chain. Blocking findings from either
 # go back to the author, whose new commits start the next round. Nothing goes to GitHub, and the PR stays a draft.
+# A PR review you ask the reviewer role for gets the same panel (keyed by its engine on the task, or `manual`
+# below), whatever the automation switch says; both reviews come back to you, and posting stays on your word (D-80).
 cross_review:
   reviewer: reviewer       # the setup key of the role that reviews (Linus)
   rounds: 3                # review rounds per task before it's over to you
@@ -189,6 +191,9 @@ cross_review:
   #   openrouter:
   #     - [{ engine: claude, model: claude-opus-5-5 }]
   #     - [{ engine: codex, model: gpt-6-astra }]
+  #   manual:              # reviews you ask for, whatever the reviewer's engine (default: its engine's panel)
+  #     - [{ engine: claude, model: claude-opus-5-5 }, { engine: openrouter, model: moonshotai/kimi-k3 }]
+  #     - [{ engine: codex, model: gpt-6-astra }, { engine: openrouter, model: deepseek/deepseek-v4.1-flash }]
 
 # Your comments on your own open tasks → the Assistant ("Process task replies" routine).
 replies:

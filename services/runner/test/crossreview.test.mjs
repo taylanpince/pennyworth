@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { closingComment, declined, refusedByPolicy, findingsComment, fixInstructions, repoMode, reviewInstructions, reviewPanel, reviewVerdict, roundOutcome, roundSlots } from "../src/crossreview.mjs";
+import { closingComment, declined, refusedByPolicy, findingsComment, fixInstructions, panelComment, repoMode, reviewInstructions, reviewPanel, reviewVerdict, roundOutcome, roundSlots } from "../src/crossreview.mjs";
 
 describe("cross-model review", () => {
   it("reviews on two models at once by default, never with the author's family", () => {
@@ -98,5 +98,22 @@ describe("cross-model review", () => {
     assert.match(closingComment({ outcome: "clean", reviewer: "Linus", results: [{ model: "M", verdict: "clean" }, { failed: true, tried: ["A", "B"] }], round: 1 }), /on M \(round 1\): no blocking findings\.\*\* Note: no model could take the other review \(tried A, B\)\. The PR stays/);
     assert.match(closingComment({ outcome: "capped", reviewer: "Linus", rounds: 3, author: "Ada" }), /^3 rounds of review and fixes/);
     assert.match(closingComment({ outcome: "failed", reviewer: "Linus", results: [{ failed: true, tried: ["A", "B"] }, { failed: true, tried: ["C"] }], author: "Ada" }), /tried A, B, C/);
+  });
+
+  it("asks for a review the user wanted without a crew author, with the user's request", () => {
+    const asked = reviewInstructions({ prs: ["https://github.com/acme/app/pull/7"], user: "Taylan", round: 1, request: "Review this.\nFocus on the migration." });
+    assert.match(asked, /^Review the pull request adversarially, as a second engineer on another model:\n\n- https:\/\/github\.com\/acme\/app\/pull\/7\n\nTaylan asked for this review:\n\n> Review this\.\n> Focus on the migration\.\n\nRead it/);
+    assert.match(asked, /your findings go on this task, where Taylan reads them\./);
+    assert.doesNotMatch(asked, /undefined/);
+    assert.match(reviewInstructions({ prs: ["a"], user: "Taylan", round: 2 }), /This is round 2: your earlier review is in the conversation\. Review what changed since/);
+  });
+
+  it("brings every review back to the user, blocking first, under each model", () => {
+    const c = panelComment({ reviewer: "Linus", results: [{ model: "A", verdict: "clean", reply: "fine\n\nVERDICT: clean" }, { model: "B", verdict: "blocking", reply: "bug\n\nVERDICT: blocking" }], round: 1 });
+    assert.match(c, /^\*\*Linus reviewed the PR on B and A\*\*, each model on its own\. Ask Linus here to post it on GitHub, or to look again\.\n\n\*\*On B: blocking findings\.\*\*\n\n> bug[\s\S]*\*\*On A: no blocking findings\.\*\*\n\n> fine/);
+    assert.match(c, /<!-- pennyworth-event -->$/);
+    const one = panelComment({ reviewer: "Linus", results: [{ model: "A", reply: "hm" }, { failed: true, tried: ["X", "Y"] }], round: 2 });
+    assert.match(one, /on A \(round 2\)\*\*[\s\S]*On A: no verdict\.[\s\S]*No model could take the other review \(tried X, Y\)/);
+    assert.match(panelComment({ reviewer: "Linus", results: [{ failed: true, tried: ["X"] }], round: 1 }), /^No model could review the PR/);
   });
 });
