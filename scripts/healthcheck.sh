@@ -140,11 +140,11 @@ else
   printf '  skip  github (not connected: %s)\n' "$(echo "$gh_health" | cut -c1-80)"
 fi
 
-# Jira (D-69)
+# Jira (D-69): listing tools goes through the sign-in; the allowlist may be empty while tools are still being picked.
 jira_health="$(dc exec -T paperclip node -e "fetch('http://jira-mcp:8092/healthz').then(r=>r.text()).then(console.log).catch(e=>{console.log(e.message);process.exit(1)})" 2>/dev/null)"
 if echo "$jira_health" | grep -q '"ok":true'; then
   jiratoken="$(cat "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/jira_mcp_token" 2>/dev/null)"
-  check "jira (whoami)" sh -c "docker compose --env-file '$env_file' exec -T paperclip node /tmp/mcp-call.mjs http://jira-mcp:8092/mcp jira_whoami '{}' '$jiratoken' | grep -q '\"name\"' || { echo 'Jira rejected the sign-in: run scripts/jira-auth.sh'; exit 1; }"
+  check "jira (tools)" sh -c "docker compose --env-file '$env_file' exec -T paperclip node /tmp/mcp-call.mjs http://jira-mcp:8092/mcp --list '$jiratoken' >/dev/null || { echo 'Jira proxy not answering: Reconnect on the board'; exit 1; }"
 else
   printf '  skip  jira (not connected: %s)\n' "$(echo "$jira_health" | cut -c1-80)"
 fi

@@ -53,6 +53,8 @@ export interface Config {
   cloudflare?: { url: string; token: string };
   /** primer-mcp's sign-in endpoints (D-66): off unless the token file exists. */
   primer?: { url: string; token: string };
+  /** jira-mcp's sign-in endpoints (D-69): off unless the token file exists. */
+  jira?: { url: string; token: string };
   /** The off-machine backup's status file (D-58), written by scripts/backup.sh --offsite. */
   backupStatus: string;
 }
@@ -84,6 +86,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     clickhouse: clickhouseConfig(env),
     cloudflare: cloudflareConfig(env),
     primer: primerConfig(env),
+    jira: jiraConfig(env),
     backupStatus: env.BOARD_BACKUP_STATUS ?? join(dirname(env.BOARD_DB ?? "/data/board/board.sqlite"), "backup.json"),
   };
 }
@@ -128,6 +131,12 @@ function primerConfig(env: NodeJS.ProcessEnv): Config["primer"] {
   const file = env.PRIMER_AUTH_TOKEN_FILE ?? "/run/secrets/primer_auth_token";
   if (!existsSync(file)) return undefined;
   return { url: (env.PRIMER_SERVICE_URL ?? "http://primer-mcp:8084").replace(/\/+$/, ""), token: readFileSync(file, "utf8").trim() };
+}
+
+function jiraConfig(env: NodeJS.ProcessEnv): Config["jira"] {
+  const file = env.JIRA_AUTH_TOKEN_FILE ?? "/run/secrets/jira_auth_token";
+  if (!existsSync(file)) return undefined;
+  return { url: (env.JIRA_SERVICE_URL ?? "http://jira-mcp:8092").replace(/\/+$/, ""), token: readFileSync(file, "utf8").trim() };
 }
 
 function internalConfig(env: NodeJS.ProcessEnv): Config["internal"] {

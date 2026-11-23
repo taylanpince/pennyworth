@@ -37,7 +37,7 @@ host (Linux, systemd user services)
     ├── primer-mcp             proxy to your organization's Primer: read documents, publish when you ask
     ├── glean-mcp              proxy to your organization's Glean: company-wide search, reads only
     ├── github-mcp             GitHub issues and pull requests with your gh token: read; comment or open issues when you ask
-    ├── jira-mcp               Jira issues with your Atlassian API token: read and search; open issues or comment when you ask
+    ├── jira-mcp               proxy to Atlassian's hosted MCP: Jira reads and writes when you ask
     ├── grafana-mcp            proxy to Grafana Cloud's MCP server, read/query scopes only, for Engineer jobs (127.0.0.1:3124)
     ├── clickhouse-mcp         proxy to ClickHouse Cloud's MCP server, checked SELECT queries only, for Engineer jobs (127.0.0.1:3127) and the Assistant
     ├── cloudflare-mcp         proxy to Cloudflare's API MCP server, read scopes only, for Engineer jobs (127.0.0.1:3128) and the Assistant
@@ -251,9 +251,9 @@ The Assistant reads GitHub issues and pull requests, including private ones you 
 
 ### Jira issues
 
-The Assistant reads Jira issues with their comments, searches with JQL, and, when you ask ("open a ticket for this in PROJ"), opens an issue or comments on one as you — only in the projects you list in `JIRA_WRITE_PROJECTS` (`.env`). Ursula reads and searches; creating and commenting stay with the Assistant ([D-69](docs/DECISIONS.md)).
+The Assistant reads Jira issues and searches, and, when you ask ("open a ticket for this in PROJ"), writes — only in the projects you list in `JIRA_WRITE_PROJECTS` (`.env`). It goes through Atlassian's own hosted MCP server, with Jira-only OAuth scopes and an allowlist of tools ([D-69](docs/DECISIONS.md)).
 
-- **Setup:** `scripts/jira-auth.sh https://<site>.atlassian.net you@example.com` (paste the [API token](https://id.atlassian.com/manage-profile/security/api-tokens) when asked), then `docker compose up -d jira-mcp`.
+- **Setup:** register an OAuth 2.0 (3LO) app at [developer.atlassian.com/console](https://developer.atlassian.com/console/myapps/) — callback `http://127.0.0.1:3120/jira/callback`, scopes `read:jira-user read:jira-work write:jira-work offline_access` — put its client id in `ATLASSIAN_CLIENT_ID` (`.env`), then `docker compose up -d --build jira-mcp` and click **Connect** on the Settings page.
 
 ## Coding jobs
 

@@ -3,7 +3,7 @@ import pino from "pino";
 import { WhatsAppAuth } from "./whatsapp.js";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
-import { ClickHouseAuth, CloudflareAuth, GleanAuth, GrafanaAuth, PrimerAuth } from "./mcpauth.js";
+import { ClickHouseAuth, CloudflareAuth, GleanAuth, GrafanaAuth, JiraAuth, PrimerAuth } from "./mcpauth.js";
 import { GoogleAuth } from "./google.js";
 import { Paperclip } from "./paperclip.js";
 import { startStatsSync } from "./statssync.js";
@@ -43,7 +43,8 @@ const grafana = cfg.grafana && new GrafanaAuth(cfg.grafana.url, cfg.grafana.toke
 const clickhouse = cfg.clickhouse && new ClickHouseAuth(cfg.clickhouse.url, cfg.clickhouse.token, log);
 const cloudflare = cfg.cloudflare && new CloudflareAuth(cfg.cloudflare.url, cfg.cloudflare.token, log);
 const primer = cfg.primer && new PrimerAuth(cfg.primer.url, cfg.primer.token, log);
-const common = { paperclip, store, log, staticDir: cfg.staticDir, timezone: cfg.timezone, workdays: cfg.workdays, slackTeams: cfg.slackTeams, lan: cfg.lan, activity: {}, google, slackAuth, whatsapp, telegram, glean, grafana, clickhouse, cloudflare, primer, backupStatus: cfg.backupStatus };
+const jira = cfg.jira && new JiraAuth(cfg.jira.url, cfg.jira.token, log);
+const common = { paperclip, store, log, staticDir: cfg.staticDir, timezone: cfg.timezone, workdays: cfg.workdays, slackTeams: cfg.slackTeams, lan: cfg.lan, activity: {}, google, slackAuth, whatsapp, telegram, glean, grafana, clickhouse, cloudflare, primer, jira, backupStatus: cfg.backupStatus };
 const server = createApp({ ...common, allowedHosts: cfg.allowedHosts, mode: "local" });
 server.listen(cfg.port, "0.0.0.0", () => log.info({ port: cfg.port, hosts: cfg.allowedHosts }, "board listening"));
 // Phones on the home network (D-23): a separate port, paired devices only.

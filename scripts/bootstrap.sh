@@ -68,13 +68,13 @@ gen_secret cloudflare_mcp_token  # the runner's Engineer jobs, on 127.0.0.1:3128
 gen_secret cloudflare_auth_token # the board's Cloudflare sign-in state and sign-in
 gen_secret github_mcp_token
 gen_secret jira_mcp_token
+gen_secret jira_auth_token   # the board's Jira sign-in endpoints on jira-mcp
 gen_secret whatsapp_auth_token
 gen_secret whatsapp_mcp_token
 gen_secret board_internal_token   # the board's internal API (D-25)
 placeholder paperclip_ops_key ""
 placeholder google_oauth.json "{}"
 placeholder github_token ""      # the user's gh token: scripts/github-auth.sh (D-39)
-placeholder jira_auth '{}'       # baseUrl/email/token: scripts/jira-auth.sh (D-69)
 chmod 0600 "$PENNYWORTH_SECRETS_DIR"/*
 mkdir -p "$PENNYWORTH_SECRETS_DIR/slack" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/slack"
 mkdir -p "$PENNYWORTH_SECRETS_DIR/telegram" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/telegram"
@@ -94,6 +94,7 @@ grep -q 'names: \[\]' "$config_dir/system.yaml" && say "edit self.names/self.ema
 echo "Data"
 data="${PENNYWORTH_DATA_DIR:-./data}"
 mkdir -p "$data/paperclip" "$data/ops-mcp" "$data/board"
+mkdir -p "$PENNYWORTH_SECRETS_DIR/jira" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/jira"
 mkdir -p "$PENNYWORTH_SECRETS_DIR/whatsapp"
 chmod 0700 "$PENNYWORTH_SECRETS_DIR/whatsapp"
 umask 022

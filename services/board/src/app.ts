@@ -22,6 +22,7 @@ import { TelegramAuthFailed, type TelegramAuth } from "./telegram.js";
 import { addDays, nextWorkday, type Weekday } from "./recurrence.js";
 import { readBackup } from "./backup.js";
 import { connectionsView, HostReportSchema, type HostReport } from "./connections.js";
+import type { JiraAuth } from "./mcpauth.js";
 import { RunnerPollSchema, SIGNIN_PROVIDERS, SignIns, type SignInProvider } from "./signins.js";
 import { BUCKETS, isBucket, localDate, type Store } from "./store.js";
 
@@ -62,6 +63,7 @@ export interface AppOptions {
   cloudflare?: CloudflareAuth;
   /** Primer sign-in state and sign-in (D-66). */
   primer?: PrimerAuth;
+  jira?: JiraAuth;
   /** The off-machine backup's status file (D-58); no banner without it. */
   backupStatus?: string;
 }
@@ -629,7 +631,7 @@ export function createApp(opts: AppOptions): Server {
   const connectionFlows = new Map<string, { state: string; expires: number }>();
   async function connectionsNow(maxAgeMs: number) {
     const ask = <T,>(p: Promise<T> | undefined) => (p ? p.then((v) => v ?? null, () => null) : Promise.resolve(undefined));
-    const [google, telegram, slack, whatsapp, glean, grafana, clickhouse, cloudflare, primer] = await Promise.all([
+    const [google, telegram, slack, whatsapp, glean, grafana, clickhouse, cloudflare, primer, jira] = await Promise.all([
       ask(opts.google?.status(maxAgeMs)),
       ask(opts.telegram?.status(maxAgeMs)),
       ask(opts.slackAuth?.call("GET", "status") as Promise<{ configured?: boolean; connected?: boolean }> | undefined),
@@ -639,8 +641,9 @@ export function createApp(opts: AppOptions): Server {
       ask(opts.clickhouse?.status(maxAgeMs)),
       ask(opts.cloudflare?.status(maxAgeMs)),
       ask(opts.primer?.status(maxAgeMs)),
+      ask(opts.jira?.status(maxAgeMs)),
     ]);
-    const proxies = Object.fromEntries(Object.entries({ glean, grafana, clickhouse, cloudflare, primer }).filter(([, v]) => v !== undefined));
+    const proxies = Object.fromEntries(Object.entries({ glean, grafana, clickhouse, cloudflare, primer, jira }).filter(([, v]) => v !== undefined));
     // After a board restart there's no report from the laptop yet: ask for one (the runner answers within 30 seconds).
     if (!shared.host) shared.checkHost = true;
     return {
@@ -685,7 +688,7 @@ export function createApp(opts: AppOptions): Server {
     },
     {
       // Hide a connection's banner while its state lasts, or show it again (D-67).
-      method: "POST", path: /^\/api\/banners\/(google|telegram|glean|grafana|clickhouse|cloudflare|primer)\/(hide|show)$/,
+      method: "POST", path: /^\/api\/banners\/(google|telegram|glean|grafana|clickhouse|cloudflare|primer|jira)\/(hide|show)$/,
       handle: async (m, body) => {
         if (m[2] === "show") store.hideBanner(m[1]!, null);
         else store.hideBanner(m[1]!, parse(z.object({ since: z.string().min(1).max(4000) }).strict(), body).since);
@@ -772,7 +775,7 @@ export function createApp(opts: AppOptions): Server {
         const folded = foldedChildren([...open, ...closed], ctx.assignees);
         store.placeNew(open.filter((i) => !folded.has(i.id)).map((i) => ({ id: i.id, createdAt: i.createdAt, status: i.status })));
         const recurring = new Map([...store.allRecurring()].map(([id, r]) => [id, { summary: recurringView(r, opts.timezone).summary, nextRun: r.nextRun, paused: r.paused }]));
-        const [busy, google, telegram, glean, grafana, clickhouse, cloudflare] = await Promise.all([working(ctx), opts.google?.status(), opts.telegram?.status(), opts.glean?.status(), opts.grafana?.status(), opts.clickhouse?.status(), opts.cloudflare?.status()]);
+        const [busy, google, telegram, glean, grafana, clickhouse, cloudflare, jira] = await Promise.all([working(ctx), opts.google?.status(), opts.telegram?.status(), opts.glean?.status(), opts.grafana?.status(), opts.clickhouse?.status(), opts.cloudflare?.status(), opts.jira?.status()]);
         const byId = new Map([...open, ...closed].map((i) => [i.id, i]));
         const withSubtasks = [...new Set([...open, ...closed].filter((i) => folded.has(i.id) && usersOwn(i, ctx)).map((i) => folded.get(i.id)!))].flatMap((id) => byId.get(id) ?? []);
         const subtasks = await subtaskCounts(withSubtasks);
@@ -1147,6 +1150,7 @@ export function createApp(opts: AppOptions): Server {
     clickhouse: { name: "ClickHouse", secret: "clickhouse_auth_token", connect: "/clickhouse/connect", callback: "/clickhouse/callback" },
     cloudflare: { name: "Cloudflare", secret: "cloudflare_auth_token", connect: "/cloudflare/connect", callback: "/cloudflare/callback" },
     primer: { name: "Primer", secret: "primer_auth_token", connect: "/primer/connect", callback: "/primer/callback" },
+    jira: { name: "Jira", secret: "jira_auth_token", connect: "/jira/connect", callback: "/jira/callback" },
   } as const;
   const signInFor = (path: string) => (Object.keys(SIGN_INS) as (keyof typeof SIGN_INS)[]).find((k) => SIGN_INS[k].connect === path || SIGN_INS[k].callback === path);
 

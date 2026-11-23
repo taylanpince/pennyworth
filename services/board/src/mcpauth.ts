@@ -11,7 +11,7 @@ export interface McpAuthStatus {
 }
 
 /**
- * Sign-in state from an MCP proxy that signs in with OAuth (glean-mcp, D-38; grafana-mcp; clickhouse-mcp, D-57; cloudflare-mcp, D-64), and
+ * Sign-in state from an MCP proxy that signs in with OAuth (glean-mcp, D-38; grafana-mcp; clickhouse-mcp, D-57; cloudflare-mcp, D-64; jira-mcp, D-69), and
  * signing in through it, like Google's Reconnect (D-36): the board sends the browser to the
  * service's sign-in, which sends it back to the board's callback, and the proxy exchanges the code
  * and keeps the token. The board holds only the proxy's auth token; it never sees a service token.
@@ -99,5 +99,12 @@ export class CloudflareAuth extends McpAuth {
 export class PrimerAuth extends McpAuth {
   constructor(baseUrl: string, token: string, log?: Logger, fetchImpl?: typeof fetch) {
     super("Primer", "primer-mcp", baseUrl, token, log, fetchImpl);
+  }
+}
+
+/** Jira, through Atlassian's hosted MCP server (D-69): signed in from Settings, like the others. */
+export class JiraAuth extends McpAuth {
+  constructor(baseUrl: string, token: string, log?: Logger, fetchImpl?: typeof fetch) {
+    super("Jira", "jira-mcp", baseUrl, token, log, fetchImpl);
   }
 }

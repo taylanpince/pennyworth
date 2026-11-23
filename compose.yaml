@@ -391,9 +391,10 @@ services:
       - backplane
       - egress
 
-  # Jira issues: read and search for the Assistant and the Writer, and, in JIRA_WRITE_PROJECTS,
-  # open an issue or comment on one when the user asks (D-69). Holds the user's Atlassian API token;
-  # services/jira-mcp/src/jira.ts allows only those requests.
+  # Jira issues through Atlassian's hosted MCP server (mcp.atlassian.com, D-69): reads, and the
+  # writes the user asks for, Jira scopes only, for the Assistant and the Writer. A proxy like the
+  # other hosted MCPs: only the allowlisted tools are exposed (src/policy.ts), and the board signs
+  # in through /auth/* with its own token.
   jira-mcp:
     <<: *hardening
     build: ./services/jira-mcp
@@ -403,12 +404,19 @@ services:
     tmpfs:
       - /tmp:size=16m
     environment:
-      JIRA_AUTH_FILE: /run/secrets/jira_auth
-      JIRA_WRITE_PROJECTS: "${JIRA_WRITE_PROJECTS:-}"
+      JIRA_MCP_URL: "${JIRA_MCP_URL:-https://mcp.atlassian.com/v1/mcp}"
+      ATLASSIAN_CLIENT_ID: "${ATLASSIAN_CLIENT_ID:-}"
+      JIRA_STATE_DIR: /state
+      JIRA_TOOL_ALLOWLIST: "${JIRA_TOOL_ALLOWLIST:-}"
       MCP_TOKEN_FILE: /run/secrets/jira_mcp_token
+      # The board's sign-in endpoints: state, and starting or finishing a sign-in.
+      JIRA_AUTH_TOKEN_FILE: /run/secrets/jira_auth_token
+    volumes:
+      # Read-write: the sign-in's token pair, refreshed here.
+      - ${PENNYWORTH_SECRETS_DIR}/jira:/state
     secrets:
-      - jira_auth
       - jira_mcp_token
+      - jira_auth_token
     dns: [1.1.1.1, 8.8.8.8]   # see paperclip
     networks:
       - backplane
@@ -532,11 +540,11 @@ secrets:
     file: ${PENNYWORTH_SECRETS_DIR}/cloudflare_auth_token
   github_mcp_token:
     file: ${PENNYWORTH_SECRETS_DIR}/github_mcp_token
-  # The user's Atlassian API token (scripts/jira-auth.sh), for jira-mcp only.
-  jira_auth:
-    file: ${PENNYWORTH_SECRETS_DIR}/jira_auth
   jira_mcp_token:
     file: ${PENNYWORTH_SECRETS_DIR}/jira_mcp_token
+  # The board's Jira sign-in endpoints on jira-mcp.
+  jira_auth_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/jira_auth_token
   # The user's gh token (scripts/github-auth.sh), for github-mcp only.
   github_token:
     file: ${PENNYWORTH_SECRETS_DIR}/github_token

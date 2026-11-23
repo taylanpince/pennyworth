@@ -123,8 +123,8 @@ for c in $containers; do
       ;;
     *jira-mcp*)
       [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "jira-mcp: no published ports" || fail "jira-mcp publishes ports"
-      ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -q . \
-        && pass "jira-mcp: only its secrets mounted" || fail "jira-mcp has unexpected mounts: $mounts"
+      [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
+        && pass "jira-mcp: only its own token directory mounted" || fail "jira-mcp has unexpected mounts: $mounts"
       ;;
     *board*)
       # 3120 is the trusted local board; 3121 (LAN, D-23) may be published, but only serves paired devices.
@@ -316,24 +316,12 @@ gh_mutations="$(sed -n '/^export const GRAPHQL/,/^} as const;/p' services/github
 [ "$gh_mutations" = "addProjectV2ItemById updateProjectV2ItemFieldValue " ] && grep -q 'GRAPHQL_DOCS.has(' services/github-mcp/src/github.ts \
   && pass "github-mcp: GraphQL limited to fixed documents whose only mutations add an issue to a project and set its status" || fail "github-mcp: unexpected GraphQL mutations: $gh_mutations"
 
-# Jira (D-69): the user's Atlassian API token can do anything the user can; the guard allows fixed
-# reads plus, in JIRA_WRITE_PROJECTS, creating an issue (with parent, assignee and a post-create
-# transition) and commenting on one. Nothing else.
-jira_routes="$(sed -n '/^export const ROUTES/,/^\];/p' services/jira-mcp/src/jira.ts | grep '^  { method:')"
-bad_jira="$(echo "$jira_routes" | grep -v '{ method: "GET", path: ' | grep -vxF \
-  -e '  { method: "POST", path: /^\/rest\/api\/3\/issue$/ },' \
-  -e '  { method: "POST", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/comment$`) },' \
-  -e '  { method: "POST", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/transitions$`) },' \
-  -e '  { method: "POST", path: /^\/rest\/api\/3\/search\/jql$/ },' \
-  -e '  { method: "PUT", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}$`) },' \
-  -e '  { method: "PUT", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/assignee$`) },' || true)"
-jira_fields="$(sed -n '/^const BODY_FIELDS/,/^\];/p' services/jira-mcp/src/jira.ts)"
-[ -n "$jira_routes" ] && [ -z "$bad_jira" ] && grep -q 'guard(method, path, opts.body)' services/jira-mcp/src/jira.ts && [ "$(grep -c 'fetchImpl(' services/jira-mcp/src/jira.ts)" = 1 ] \
-  && [ "$(echo "$jira_fields" | grep -c 'fields: \[')" = 6 ] && grep -q 'this.writable(issue.fields.project.key, "commenting")' services/jira-mcp/src/jira.ts \
-  && grep -q 'this.writable(input.project, "opening issues")' services/jira-mcp/src/jira.ts \
-  && grep -qF '{ body: { transition: { id: t.id } } }' services/jira-mcp/src/jira.ts \
-  && grep -q 'this.writable(before.fields.project.key, "changing issues")' services/jira-mcp/src/jira.ts \
-  && pass "jira-mcp: every request goes through the guard; the only writes are creating an issue (parent, assignee, one transition to its status), changing one (parent, assignee, transition) and commenting, in the allowed projects, checked in code (services/jira-mcp/src/jira.ts)" || fail "jira-mcp: unexpected Jira requests allowed: $bad_jira"
+# Jira (D-69) proxies Atlassian's hosted MCP server: the sign-in asks for Jira scopes only, and the
+# sign-in is refused if Atlassian grants anything more; only the tools in the allowlist are exposed.
+[ "$(grep -c 'read:jira-user\|read:jira-work\|write:jira-work\|offline_access' services/jira-mcp/src/signin.ts)" -ge 1 ] && grep -q 'granted more than Pennyworth asks for' services/jira-mcp/src/signin.ts \
+  && [ "$(sed -n '/^export const DEFAULT_ALLOWLIST/p' services/jira-mcp/src/policy.ts)" = "export const DEFAULT_ALLOWLIST: string[] = [];" ] \
+  && grep -q 'allow.has(name)' services/jira-mcp/src/main.ts \
+  && pass "jira-mcp: Atlassian scopes limited to Jira reads, writes and offline_access (refused if wider); no upstream tool is exposed unless allowlisted (services/jira-mcp/src/policy.ts)" || fail "jira-mcp: the Atlassian MCP boundary changed"
 # The runner merges the PRs a task lists (D-46): its only GitHub writes are merge and update-branch (REST, checked
 # against merges.WRITES) and marking a draft ready (one fixed GraphQL mutation). Pushes and draft PRs stay on the exact word.
 merge_writes="$(sed -n '/^export const WRITES/,/^\];/p' services/runner/src/merges.mjs | grep -oE 'method: "[A-Z]+", path: /[^ ]+/' | tr '\n' ' ')"
