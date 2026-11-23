@@ -21,7 +21,7 @@ host (NixOS, user taylan)
 ├── transcript watcher (systemd --user .path) → signed webhook → "Meeting scan"
 ├── pennyworth-backup (systemd --user timer, hourly) → scripts/backup.sh --offsite → encrypted restic snapshot in the user's bucket (D-58)
 └── docker compose (project "pennyworth")
-    ├── paperclip            pinned ghcr image, 127.0.0.1:3100, Codex agents inside
+    ├── paperclip            pinned ghcr image with our patches (services/paperclip, D-79), 127.0.0.1:3100, Codex agents inside
     ├── ops-mcp              TypeScript: transcripts, matcher, vault writer, routing, review replies, tasks; reference docs (D-38);
     │                        the user's writing voice guide, lessons added on their word (D-47)
     ├── google-workspace-mcp read-only Calendar/Drive/Docs/Gmail, multi-account; sign-in state and board reconnect (D-36)
@@ -98,7 +98,7 @@ npx tsc --noEmit -p services/<svc>/tsconfig.json   # typecheck TS services
 
 # deploy
 docker compose up -d --build <ops-mcp|google-workspace-mcp|slack-mcp|telegram-mcp|primer-mcp|glean-mcp|github-mcp|grafana-mcp|clickhouse-mcp|cloudflare-mcp|jira-mcp|board>   # after code changes
-docker compose up -d paperclip                     # after compose env/entrypoint changes
+docker compose up -d paperclip                     # after compose env/entrypoint changes (--build after services/paperclip changes)
 node scripts/paperclip-setup.mjs                   # after config/paperclip.yaml or config/agents/*.md changes (idempotent)
 systemctl --user restart pennyworth-runner         # after services/runner changes
 # the tasks bridge is a mounted file: changes apply on the next agent run
@@ -161,6 +161,8 @@ scripts/backup.sh --verify                         # restore the latest off-mach
 
 ### Paperclip (v2026.1001.0)
 
+- **We build Paperclip's image (D-79):** `services/paperclip/patch.mjs` edits the pinned release by exact text, and the build fails when an anchor no longer matches. After changing it, or the base digest: `docker compose build paperclip && docker compose up -d paperclip`. Read the patch before upgrading, and drop an edit once upstream ships its fix.
+- **A wake carries a bounded history (D-79).** Unpatched, Paperclip put a task's whole comment history into one environment variable, and past 128 KiB every wake on that task failed with `spawn E2BIG` (PEN-5797). Now the newest 40 KB is sent, long comments cut, and the agent reads the rest with `task_comments`. Still, never have an agent split a long text across comments: `task_attach` makes it a file.
 - **Auth and access:**
   - Authenticated+private mode needs `PAPERCLIP_ALLOWED_HOSTNAMES` to include `paperclip` for container-to-container calls (hostname guard).
   - Better Auth endpoints need an `Origin` header.

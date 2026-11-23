@@ -64,6 +64,22 @@ async function apiBytes(path) {
   return Buffer.from(await res.arrayBuffer());
 }
 
+async function apiUpload(path, name, type, data) {
+  if (!KEY) throw new Error("PAPERCLIP_API_KEY is not set (only available inside a Paperclip run)");
+  const headers = { authorization: `Bearer ${KEY}`, accept: "application/json" };
+  if (RUN) headers["x-paperclip-run-id"] = RUN;
+  const form = new FormData();
+  form.append("file", new Blob([new Uint8Array(data)], { type }), name);
+  const res = await fetch(`${API}${path}`, { method: "POST", headers, body: form, signal: AbortSignal.timeout(60_000) });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Paperclip POST ${path} → ${res.status}: ${text.slice(0, 300)}`);
+  return JSON.parse(text);
+}
+
+// What an agent can attach with task_attach: text it wrote, in the types Paperclip takes by default.
+const ATTACH_TYPES = { md: "text/markdown", txt: "text/plain", csv: "text/csv", json: "application/json", html: "text/html" };
+const MAX_ATTACH = 10 * 1024 * 1024;
+
 // Files on a task (D-43): text is read as text, plain images as images; a PDF through the text
 // version the board attaches next to it (<name>.txt).
 const TEXT_FILE = /^(text\/|application\/(json|xml|yaml|x-yaml|toml|sql|javascript|x-sh|x-ndjson)$)/;
@@ -832,6 +848,34 @@ const TOOLS = {
     run: async ({ issue, body }) => {
       const c = await api("POST", `/api/issues/${issueRef(issue)}/comments`, { body: String(body).slice(0, 20_000) });
       return { comment_id: c.id };
+    },
+  },
+  task_attach: {
+    description:
+      "Attach a text file you wrote to your own part of the task: a long draft or report (.md), a table (.csv), a page (.html). Use it for anything too long for one comment, never several comments in parts; then comment a few lines on what it is. The user downloads it from the board and the crew reads it with task_files. A file with the same name replaces your earlier one.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        issue: { type: "string", description: "your part of the task, e.g. PEN-12" },
+        name: { type: "string", description: "the file name, e.g. incident-report.md" },
+        content: { type: "string" },
+      },
+      required: ["issue", "name", "content"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: async ({ issue, name, content }) => {
+      const current = await api("GET", `/api/issues/${issueRef(issue)}`);
+      if (!(await isOwnPart(current))) throw new Error("files can only be attached to your own part of the user's task");
+      const file = String(name).trim();
+      const type = ATTACH_TYPES[/\.([a-z]+)$/i.exec(file)?.[1]?.toLowerCase()];
+      if (!type || !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}$/.test(file)) throw new Error("name the file like report.md: letters, digits, spaces, dots and dashes, ending in .md, .txt, .csv, .json or .html");
+      const data = Buffer.from(String(content), "utf8");
+      if (data.length > MAX_ATTACH) throw new Error("the file is over 10 MB");
+      const earlier = (await api("GET", `/api/issues/${encodeURIComponent(current.id)}/attachments`)).filter((a) => a.originalFilename === file);
+      const a = await apiUpload(`/api/companies/${encodeURIComponent(COMPANY)}/issues/${encodeURIComponent(current.id)}/attachments`, file, type, data);
+      for (const old of earlier) await api("DELETE", `/api/attachments/${encodeURIComponent(old.id)}`).catch(() => {});
+      return { file: a.id, name: file, bytes: data.length, replaced: earlier.length > 0 };
     },
   },
   board_overview: {

@@ -14,8 +14,10 @@ x-hardening: &hardening
 services:
   paperclip:
     <<: *hardening
-    # Pinned upstream release (2026.1001.0, commit 8f8a0ab7) by digest. Update deliberately.
-    image: ghcr.io/paperclipai/paperclip:2026.1001.0@sha256:08dbadebd4d40550eb336c25c3691f582322a88bae3f1cca101c5dd096bdc9d3
+    # Pinned upstream release (2026.1001.0, commit 8f8a0ab7) by digest in services/paperclip/Dockerfile, with our
+    # patches (D-79). Update deliberately.
+    build: services/paperclip
+    image: pennyworth-paperclip:2026.1001.0-p1
     user: "${PUID:-1000}:${PGID:-100}"
     # Read the auth secret from a file instead of putting its value in this file.
     entrypoint:
