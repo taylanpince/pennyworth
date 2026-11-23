@@ -46,6 +46,10 @@ mcp_servers:
   github:
     url: http://github-mcp:8086/mcp
     bearer_token_env_var: PENNYWORTH_GITHUB_MCP_TOKEN
+  # Jira issues: read and search; create an issue or comment in JIRA_WRITE_PROJECTS when asked (D-69).
+  jira:
+    url: http://jira-mcp:8092/mcp
+    bearer_token_env_var: PENNYWORTH_JIRA_MCP_TOKEN
   # ClickHouse Cloud, reads only: service and schema reads and checked SELECTs (D-57).
   clickhouse:
     url: http://clickhouse-mcp:8088/mcp
@@ -195,7 +199,7 @@ agents:
     timeout_sec: 3600
     # Public web pages and search via OpenAI's cached index only (D-19).
     web_search: cached
-    mcp_servers: [slack, telegram, google_workspace, primer, glean, github, clickhouse, cloudflare, paperclip_tasks, ops_mcp]
+    mcp_servers: [slack, telegram, google_workspace, primer, glean, github, clickhouse, cloudflare, jira, paperclip_tasks, ops_mcp]
     enabled_tools:
       # Reads only, on request (D-29); the scout tools stay with the Telegram Scout.
       telegram: [list_allowed_chats, read_chat_history, search_chat_history, get_new_messages]
@@ -206,6 +210,8 @@ agents:
       slack: [slack_search_public, slack_search_public_and_private, slack_search_channels, slack_search_users, slack_read_channel, slack_read_thread, slack_read_user_profile, slack_list_user_channels, slack_send_message_draft]
       # Writes only when the user asks, in GITHUB_COMMENT_ORGS (D-39, D-42, D-46).
       github: [github_whoami, github_issue_read, github_search_issues, github_issue_comment, github_issue_create, github_issue_update, github_pr_review, github_rerun_failed]
+      # Reads, plus creating an issue or commenting in JIRA_WRITE_PROJECTS when the user asks (D-69).
+      jira: [jira_whoami, jira_issue_read, jira_search, jira_issue_create, jira_issue_comment]
       google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
       # Reads only; clickhouse-mcp checks every query (D-57).
       clickhouse: [get_organizations, get_services_list, get_service_details, list_databases, list_tables, run_select_query]
@@ -229,7 +235,7 @@ agents:
     reasoning_effort: medium
     timeout_sec: 3600
     web_search: cached
-    mcp_servers: [slack, telegram, google_workspace, primer, glean, github, paperclip_tasks, ops_mcp]
+    mcp_servers: [slack, telegram, google_workspace, primer, glean, github, jira, paperclip_tasks, ops_mcp]
     enabled_tools:
       telegram: [list_allowed_chats, read_chat_history, search_chat_history, get_new_messages]
       ops_mcp: [obsidian_search, obsidian_read, obsidian_read_document_map, voice_note_read, voice_note_add, knowledge_list, knowledge_index, knowledge_search, knowledge_read]
@@ -238,6 +244,8 @@ agents:
       slack: [slack_search_public, slack_search_public_and_private, slack_search_channels, slack_search_users, slack_read_channel, slack_read_thread, slack_read_user_profile, slack_list_user_channels, slack_send_message_draft]
       # Reads only: comments, issues and reviews stay with the Assistant.
       github: [github_whoami, github_issue_read, github_search_issues]
+      # Reads only: comments, issues and transitions stay with the Assistant.
+      jira: [jira_whoami, jira_issue_read, jira_search]
       google_workspace: [docs_read, drive_search_files, drive_read_file, drive_list_recent_files, calendar_list_events, calendar_search_events, calendar_get_event, gmail_search, gmail_read_thread]
       paperclip_tasks: [task_current, task_get, task_comments, task_files, task_file_read, task_search, task_list, task_comment, task_handoff, task_set_status, task_pass_on, memory_recall, memory_search, memory_remember, memory_propose]
 

@@ -22,7 +22,7 @@ services:
       - /bin/sh
       - -c
       # Also exports the bearer tokens Codex sends to ops-mcp, google-workspace-mcp, slack-mcp, telegram-mcp, primer-mcp, glean-mcp, github-mcp,
-      # clickhouse-mcp and cloudflare-mcp (bearer_token_env_var in the shared Codex config). $$ escapes compose interpolation.
+      # clickhouse-mcp, cloudflare-mcp and jira-mcp (bearer_token_env_var in the shared Codex config). $$ escapes compose interpolation.
       - >-
         export BETTER_AUTH_SECRET="$$(cat /run/secrets/paperclip_auth_secret)"
         PAPERCLIP_AGENT_JWT_SECRET="$$(cat /run/secrets/paperclip_agent_jwt_secret)"
@@ -33,6 +33,7 @@ services:
         PENNYWORTH_PRIMER_MCP_TOKEN="$$(cat /run/secrets/primer_mcp_token)"
         PENNYWORTH_GLEAN_MCP_TOKEN="$$(cat /run/secrets/glean_mcp_token)"
         PENNYWORTH_GITHUB_MCP_TOKEN="$$(cat /run/secrets/github_mcp_token)"
+        PENNYWORTH_JIRA_MCP_TOKEN="$$(cat /run/secrets/jira_mcp_token)"
         PENNYWORTH_CLICKHOUSE_MCP_TOKEN="$$(cat /run/secrets/clickhouse_mcp_token)"
         PENNYWORTH_CLOUDFLARE_MCP_TOKEN="$$(cat /run/secrets/cloudflare_mcp_token)"
         PENNYWORTH_BOARD_TOKEN="$$(cat /run/secrets/board_internal_token)"
@@ -76,6 +77,8 @@ services:
       - clickhouse_mcp_token
       # The Assistant's Cloudflare reads (D-64).
       - cloudflare_mcp_token
+      # The Assistant's and the Writer's Jira tools (D-69).
+      - jira_mcp_token
       # The board's internal API, for the Assistant's task_schedule / task_recurring (D-25).
       - board_internal_token
     pids_limit: 2048
@@ -388,6 +391,29 @@ services:
       - backplane
       - egress
 
+  # Jira issues: read and search for the Assistant and the Writer, and, in JIRA_WRITE_PROJECTS,
+  # open an issue or comment on one when the user asks (D-69). Holds the user's Atlassian API token;
+  # services/jira-mcp/src/jira.ts allows only those requests.
+  jira-mcp:
+    <<: *hardening
+    build: ./services/jira-mcp
+    image: pennyworth/jira-mcp:local
+    user: "${PUID:-1000}:${PGID:-100}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    environment:
+      JIRA_AUTH_FILE: /run/secrets/jira_auth
+      JIRA_WRITE_PROJECTS: "${JIRA_WRITE_PROJECTS:-}"
+      MCP_TOKEN_FILE: /run/secrets/jira_mcp_token
+    secrets:
+      - jira_auth
+      - jira_mcp_token
+    dns: [1.1.1.1, 8.8.8.8]   # see paperclip
+    networks:
+      - backplane
+      - egress
+
   # The task board (D-22): Today/Tomorrow/Later over your Paperclip tasks. Acts as you through the
   # board key, kept server-side; loopback only (put `tailscale serve` in front for the phone).
   board:
@@ -506,6 +532,11 @@ secrets:
     file: ${PENNYWORTH_SECRETS_DIR}/cloudflare_auth_token
   github_mcp_token:
     file: ${PENNYWORTH_SECRETS_DIR}/github_mcp_token
+  # The user's Atlassian API token (scripts/jira-auth.sh), for jira-mcp only.
+  jira_auth:
+    file: ${PENNYWORTH_SECRETS_DIR}/jira_auth
+  jira_mcp_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/jira_mcp_token
   # The user's gh token (scripts/github-auth.sh), for github-mcp only.
   github_token:
     file: ${PENNYWORTH_SECRETS_DIR}/github_token

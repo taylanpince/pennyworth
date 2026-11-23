@@ -1,0 +1,20 @@
+# syntax=docker/dockerfile:1
+FROM node:24.22.3-bookworm-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
+COPY tsconfig.json tsconfig.build.json ./
+COPY src ./src
+RUN npm run build && npm prune --omit=dev
+
+FROM node:24.22.3-bookworm-slim
+ENV NODE_ENV=production
+WORKDIR /app
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY package.json ./
+# The Jira sign-in comes in as a secret file; nothing is written to disk.
+USER 1000:1000
+EXPOSE 8092
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["node", "-e", "fetch('http://127.0.0.1:8092/healthz').then(r=>process.exit(r.status<600?0:1)).catch(()=>process.exit(1))"]
+CMD ["node", "dist/src/main.js"]

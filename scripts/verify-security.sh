@@ -121,6 +121,11 @@ for c in $containers; do
       ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -q . \
         && pass "github-mcp: only its secrets mounted" || fail "github-mcp has unexpected mounts: $mounts"
       ;;
+    *jira-mcp*)
+      [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = "{}" ] && pass "jira-mcp: no published ports" || fail "jira-mcp publishes ports"
+      ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -q . \
+        && pass "jira-mcp: only its secrets mounted" || fail "jira-mcp has unexpected mounts: $mounts"
+      ;;
     *board*)
       # 3120 is the trusted local board; 3121 (LAN, D-23) may be published, but only serves paired devices.
       local_port="$(docker inspect "$c" --format '{{json (index .HostConfig.PortBindings "3120/tcp")}}')"
@@ -176,8 +181,15 @@ for a in config/paperclip.yaml config/paperclip.example.yaml; do
   [ -f "$a" ] || continue
   drafters="$(awk '/^  [a-z-]+:$/{agent=$1} /slack_send_message_draft/{print agent}' "$a" | sort -u | tr '\n' ' ')"
   # The Writer drafts too (D-60); never the scouts, which read untrusted messages unattended.
-  bad_drafters="$(for w in $drafters; do case "$w" in assistant:|writer:) ;; *) printf '%s ' "$w" ;; esac; done)"
-  [ -z "$bad_drafters" ] && pass "$a: Slack drafts disabled or limited to the Assistant and the Writer" || fail "$a: Slack drafts allowed for: $drafters"
+  # Written as a function: bash 3.2 (macOS) parses `case` inside command substitution badly.
+  check_drafters() {
+    bad_drafters=""
+    for w in $drafters; do
+      case "$w" in assistant:|writer:) ;; *) bad_drafters="$bad_drafters$w " ;; esac
+    done
+    [ -z "$bad_drafters" ]
+  }
+  if check_drafters; then pass "$a: Slack drafts disabled or limited to the Assistant and the Writer"; else fail "$a: Slack drafts allowed for: $drafters"; fi
   # ClickHouse (D-57): production data for the Assistant only, never the scouts that read untrusted messages unattended.
   ch_agents="$(node -e 'const fs=require("node:fs"),yaml=require("./services/ops-mcp/node_modules/yaml"); const c=yaml.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(Object.entries(c.agents??{}).filter(([,a])=>(a.mcp_servers??[]).includes("clickhouse")).map(([k])=>k+": ").sort().join(""))' "$a")"
   { [ -z "$ch_agents" ] || [ "$ch_agents" = "assistant: " ]; } && pass "$a: ClickHouse is disabled or limited to the Assistant" || fail "$a: ClickHouse given to: $ch_agents"
@@ -185,10 +197,17 @@ for a in config/paperclip.yaml config/paperclip.example.yaml; do
   cf_agents="$(node -e 'const fs=require("node:fs"),yaml=require("./services/ops-mcp/node_modules/yaml"); const c=yaml.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(Object.entries(c.agents??{}).filter(([,a])=>(a.mcp_servers??[]).includes("cloudflare")).map(([k])=>k+": ").sort().join(""))' "$a")"
   { [ -z "$cf_agents" ] || [ "$cf_agents" = "assistant: " ]; } && pass "$a: Cloudflare is disabled or limited to the Assistant" || fail "$a: Cloudflare given to: $cf_agents"
   # Memory (D-61): only crew agents (with a persona) write memories; the scouts read the global rules only.
+  # As a function, like above: bash 3.2 (macOS) parses `case` inside command substitution badly.
   mem_writers="$(awk '/^  [a-z0-9-]+:$/{agent=$1} /memory_(remember|propose)/{print agent}' "$a" | sort -u | tr '\n' ' ')"
   personas="$(awk '/^  [a-z0-9-]+:$/{agent=$1} /^    persona:/{print agent}' "$a" | sort -u | tr '\n' ' ')"
-  bad_writers="$(for w in $mem_writers; do case " $personas " in *" $w "*) ;; *) printf '%s ' "$w" ;; esac; done)"
-  [ -z "$bad_writers" ] && pass "$a: only crew agents (with a persona) can remember or propose memories" || fail "$a: memory writes allowed for agents without a persona: $bad_writers"
+  check_mem_writers() {
+    bad_writers=""
+    for w in $mem_writers; do
+      case " $personas " in *" $w "*) ;; *) bad_writers="$bad_writers$w " ;; esac
+    done
+    [ -z "$bad_writers" ]
+  }
+  if check_mem_writers; then pass "$a: only crew agents (with a persona) can remember or propose memories"; else fail "$a: memory writes allowed for agents without a persona: $bad_writers"; fi
 done
 # Memory routes (D-61): the agents' routes only on the internal listener (bearer token), the Memory view's on /api,
 # the remember gate in code, and the bridge takes an agent's scope from its own setup key, never from the agent.
@@ -296,6 +315,19 @@ bad_gh="$(echo "$gh_routes" | grep -v '{ method: "GET", path: ' | grep -vxF \
 gh_mutations="$(sed -n '/^export const GRAPHQL/,/^} as const;/p' services/github-mcp/src/github.ts | grep -oE 'mutation\([^)]*\) \{ [A-Za-z0-9]+' | awk '{print $NF}' | sort -u | tr '\n' ' ')"
 [ "$gh_mutations" = "addProjectV2ItemById updateProjectV2ItemFieldValue " ] && grep -q 'GRAPHQL_DOCS.has(' services/github-mcp/src/github.ts \
   && pass "github-mcp: GraphQL limited to fixed documents whose only mutations add an issue to a project and set its status" || fail "github-mcp: unexpected GraphQL mutations: $gh_mutations"
+
+# Jira (D-69): the user's Atlassian API token can do anything the user can; the guard allows fixed
+# reads plus, in JIRA_WRITE_PROJECTS, creating an issue and commenting on one. Nothing else.
+jira_routes="$(sed -n '/^export const ROUTES/,/^\];/p' services/jira-mcp/src/jira.ts | grep '^  { method:')"
+bad_jira="$(echo "$jira_routes" | grep -v '{ method: "GET", path: ' | grep -vxF \
+  -e '  { method: "POST", path: /^\/rest\/api\/3\/issue$/ },' \
+  -e '  { method: "POST", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/comment$`) },' \
+  -e '  { method: "POST", path: /^\/rest\/api\/3\/search\/jql$/ },' || true)"
+jira_fields="$(sed -n '/^const BODY_FIELDS/,/^\];/p' services/jira-mcp/src/jira.ts)"
+[ -n "$jira_routes" ] && [ -z "$bad_jira" ] && grep -q 'guard(method, path, opts.body)' services/jira-mcp/src/jira.ts && [ "$(grep -c 'fetchImpl(' services/jira-mcp/src/jira.ts)" = 1 ] \
+  && [ "$(echo "$jira_fields" | grep -c 'fields: \[')" = 3 ] && grep -q 'this.writable(issue.fields.project.key, "commenting")' services/jira-mcp/src/jira.ts \
+  && grep -q 'this.writable(input.project, "opening issues")' services/jira-mcp/src/jira.ts \
+  && pass "jira-mcp: every request goes through the guard; the only writes are creating an issue and commenting, in the allowed projects, checked in code (services/jira-mcp/src/jira.ts)" || fail "jira-mcp: unexpected Jira requests allowed: $bad_jira"
 # The runner merges the PRs a task lists (D-46): its only GitHub writes are merge and update-branch (REST, checked
 # against merges.WRITES) and marking a draft ready (one fixed GraphQL mutation). Pushes and draft PRs stay on the exact word.
 merge_writes="$(sed -n '/^export const WRITES/,/^\];/p' services/runner/src/merges.mjs | grep -oE 'method: "[A-Z]+", path: /[^ ]+/' | tr '\n' ' ')"

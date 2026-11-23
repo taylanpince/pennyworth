@@ -67,12 +67,14 @@ gen_secret clickhouse_auth_token # the board's ClickHouse sign-in state and sign
 gen_secret cloudflare_mcp_token  # the runner's Engineer jobs, on 127.0.0.1:3128, and the Assistant (D-64)
 gen_secret cloudflare_auth_token # the board's Cloudflare sign-in state and sign-in
 gen_secret github_mcp_token
+gen_secret jira_mcp_token
 gen_secret whatsapp_auth_token
 gen_secret whatsapp_mcp_token
 gen_secret board_internal_token   # the board's internal API (D-25)
 placeholder paperclip_ops_key ""
 placeholder google_oauth.json "{}"
 placeholder github_token ""      # the user's gh token: scripts/github-auth.sh (D-39)
+placeholder jira_auth '{}'       # baseUrl/email/token: scripts/jira-auth.sh (D-69)
 chmod 0600 "$PENNYWORTH_SECRETS_DIR"/*
 mkdir -p "$PENNYWORTH_SECRETS_DIR/slack" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/slack"
 mkdir -p "$PENNYWORTH_SECRETS_DIR/telegram" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/telegram"

@@ -38,6 +38,7 @@ These come from the user's own corrections; follow them unless the user says oth
   - "Update the doc from my comments on Primer": read the comments, apply them, add a version, and list what you changed.
 - **Glean (read-only):** `search`, `read_document`, `employee_search`, `meeting_lookup`, `code_search`, `chat` for internal context. Cite documents, not Glean's chat answer.
 - **GitHub (read-only):** `github_issue_read`, `github_search_issues`, `github_whoami` for issues and pull requests the piece is about.
+- **Jira (read-only):** `jira_issue_read`, `jira_search`, `jira_whoami` for issues the piece is about.
 - **Google (read-only):** `docs_read` (multi-tab documents; `tab_id` for other tabs), `drive_search_files`, `drive_read_file`, `drive_list_recent_files`, `calendar_list_events`, `calendar_search_events`, `calendar_get_event`, `gmail_search`, `gmail_read_thread`.
 - **Web (read-only):** `web_search` (a cached index; very fresh pages may be missing).
 - **Notes and references:** `obsidian_search`, `obsidian_read`, `obsidian_read_document_map` (the user's notes, previous agendas), and `knowledge_list`, `knowledge_index`, `knowledge_search`, `knowledge_read` (technical reference docs; say which document a technical claim comes from).

@@ -140,6 +140,15 @@ else
   printf '  skip  github (not connected: %s)\n' "$(echo "$gh_health" | cut -c1-80)"
 fi
 
+# Jira (D-69)
+jira_health="$(dc exec -T paperclip node -e "fetch('http://jira-mcp:8092/healthz').then(r=>r.text()).then(console.log).catch(e=>{console.log(e.message);process.exit(1)})" 2>/dev/null)"
+if echo "$jira_health" | grep -q '"ok":true'; then
+  jiratoken="$(cat "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/jira_mcp_token" 2>/dev/null)"
+  check "jira (whoami)" sh -c "docker compose --env-file '$env_file' exec -T paperclip node /tmp/mcp-call.mjs http://jira-mcp:8092/mcp jira_whoami '{}' '$jiratoken' | grep -q '\"name\"' || { echo 'Jira rejected the sign-in: run scripts/jira-auth.sh'; exit 1; }"
+else
+  printf '  skip  jira (not connected: %s)\n' "$(echo "$jira_health" | cut -c1-80)"
+fi
+
 if [ -n "${KNOWLEDGE_BASES:-}" ]; then
   check "ops-mcp knowledge bases" sh -c "echo '$ops_health' | grep -q '\"knowledge_bases\":{\"ok\":true' || { echo 'none mounted: re-run scripts/bootstrap.sh and recreate ops-mcp'; exit 1; }"
 fi

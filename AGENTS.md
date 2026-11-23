@@ -37,6 +37,8 @@ host (NixOS, user taylan)
     │                        on 127.0.0.1:3128 and the Assistant; board sign-in (D-64)
     ├── github-mcp           GitHub issues/PRs with the user's gh token: read; when asked, in GITHUB_COMMENT_ORGS: comment, open issues (on a project board),
     │                        close/label/assign issues, review PRs, re-run failed CI (D-39, D-42, D-46)
+    ├── jira-mcp             Jira issues with the user's Atlassian API token: read and JQL search; when asked, in JIRA_WRITE_PROJECTS:
+    │                        open an issue or comment on one (D-69)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
                              @-mentions in its chats go to that agent's part of the task (D-54);
                              subtasks: the user's tasks under another of theirs, one level, folded into it with their own crews (D-68);
@@ -77,6 +79,7 @@ npm test --prefix services/telegram-mcp
 npm test --prefix services/primer-mcp
 npm test --prefix services/glean-mcp
 npm test --prefix services/github-mcp
+npm test --prefix services/jira-mcp
 npm test --prefix services/grafana-mcp
 npm test --prefix services/clickhouse-mcp
 npm test --prefix services/cloudflare-mcp
@@ -108,7 +111,7 @@ scripts/backup.sh --verify                         # restore the latest off-mach
   docker compose exec -T paperclip node /tmp/mcp-call.mjs http://ops-mcp:8080/mcp <tool> '<json>' "$(cat ~/.config/pennyworth/ops_mcp_token)"
   ```
 
-  Use `--list` in place of the tool name to list tools. The tokens for the other servers are `google_mcp_token`, `slack_mcp_token`, `telegram_mcp_token` (`http://telegram-mcp:8083/mcp`), `primer_mcp_token` (`http://primer-mcp:8084/mcp`), `glean_mcp_token` (`http://glean-mcp:8085/mcp`), `github_mcp_token` (`http://github-mcp:8086/mcp`), `grafana_mcp_token` (`http://grafana-mcp:8087/mcp`), `clickhouse_mcp_token` (`http://clickhouse-mcp:8088/mcp`) and `cloudflare_mcp_token` (`http://cloudflare-mcp:8091/mcp`).
+  Use `--list` in place of the tool name to list tools. The tokens for the other servers are `google_mcp_token`, `slack_mcp_token`, `telegram_mcp_token` (`http://telegram-mcp:8083/mcp`), `primer_mcp_token` (`http://primer-mcp:8084/mcp`), `glean_mcp_token` (`http://glean-mcp:8085/mcp`), `github_mcp_token` (`http://github-mcp:8086/mcp`), `jira_mcp_token` (`http://jira-mcp:8092/mcp`), `grafana_mcp_token` (`http://grafana-mcp:8087/mcp`), `clickhouse_mcp_token` (`http://clickhouse-mcp:8088/mcp`) and `cloudflare_mcp_token` (`http://cloudflare-mcp:8091/mcp`).
 - **Paperclip API as the user:** `Authorization: Bearer $(cat ~/.config/pennyworth/paperclip_board_key)`. The company ID is in `config/system.yaml`.
 - **Agent run logs:** `data/paperclip/instances/default/data/run-logs/<company>/<agent>/<run>.ndjson`. The `chunk` fields contain Codex JSON events.
 - **Runner:** `journalctl --user -u pennyworth-runner`, plus job logs in `~/.local/state/pennyworth-runner/logs/`.
@@ -334,3 +337,4 @@ scripts/backup.sh --verify                         # restore the latest off-mach
 - **Recordings:** a local recording should match its meeting without asking (D-26: the recording's span inside the event). Once published, the transcript is renamed the way his old `~/config/scripts/rename-transcript.sh` did (`<Title>-<date>.txt`, 1:1s in `1-1s/`) and its audio deleted. Meeting notes carry `tags: [type/meeting]`.
 - **Routing:** never ask him where a meeting goes ("choose a note" tasks were removed, D-18). Rules in `config/routing.yaml` and remembered routes win; otherwise the Meeting Librarian best-guesses an existing note or writes only the canonical note. Don't add routing rules he didn't ask for.
 - **Working style:** he likes being asked crisp decision questions with a recommendation, and otherwise expects you to proceed end to end and verify on the real system.
+- **jira-mcp holds the user's Atlassian API token (D-69).** Only `guard` in `services/jira-mcp/src/jira.ts` limits it: fixed reads (one issue, a JQL search, the user's own profile) and two writes — creating an issue and commenting — each allowed only in `JIRA_WRITE_PROJECTS`, checked in code before anything leaves. Plain text goes in and out as ADF; formatting decisions stay in code, never prompts. A new write needs its guard entry and a `verify-security.sh` update.

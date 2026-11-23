@@ -13,6 +13,14 @@ import { accessToken } from "./gcp.mjs";
  */
 
 const read = (file) => (file && existsSync(file) ? readFileSync(file, "utf8").trim() : "");
+const readJson = (file) => {
+  const raw = read(file);
+  try {
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+};
 const short = (err) => String(err?.message ?? err).replace(/\s+/g, " ").slice(0, 280);
 
 function run(argv, timeout = 20_000) {
@@ -82,6 +90,17 @@ export async function checkConnections(cfg, { fetchImpl = fetch, exec = run, aws
       if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
       const login = (await res.json()).login;
       return { state: "ok", accounts: [{ label: `@${login}`, state: "ok" }] };
+    }),
+    add("jira", async () => {
+      const auth = readJson(join(cfg.secretsDir, "jira_auth"));
+      if (!auth.baseUrl || !auth.email || !auth.token) return { state: "missing", detail: "no sign-in: run scripts/jira-auth.sh" };
+      const res = await fetchImpl(`${auth.baseUrl}/rest/api/3/myself`, {
+        headers: { authorization: "Basic " + Buffer.from(`${auth.email}:${auth.token}`).toString("base64"), accept: "application/json" },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (res.status === 401 || res.status === 403) return { state: "expired", detail: "Jira rejected the sign-in: run scripts/jira-auth.sh" };
+      if (!res.ok) throw new Error(`Jira answered ${res.status}`);
+      return { state: "ok", accounts: [{ label: `${(await res.json()).displayName} at ${new URL(auth.baseUrl).hostname}`, state: "ok" }] };
     }),
     add("gh", async () => {
       const login = await exec(["gh", "api", "user", "--jq", ".login"]).catch((err) => {

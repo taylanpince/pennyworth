@@ -37,6 +37,7 @@ host (Linux, systemd user services)
     ├── primer-mcp             proxy to your organization's Primer: read documents, publish when you ask
     ├── glean-mcp              proxy to your organization's Glean: company-wide search, reads only
     ├── github-mcp             GitHub issues and pull requests with your gh token: read; comment or open issues when you ask
+    ├── jira-mcp               Jira issues with your Atlassian API token: read and search; open issues or comment when you ask
     ├── grafana-mcp            proxy to Grafana Cloud's MCP server, read/query scopes only, for Engineer jobs (127.0.0.1:3124)
     ├── clickhouse-mcp         proxy to ClickHouse Cloud's MCP server, checked SELECT queries only, for Engineer jobs (127.0.0.1:3127) and the Assistant
     ├── cloudflare-mcp         proxy to Cloudflare's API MCP server, read scopes only, for Engineer jobs (127.0.0.1:3128) and the Assistant
@@ -247,6 +248,12 @@ The Assistant can search your organization's **Glean** (Slack, Drive, Confluence
 The Assistant reads GitHub issues and pull requests, including private ones you can see, with their comments and reviews. Ask it to **post** and it comments on the issue as you: "post it" after a draft, or "post an update on the ticket". Ask it to **open a ticket** and it files a new issue as you, with labels, optionally on an organization project board in a column: "open this on the waas board (link), label `waas`, in Triage". It also **closes, labels and assigns** issues, **reviews** a PR with the verdict you give ("approve it"), and **re-runs failed CI** when you ask. All of it goes only to repositories and projects in `GITHUB_COMMENT_ORGS` (`.env`); it can't edit issue text or merge ([D-39, D-42, D-46](docs/DECISIONS.md)). Ask it to merge PRs and it hands that to an Engineer task (below).
 
 - **Setup:** `scripts/bootstrap.sh`, then `scripts/github-auth.sh` (copies `gh auth token` into the secrets directory), then `docker compose up -d github-mcp`. Re-run `scripts/github-auth.sh` after `gh auth login`.
+
+### Jira issues
+
+The Assistant reads Jira issues with their comments, searches with JQL, and, when you ask ("open a ticket for this in PROJ"), opens an issue or comments on one as you — only in the projects you list in `JIRA_WRITE_PROJECTS` (`.env`). Ursula reads and searches; creating and commenting stay with the Assistant ([D-69](docs/DECISIONS.md)).
+
+- **Setup:** `scripts/jira-auth.sh https://<site>.atlassian.net you@example.com` (paste the [API token](https://id.atlassian.com/manage-profile/security/api-tokens) when asked), then `docker compose up -d jira-mcp`.
 
 ## Coding jobs
 

@@ -49,7 +49,7 @@ export interface Connection {
 /** One check the runner made on the laptop (POST /internal/runner/connections). */
 const HostCheck = z
   .object({
-    id: z.enum(["github", "gh", "primer", "slack", "gcloud", "aws", "claude", "codex", "openrouter", "paperclip-codex"]),
+    id: z.enum(["github", "jira", "gh", "primer", "slack", "gcloud", "aws", "claude", "codex", "openrouter", "paperclip-codex"]),
     state: z.enum(["ok", "expired", "missing", "error", "unset"]),
     detail: z.string().max(300).optional(),
     accounts: z
@@ -182,6 +182,7 @@ export function connectionsView(i: ConnectionInputs): Connection[] {
   // Signed in on the laptop, checked by the runner.
   const laptop: [HostCheck["id"], string, string, string, ConnectionAction][] = [
     ["github", "GitHub (Alfred)", "Issues and pull requests as you: reads, and comments, issues, reviews and CI re-runs when you ask. It's gh's token, copied for github-mcp.", "Alfred", { kind: "signin", provider: "github", command: "scripts/github-auth.sh" }],
+    ["jira", "Jira", "Issues as you: reads and JQL searches, and comments or opens issues in the allowed projects when you ask. Your Atlassian API token, kept for jira-mcp.", "Alfred and Ursula", { kind: "command", command: "scripts/jira-auth.sh <site> <email>" }],
     ["gh", "GitHub (Engineers)", "Cloning, pushing and pull requests from the Engineers' workspaces, on your word. Signing in again keeps the token's scopes.", "the Engineers", { kind: "signin", provider: "gh", command: "gh auth login" }],
     ["gcloud", "Google Cloud", "Logs, Monitoring, GKE, Cloud Run and the rest, read-only by the prompt's rule. Google ends the session after 16 hours.", "the Engineers", { kind: "signin", provider: "gcloud", command: "scripts/gcloud-auth.sh" }],
     ["aws", "AWS", "Read roles for every account in config/runner.yaml; changes run with the write role, on your word.", "the Engineers", { kind: "signin", provider: "aws", command: "scripts/aws-auth.sh" }],
