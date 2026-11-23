@@ -1,9 +1,11 @@
 // Jira for the Assistant (D-69). It holds the user's Atlassian API token, which can do anything
 // the user can in Jira. The only thing standing between that token and Jira is `guard`: every
 // request goes through it, and it allows a fixed list of reads (the user's own profile, one issue,
-// a JQL search) plus the writes the user can ask for: creating an issue and commenting on one, in
-// the projects named in JIRA_WRITE_PROJECTS. Never call fetch with the token anywhere else, and
-// never add a route or a body field without checking what it does.
+// a user search by name, a JQL search) plus the writes the user can ask for: creating an issue
+// (optionally under a parent, assigned, and transitioned to a status — a transition is the only
+// way Jira sets a status, so it follows the create) and commenting on one, in the projects named
+// in JIRA_WRITE_PROJECTS. Never call fetch with the token anywhere else, and never add a route or
+// a body field without checking what it does.
 import { readFileSync } from "node:fs";
 import { adfFromText, textFromAdf } from "./adf.js";
 
@@ -14,20 +16,26 @@ const NUM = "[1-9][0-9]{0,9}";
 export const ROUTES: { method: Method; path: RegExp }[] = [
   { method: "GET", path: /^\/rest\/api\/3\/myself$/ },
   { method: "GET", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}$`) },
+  { method: "GET", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/transitions$`) },
+  // A user search by name, to resolve the assignee the user named to an accountId. The response
+  // is narrowed in code to accountId and displayName.
+  { method: "GET", path: /^\/rest\/api\/3\/user\/search$/ },
   { method: "POST", path: /^\/rest\/api\/3\/issue$/ },
   { method: "POST", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/comment$`) },
+  { method: "POST", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/transitions$`) },
   { method: "POST", path: /^\/rest\/api\/3\/search\/jql$/ },
 ];
 
 type Method = "GET" | "POST";
 
-/** Body fields each request may carry: a new issue only its fixed set of fields, a comment only its body, a search its JQL. */
+/** Body fields each request may carry: a new issue only its fixed set of fields, a comment only its body, a search its JQL, a transition only its id. */
 const BODY_FIELDS: { path: RegExp; method: Method; fields: string[] }[] = [
   { method: "POST", path: /\/rest\/api\/3\/issue$/, fields: ["fields"] },
   { method: "POST", path: /\/comment$/, fields: ["body"] },
+  { method: "POST", path: /\/transitions$/, fields: ["transition"] },
   { method: "POST", path: /\/search\/jql$/, fields: ["jql", "maxResults", "fields"] },
 ];
-const ISSUE_FIELDS = ["project", "issuetype", "summary", "description", "labels"];
+const ISSUE_FIELDS = ["project", "issuetype", "summary", "description", "labels", "parent", "assignee"];
 
 export class JiraRefused extends Error {}
 export class JiraAuthError extends Error {}
@@ -39,10 +47,15 @@ export function guard(method: string, path: string, body?: unknown): void {
   const keys = Object.keys((body as object | undefined) ?? {});
   if (keys.some((k) => !limit.fields.includes(k))) throw new JiraRefused(`refused a Jira request with fields that aren't allowed: ${method} ${path}`);
   // A new issue can only carry the fields a Pennyworth task asks for; everything else a Jira
-  // issue can do (assignees, transitions, sprints) stays out.
+  // issue can do (sprints, due dates, security levels) stays out.
   if (method === "POST" && /^\/rest\/api\/3\/issue$/.test(path)) {
     const fields = Object.keys((body as { fields?: object } | undefined)?.fields ?? {});
     if (fields.some((f) => !ISSUE_FIELDS.includes(f))) throw new JiraRefused(`refused an issue with fields that aren't allowed: ${fields.join(", ")}`);
+  }
+  // A transition only names the transition id the code picked from the issue's own list.
+  if (method === "POST" && /\/transitions$/.test(path) && body !== undefined) {
+    const t = (body as { transition?: { id?: unknown } } | undefined)?.transition;
+    if (!t || typeof t.id !== "string") throw new JiraRefused("refused a transition without a fixed id");
   }
 }
 
@@ -131,13 +144,39 @@ export class Jira {
     return (text ? JSON.parse(text) : {}) as T;
   }
 
-  async whoami(): Promise<{ name: string; email: string }> {
-    const u = await this.request<{ displayName: string; emailAddress: string }>("GET", "/rest/api/3/myself");
-    return { name: u.displayName, email: u.emailAddress };
+  async whoami(): Promise<{ name: string; email: string; account_id: string }> {
+    const u = await this.request<{ displayName: string; emailAddress: string; accountId: string }>("GET", "/rest/api/3/myself");
+    return { name: u.displayName, email: u.emailAddress, account_id: u.accountId };
+  }
+
+  /** The users a name matches, narrowed to accountId and displayName (the user search returns more). */
+  async findUser(name: string): Promise<{ account_id: string; name: string }[]> {
+    const users = await this.request<{ accountId: string; displayName: string; active?: boolean }[]>("GET", "/rest/api/3/user/search", { query: { query: name, maxResults: "10" } });
+    return users
+      .filter((u) => u.active !== false)
+      .map((u) => ({ account_id: u.accountId, name: u.displayName }));
+  }
+
+  /** A name (or "me") to one accountId, before anything is created; the issue's transitions come from Jira's own list for the issue. */
+  private async resolveAssignee(assignee: string): Promise<string> {
+    const wanted = assignee.trim();
+    if (/^me$/i.test(wanted)) {
+      const me = await this.whoami();
+      return me.account_id;
+    }
+    const matches = await this.findUser(wanted);
+    const exact = matches.filter((m) => m.name.toLowerCase() === wanted.toLowerCase());
+    if (exact.length === 1) return exact[0]!.account_id;
+    if (exact.length > 1) throw new JiraRefused(`several users are called "${wanted}": ${matches.map((m) => m.name).join(", ")}; name one exactly`);
+    const asId = matches.find((m) => m.account_id === wanted);
+    if (asId) return asId.account_id;
+    // An accountId can be used as given, without a search.
+    if (/^[0-9a-f]+:[0-9a-f-]{30,}$/i.test(wanted)) return wanted;
+    throw new JiraRefused(`no user "${wanted}"; ${matches.map((m) => m.name).join(", ") || "nothing similar"}`);
   }
 
   private async issue(key: string): Promise<JiraIssue> {
-    return this.request<JiraIssue>("GET", `/rest/api/3/issue/${encodeURIComponent(key)}`, { query: { fields: "project,issuetype,status,summary,description,assignee,reporter,created,updated,priority,labels,comment" } });
+    return this.request<JiraIssue>("GET", `/rest/api/3/issue/${encodeURIComponent(key)}`, { query: { fields: "project,issuetype,status,summary,description,assignee,reporter,created,updated,priority,labels,parent,comment" } });
   }
 
   private browse(key: string): string {
@@ -159,6 +198,7 @@ export class Jira {
       reporter: fields.reporter?.displayName ?? null,
       priority: fields.priority?.name ?? null,
       labels: fields.labels,
+      parent: fields.parent?.key ?? null,
       created_at: fields.created,
       updated_at: fields.updated,
       description: textFromAdf(fields.description),
@@ -199,18 +239,53 @@ export class Jira {
     return { url: `${this.browse(key)}?focusedCommentId=${out.id}` };
   }
 
-  async createIssue(input: { project: string; issuetype?: string; summary: string; description: string; labels?: string[] }): Promise<{ key: string; url: string }> {
+  /** "Done" and "✔️ Done" are the same status. */
+  private static nameKey = (s: string) => s.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
+  /** The transitions Jira offers this issue right now; a status can only be reached through one. */
+  private async transitions(key: string): Promise<{ id: string; name: string; to: string }[]> {
+    const res = await this.request<{ transitions: { id: string; name: string; to: { name: string } }[] }>("GET", `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`);
+    return res.transitions.map((t) => ({ id: t.id, name: t.name, to: t.to.name }));
+  }
+
+  async createIssue(input: { project: string; issuetype?: string; summary: string; description: string; labels?: string[]; parent?: string; assignee?: string; status?: string }): Promise<IssueCreated> {
     this.writable(input.project, "opening issues");
+    // Everything that can be refused is checked before the issue exists.
+    const parent = input.parent ? parseRef({ key: input.parent }) : undefined;
+    const assignee = input.assignee ? await this.resolveAssignee(input.assignee) : undefined;
     const fields: Record<string, unknown> = {
       project: { key: input.project.toUpperCase() },
       issuetype: { name: input.issuetype?.trim() || "Task" },
       summary: input.summary,
       description: adfFromText(input.description ?? ""),
       ...(input.labels?.length ? { labels: input.labels } : {}),
+      ...(parent ? { parent: { key: parent } } : {}),
+      ...(assignee ? { assignee: { id: assignee } } : {}),
     };
     const out = await this.request<{ key: string }>("POST", "/rest/api/3/issue", { body: { fields } });
-    return { key: out.key, url: this.browse(out.key) };
+    const created: IssueCreated = { key: out.key, url: this.browse(out.key), ...(parent ? { parent } : {}) };
+    if (!input.status) return created;
+    // A status is only reachable through a transition of the issue's own workflow; a failure here
+    // is returned with the issue rather than thrown: the caller must not open it again.
+    try {
+      const ts = await this.transitions(out.key);
+      const t = ts.find((x) => Jira.nameKey(x.to) === Jira.nameKey(input.status!)) ?? ts.find((x) => Jira.nameKey(x.name) === Jira.nameKey(input.status!));
+      if (!t) throw new JiraRefused(`no transition to "${input.status}"; its transitions are: ${ts.map((x) => x.to).join(", ") || "(none)"}`);
+      await this.request("POST", `/rest/api/3/issue/${encodeURIComponent(out.key)}/transitions`, { body: { transition: { id: t.id } } });
+      created.status = t.to;
+    } catch (err) {
+      created.status_error = `the issue was opened, but moving it to "${input.status}" failed: ${(err as Error).message.slice(0, 200)}. Don't open it again; tell the user.`;
+    }
+    return created;
   }
+}
+
+export interface IssueCreated {
+  key: string;
+  url: string;
+  parent?: string;
+  status?: string;
+  status_error?: string;
 }
 
 interface JiraIssue {
@@ -227,6 +302,7 @@ interface JiraIssue {
     updated: string;
     priority: { name: string } | null;
     labels: string[];
+    parent?: { key: string } | null;
     comment: { total: number; comments: { author: { displayName: string } | null; created: string; body: unknown }[] };
   };
 }

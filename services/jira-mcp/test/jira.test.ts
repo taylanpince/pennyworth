@@ -26,12 +26,15 @@ function fake(routes: Record<string, unknown>) {
 }
 
 describe("guard", () => {
-  it("allows the reads and the two writes", () => {
+  it("allows the reads and the writes", () => {
     for (const [m, p] of [
       ["GET", "/rest/api/3/myself"],
       ["GET", "/rest/api/3/issue/PROJ-123"],
+      ["GET", "/rest/api/3/issue/PROJ-123/transitions"],
+      ["GET", "/rest/api/3/user/search"],
       ["POST", "/rest/api/3/issue"],
       ["POST", "/rest/api/3/issue/PROJ-123/comment"],
+      ["POST", "/rest/api/3/issue/PROJ-123/transitions"],
       ["POST", "/rest/api/3/search/jql"],
     ] as const)
       expect(() => guard(m, p)).not.toThrow();
@@ -42,13 +45,17 @@ describe("guard", () => {
     expect(() => guard("PUT", "/rest/api/3/issue/PROJ-1")).toThrow(JiraRefused);
     expect(() => guard("GET", "/rest/api/3/users")).toThrow(JiraRefused);
     expect(() => guard("GET", "/rest/api/3/issue/PROJ-123/worklog")).toThrow(JiraRefused);
+    expect(() => guard("PUT", "/rest/api/3/issue/PROJ-1/assignee")).toThrow(JiraRefused);
+    expect(() => guard("POST", "/rest/api/3/issue/PROJ-1/transitions", { transition: { id: "31" }, fields: {} })).toThrow(JiraRefused);
+    expect(() => guard("POST", "/rest/api/3/issue/PROJ-1/transitions", { update: {} })).toThrow(JiraRefused);
   });
 
   it("limits bodies to their fixed fields", () => {
     expect(() => guard("POST", "/rest/api/3/issue/PROJ-1/comment", { body: {}, public: true })).toThrow(JiraRefused);
     expect(() => guard("POST", "/rest/api/3/search/jql", { jql: "project = X", maxResults: 5, fields: ["summary"], nextPageToken: "t" })).toThrow(JiraRefused);
-    expect(() => guard("POST", "/rest/api/3/issue", { fields: { summary: "x", project: { key: "P" }, issuetype: { name: "Task" }, assignee: { name: "someone" } } })).toThrow(JiraRefused);
-    expect(() => guard("POST", "/rest/api/3/issue", { fields: { summary: "x", project: { key: "P" }, issuetype: { name: "Task" }, description: { type: "doc" }, labels: ["a"] } })).not.toThrow();
+    expect(() => guard("POST", "/rest/api/3/issue", { fields: { summary: "x", project: { key: "P" }, issuetype: { name: "Task" }, duedate: "2026-01-01" } })).toThrow(JiraRefused);
+    expect(() => guard("POST", "/rest/api/3/issue", { fields: { summary: "x", project: { key: "P" }, issuetype: { name: "Task" }, description: { type: "doc" }, labels: ["a"], parent: { key: "P-1" }, assignee: { id: "acc" } } })).not.toThrow();
+    expect(() => guard("POST", "/rest/api/3/issue/PROJ-1/transitions", { transition: { id: "31" } })).not.toThrow();
   });
 });
 
@@ -118,6 +125,56 @@ describe("Jira", () => {
     const out = await jira.createIssue({ project: "proj", summary: "S", description: "D\n\nE", labels: ["x"] });
     expect(out).toEqual({ key: "PROJ-100", url: "https://acme.atlassian.net/browse/PROJ-100" });
     expect(calls[0]!.body).toEqual({ fields: { project: { key: "PROJ" }, issuetype: { name: "Task" }, summary: "S", description: adfFromText("D\n\nE"), labels: ["x"] } });
+  });
+
+  it("creates under a parent, assigned by name, and moves it to a status", async () => {
+    const { impl, calls } = fake({
+      "GET /rest/api/3/user/search": [{ accountId: "acc-1", displayName: "Nicholas Gioachini", active: true }],
+      "POST /rest/api/3/issue": { key: "PROJ-101" },
+      "GET /rest/api/3/issue/PROJ-101/transitions": { transitions: [{ id: "31", name: "Done", to: { name: "Done" } }, { id: "11", name: "In Progress", to: { name: "In Progress" } }] },
+      "POST /rest/api/3/issue/PROJ-101/transitions": {},
+    });
+    const jira = new Jira(authFile({}), new Set(["PROJ"]), impl);
+    const out = await jira.createIssue({ project: "PROJ", summary: "S", description: "", parent: "PROJ-966", assignee: "nicholas gioachini", status: "done" });
+    expect(out).toEqual({ key: "PROJ-101", url: "https://acme.atlassian.net/browse/PROJ-101", parent: "PROJ-966", status: "Done" });
+    expect(calls.find((c) => c.url.pathname === "/rest/api/3/user/search")!.url.searchParams.get("query")).toBe("nicholas gioachini");
+    expect(calls.find((c) => c.url.pathname === "/rest/api/3/issue")!.body).toEqual({ fields: { project: { key: "PROJ" }, issuetype: { name: "Task" }, summary: "S", description: adfFromText(""), parent: { key: "PROJ-966" }, assignee: { id: "acc-1" } } });
+    expect(calls.find((c) => c.url.pathname === "/rest/api/3/issue/PROJ-101/transitions" && c.method === "POST")!.body).toEqual({ transition: { id: "31" } });
+  });
+
+  it("reports a status the workflow doesn't offer instead of failing the created issue", async () => {
+    const { impl } = fake({
+      "POST /rest/api/3/issue": { key: "PROJ-102" },
+      "GET /rest/api/3/issue/PROJ-102/transitions": { transitions: [{ id: "11", name: "In Progress", to: { name: "In Progress" } }] },
+    });
+    const jira = new Jira(authFile({}), new Set(["PROJ"]), impl);
+    const out = await jira.createIssue({ project: "PROJ", summary: "S", description: "", status: "Nonexistent" });
+    expect(out.key).toBe("PROJ-102");
+    expect(out.status_error).toMatch(/no transition to "Nonexistent"/);
+  });
+
+  it("refuses an ambiguous or unknown assignee before the issue exists", async () => {
+    const { impl, calls } = fake({
+      "GET /rest/api/3/user/search": [
+        { accountId: "acc-1", displayName: "Ada Lovelace" },
+        { accountId: "acc-2", displayName: "Ada Lovelace" },
+      ],
+      "POST /rest/api/3/issue": { key: "PROJ-103" },
+    });
+    const jira = new Jira(authFile({}), new Set(["PROJ"]), impl);
+    await expect(jira.createIssue({ project: "PROJ", summary: "S", description: "", assignee: "Ada Lovelace" })).rejects.toThrow(/several users/);
+    await expect(jira.createIssue({ project: "PROJ", summary: "S", description: "", assignee: "Nobody" })).rejects.toThrow(/no user "Nobody"/);
+    expect(calls.filter((c) => c.method === "POST" && c.url.pathname === "/rest/api/3/issue")).toHaveLength(0);
+  });
+
+  it("assigns 'me' as the signed-in account", async () => {
+    const { impl, calls } = fake({
+      "GET /rest/api/3/myself": { displayName: "Nicholas Gioachini", emailAddress: "u@acme.io", accountId: "me-1" },
+      "POST /rest/api/3/issue": { key: "PROJ-104" },
+    });
+    const jira = new Jira(authFile({}), new Set(["PROJ"]), impl);
+    await jira.createIssue({ project: "PROJ", summary: "S", description: "", assignee: "me" });
+    expect(calls.find((c) => c.url.pathname === "/rest/api/3/issue")!.body).toEqual({ fields: { project: { key: "PROJ" }, issuetype: { name: "Task" }, summary: "S", description: adfFromText(""), assignee: { id: "me-1" } } });
   });
 
   it("comments only in an allowed project, after reading the issue", async () => {

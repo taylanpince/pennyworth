@@ -72,19 +72,22 @@ function buildServer(): McpServer {
   server.registerTool(
     "jira_issue_create",
     {
-      description: `Open a new Jira issue, as the user, in one of: ${projects}. Only when the user asked in their own comment or task. Labels are created if they don't exist. Call once: an issue can't be edited or closed from here.`,
+      description: `Open a new Jira issue, as the user, in one of: ${projects}. Only when the user asked in their own comment or task. Optionally a sub-task of a parent issue (its key), assigned to a person (their name, or "me"), and moved to a status (e.g. Done; the project's workflow must allow it there). Labels are created if they don't exist. Call once: an issue can't be edited from here, and if \`status_error\` is set the issue still exists — tell the user, don't open it again.`,
       inputSchema: {
         project: z.string().min(1).max(50).describe("Project key, e.g. PROJ"),
         summary: z.string().min(1).max(256),
         description: z.string().max(60_000).default(""),
-        issuetype: z.string().max(50).default("Task").describe("Issue type name as the project knows it, e.g. Task, Bug, Story"),
+        issuetype: z.string().max(50).default("Task").describe("Issue type name as the project knows it, e.g. Task, Bug, Story; sub-task types can take a parent"),
         labels: z.array(z.string().min(1).max(100)).max(10).optional(),
+        parent: z.string().max(100).optional().describe("Parent issue key or URL, e.g. PROJ-966"),
+        assignee: z.string().max(200).optional().describe("Who to assign it to: their full name, 'me', or an Atlassian accountId"),
+        status: z.string().max(100).optional().describe("Status to move the new issue to, e.g. Done (a status can only be reached through a transition)"),
       },
       annotations: write,
     },
-    run("jira_issue_create", async (a: { project: string; summary: string; description: string; issuetype: string; labels?: string[] }) => {
+    run("jira_issue_create", async (a: { project: string; summary: string; description: string; issuetype: string; labels?: string[]; parent?: string; assignee?: string; status?: string }) => {
       const out = await jira.createIssue(a);
-      log.info({ project: a.project, key: out.key }, "Jira issue opened");
+      log.info({ project: a.project, key: out.key, parent: out.parent, status: out.status }, "Jira issue opened");
       return out;
     }),
   );

@@ -317,17 +317,20 @@ gh_mutations="$(sed -n '/^export const GRAPHQL/,/^} as const;/p' services/github
   && pass "github-mcp: GraphQL limited to fixed documents whose only mutations add an issue to a project and set its status" || fail "github-mcp: unexpected GraphQL mutations: $gh_mutations"
 
 # Jira (D-69): the user's Atlassian API token can do anything the user can; the guard allows fixed
-# reads plus, in JIRA_WRITE_PROJECTS, creating an issue and commenting on one. Nothing else.
+# reads plus, in JIRA_WRITE_PROJECTS, creating an issue (with parent, assignee and a post-create
+# transition) and commenting on one. Nothing else.
 jira_routes="$(sed -n '/^export const ROUTES/,/^\];/p' services/jira-mcp/src/jira.ts | grep '^  { method:')"
 bad_jira="$(echo "$jira_routes" | grep -v '{ method: "GET", path: ' | grep -vxF \
   -e '  { method: "POST", path: /^\/rest\/api\/3\/issue$/ },' \
   -e '  { method: "POST", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/comment$`) },' \
+  -e '  { method: "POST", path: new RegExp(`^/rest/api/3/issue/${KEY}-${NUM}/transitions$`) },' \
   -e '  { method: "POST", path: /^\/rest\/api\/3\/search\/jql$/ },' || true)"
 jira_fields="$(sed -n '/^const BODY_FIELDS/,/^\];/p' services/jira-mcp/src/jira.ts)"
 [ -n "$jira_routes" ] && [ -z "$bad_jira" ] && grep -q 'guard(method, path, opts.body)' services/jira-mcp/src/jira.ts && [ "$(grep -c 'fetchImpl(' services/jira-mcp/src/jira.ts)" = 1 ] \
-  && [ "$(echo "$jira_fields" | grep -c 'fields: \[')" = 3 ] && grep -q 'this.writable(issue.fields.project.key, "commenting")' services/jira-mcp/src/jira.ts \
+  && [ "$(echo "$jira_fields" | grep -c 'fields: \[')" = 4 ] && grep -q 'this.writable(issue.fields.project.key, "commenting")' services/jira-mcp/src/jira.ts \
   && grep -q 'this.writable(input.project, "opening issues")' services/jira-mcp/src/jira.ts \
-  && pass "jira-mcp: every request goes through the guard; the only writes are creating an issue and commenting, in the allowed projects, checked in code (services/jira-mcp/src/jira.ts)" || fail "jira-mcp: unexpected Jira requests allowed: $bad_jira"
+  && grep -qF '{ body: { transition: { id: t.id } } }' services/jira-mcp/src/jira.ts \
+  && pass "jira-mcp: every request goes through the guard; the only writes are creating an issue (parent, assignee, one transition to its status) and commenting, in the allowed projects, checked in code (services/jira-mcp/src/jira.ts)" || fail "jira-mcp: unexpected Jira requests allowed: $bad_jira"
 # The runner merges the PRs a task lists (D-46): its only GitHub writes are merge and update-branch (REST, checked
 # against merges.WRITES) and marking a draft ready (one fixed GraphQL mutation). Pushes and draft PRs stay on the exact word.
 merge_writes="$(sed -n '/^export const WRITES/,/^\];/p' services/runner/src/merges.mjs | grep -oE 'method: "[A-Z]+", path: /[^ ]+/' | tr '\n' ' ')"
