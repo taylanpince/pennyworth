@@ -11,6 +11,19 @@ import fs from "node:fs";
 
 const edits = [
   {
+    file: "/app/server/dist/services/heartbeat.js",
+    changes: [
+      {
+        find: "    async function reconcileStrandedAssignedIssues() {\n        return recovery.reconcileStrandedAssignedIssues({\n            issueCreatedAtGte: await getWorktreeExecutionCutoff(),\n        });\n    }",
+        replace: "    const reconcileStrandedAssignedIssues = pennyworthRecoverySweep(async () => {\n        return recovery.reconcileStrandedAssignedIssues({\n            issueCreatedAtGte: await getWorktreeExecutionCutoff(),\n        });\n    });",
+      },
+      {
+        find: 'import { publicChatTaskUrl } from "./chat-task-url.js";',
+        replace: 'import { recoverySweep as pennyworthRecoverySweep } from "./pennyworth-recovery-sweep.mjs";\nimport { publicChatTaskUrl } from "./chat-task-url.js";',
+      },
+    ],
+  },
+  {
     file: "/app/server/dist/services/execution-continuation.js",
     changes: [
       {

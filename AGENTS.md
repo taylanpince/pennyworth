@@ -165,6 +165,7 @@ scripts/backup.sh --verify                         # restore the latest off-mach
 ### Paperclip (v2026.1001.0)
 
 - **We build Paperclip's image (D-79):** `services/paperclip/patch.mjs` edits the pinned release by exact text, and the build fails when an anchor no longer matches. After changing it, or the base digest: `docker compose build paperclip && docker compose up -d paperclip`. Read the patch before upgrading, and drop an edit once upstream ships its fix.
+- **Historical recovery scans must not overlap (D-83).** A backlog of failed routine assignments made the 30-second stranded-task scan saturate the server and Postgres. `services/paperclip/recovery-sweep.mjs` permits one scan at a time, with five minutes between successful scans; normal dispatch and retry promotion keep their cadence. Test with `node --test services/paperclip/recovery-sweep.test.mjs`. Do not close old tasks merely to reduce the scan's cost.
 - **A wake carries a bounded history (D-79).** Unpatched, Paperclip put a task's whole comment history into one environment variable, and past 128 KiB every wake on that task failed with `spawn E2BIG` (PEN-5797). Now the newest 40 KB is sent, long comments cut, and the agent reads the rest with `task_comments`. Still, never have an agent split a long text across comments: `task_attach` makes it a file.
 - **Auth and access:**
   - Authenticated+private mode needs `PAPERCLIP_ALLOWED_HOSTNAMES` to include `paperclip` for container-to-container calls (hostname guard).
