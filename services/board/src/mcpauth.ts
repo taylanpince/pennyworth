@@ -13,7 +13,7 @@ export interface McpAuthStatus {
 }
 
 /**
- * Sign-in state from an MCP proxy that signs in with OAuth (glean-mcp, D-38; grafana-mcp; clickhouse-mcp, D-57; cloudflare-mcp, D-64;
+ * Sign-in state from an MCP proxy that signs in with OAuth (glean-mcp, D-38; grafana-mcp; clickhouse-mcp, D-57; cloudflare-mcp, D-64; buildkite-mcp, D-82;
  * jira-mcp, one sign-in per Atlassian account, D-69), and
  * signing in through it, like Google's Reconnect (D-36): the board sends the browser to the
  * service's sign-in, which sends it back to the board's callback, and the proxy exchanges the code
@@ -101,6 +101,13 @@ export class ClickHouseAuth extends McpAuth {
 export class CloudflareAuth extends McpAuth {
   constructor(baseUrl: string, token: string, log?: Logger, fetchImpl?: typeof fetch) {
     super("Cloudflare", "cloudflare-mcp", baseUrl, token, log, fetchImpl);
+  }
+}
+
+/** Buildkite, for the runner's Engineer jobs and the Assistant (D-82, read scope only). */
+export class BuildkiteAuth extends McpAuth {
+  constructor(baseUrl: string, token: string, log?: Logger, fetchImpl?: typeof fetch) {
+    super("Buildkite", "buildkite-mcp", baseUrl, token, log, fetchImpl);
   }
 }
 

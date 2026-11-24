@@ -192,6 +192,8 @@ export interface Board {
   clickhouse: SignInStatus | null;
   /** Cloudflare sign-in, for the Engineers and Alfred (D-64); null when the board can't ask. */
   cloudflare: SignInStatus | null;
+  /** Buildkite sign-in, for the Engineers and Alfred (D-82); null when the board can't ask. */
+  buildkite: SignInStatus | null;
   /** Jira and Confluence, one sign-in per Atlassian account (D-69); null when the board can't ask. */
   jira: SignInStatus | null;
   /** The off-machine backup of tasks and board (D-58); null when the board can't tell. */
@@ -208,7 +210,7 @@ export interface BackupStatus {
   stale: boolean;
 }
 
-/** A sign-in through an MCP proxy (Glean, Grafana, ClickHouse, Cloudflare, Jira). */
+/** A sign-in through an MCP proxy (Glean, Grafana, ClickHouse, Cloudflare, Buildkite, Jira). */
 export interface SignInStatus {
   state: "missing" | "ok" | "expired" | "unknown";
   /** Whether the service is set up (GLEAN_MCP_URL, GRAFANA_URL, CLICKHOUSE_MCP_URL, CLOUDFLARE_MCP_URL): without it there's no banner. */

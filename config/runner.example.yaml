@@ -58,6 +58,10 @@ cloudflare:
 # never OpenRouter. jira-mcp's /mcp/read on loopback (token: $PENNYWORTH_SECRETS_DIR/jira_mcp_read_token).
 jira:
   url: http://127.0.0.1:3129/mcp/read
+# Buildkite, builds and their logs with the read scope only, for Claude Code and Codex jobs only (D-82);
+# never OpenRouter. buildkite-mcp on loopback (token: $PENNYWORTH_SECRETS_DIR/buildkite_mcp_token).
+buildkite:
+  url: http://127.0.0.1:3130/mcp
 gcp:
   credentials: ~/.config/pennyworth/gcloud/application_default_credentials.json
   # Projects jobs are told to start with; the first is gcloud's default.

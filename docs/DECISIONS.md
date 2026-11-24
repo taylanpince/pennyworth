@@ -934,3 +934,17 @@ Ubuntu's `bwrap-userns-restrict` AppArmor profile strips capabilities from Bubbl
   - **A round keeps the panel it started with** (`panel` in the review's state), so a fallback mid-round follows its own chain even if the picker changes meanwhile.
   - **The second reviewer is only ever on the reviewer's override,** and only the reviewer has one: the board refuses it elsewhere, and the runner's `pickerFor` keeps it when a comment moves reviewer 1. Paperclip never wakes the reviewer, so the extra keys never reach a run config. The runner's own review parts show the one model that ran them (`pair: false`).
   - **Linus's own turns move to Kimi K3 with the role.** OpenRouter jobs don't read Slack, Glean or other tasks; picking a Claude or Codex model as reviewer 1 brings those back.
+
+## D-82: Buildkite for the agents, read-only
+
+- **Problem:** Ada couldn't read the Buildkite logs behind two failing PR checks (PEN-6091, and PEN-2714 before it). Buildkite answered 403, so she worked from the excerpt the user pasted. The user is a Buildkite admin and asked for it to be added.
+- **Decision:** `buildkite-mcp`, a proxy to Buildkite's hosted MCP server, signed in from the board (`/buildkite/connect`, callback `/buildkite/callback`; dynamic client registration, PKCE, refresh tokens). Same pattern as Cloudflare (D-64): no API token to keep, a Connect/Reconnect banner, a Settings card with the signed-in user (`current_user`), and the healthcheck.
+- **Three boundaries, two of them Buildkite's:**
+  - **The read scope.** Buildkite's authorization server offers two scopes, `read` and `write` (2026-11-24). Pennyworth asks for `read` and refuses a sign-in that comes back with anything else (`writeScopes` in `services/buildkite-mcp/src/policy.ts`).
+  - **The read-only endpoint.** `BUILDKITE_MCP_URL` is `https://mcp.buildkite.com/mcp/readonly`, which Buildkite serves without its write tools.
+  - **Our tool list.** `READ_TOOLS` lists Buildkite's documented reads, and `NEVER` refuses anything that creates, updates, deletes, cancels, rebuilds, retries, unblocks, pauses or resumes, even if allowlisted. Left out on purpose: `access_token` (it returns the token), `get_job_env` (a job's environment carries secrets) and the cluster secret tools.
+  - `verify-security.sh` checks the scope, the sign-in check, `NEVER`, the tool list and that `BUILDKITE_MCP_URL` ends in `/readonly`.
+- **Who gets it:** Claude Code and Codex jobs, whatever the role, on `127.0.0.1:3130/mcp` with bearer `buildkite_mcp_token` in the environment (`PRIVATE_READS`), and the Assistant through the backplane (`http://buildkite-mcp:8093/mcp`, the pipeline, build, job, log, artifact and test reads). Never OpenRouter, and never the scouts (`verify-security.sh`). It has no write endpoint, so no `/mcp/read` split (D-51), like Cloudflare.
+- **Retrying a job stays the user's:** prompts say to name the job to retry and ask. A retry on the user's word would be a separate write, checked by `authorize()` like `pennyworth aws`; not built.
+- **Trade-off:** reads are as wide as the user's own Buildkite access, an admin's, across every organization they belong to. Logs can print secrets; prompts forbid copying a value.
+- **Same day:** `horizon-games` (the Buildkite cluster's Pulumi, `horizon-games/k8s`) joined `allowed_orgs`. Its repositories clone over SSH, whose key is SSO-authorized; `gh` API calls there need the current gh OAuth token authorized for the org's SAML SSO, which GitHub grants per token.

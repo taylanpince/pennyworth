@@ -51,6 +51,8 @@ export interface Config {
   clickhouse?: { url: string; token: string };
   /** cloudflare-mcp's sign-in endpoints (D-64): off unless the token file exists. */
   cloudflare?: { url: string; token: string };
+  /** buildkite-mcp's sign-in endpoints (D-82): off unless the token file exists. */
+  buildkite?: { url: string; token: string };
   /** jira-mcp's sign-in endpoints (D-69): off unless the token file exists. */
   jira?: { url: string; token: string };
   /** primer-mcp's sign-in endpoints (D-66): off unless the token file exists. */
@@ -85,6 +87,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     grafana: grafanaConfig(env),
     clickhouse: clickhouseConfig(env),
     cloudflare: cloudflareConfig(env),
+    buildkite: buildkiteConfig(env),
     jira: jiraConfig(env),
     primer: primerConfig(env),
     backupStatus: env.BOARD_BACKUP_STATUS ?? join(dirname(env.BOARD_DB ?? "/data/board/board.sqlite"), "backup.json"),
@@ -119,6 +122,12 @@ function clickhouseConfig(env: NodeJS.ProcessEnv): Config["clickhouse"] {
   const file = env.CLICKHOUSE_AUTH_TOKEN_FILE ?? "/run/secrets/clickhouse_auth_token";
   if (!existsSync(file)) return undefined;
   return { url: (env.CLICKHOUSE_SERVICE_URL ?? "http://clickhouse-mcp:8088").replace(/\/+$/, ""), token: readFileSync(file, "utf8").trim() };
+}
+
+function buildkiteConfig(env: NodeJS.ProcessEnv): Config["buildkite"] {
+  const file = env.BUILDKITE_AUTH_TOKEN_FILE ?? "/run/secrets/buildkite_auth_token";
+  if (!existsSync(file)) return undefined;
+  return { url: (env.BUILDKITE_SERVICE_URL ?? "http://buildkite-mcp:8093").replace(/\/+$/, ""), token: readFileSync(file, "utf8").trim() };
 }
 
 function cloudflareConfig(env: NodeJS.ProcessEnv): Config["cloudflare"] {

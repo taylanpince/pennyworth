@@ -24,7 +24,7 @@ services:
       - /bin/sh
       - -c
       # Also exports the bearer tokens Codex sends to ops-mcp, google-workspace-mcp, slack-mcp, telegram-mcp, primer-mcp, glean-mcp, github-mcp,
-      # clickhouse-mcp, cloudflare-mcp and jira-mcp (bearer_token_env_var in the shared Codex config). $$ escapes compose interpolation.
+      # clickhouse-mcp, cloudflare-mcp, jira-mcp and buildkite-mcp (bearer_token_env_var in the shared Codex config). $$ escapes compose interpolation.
       - >-
         export BETTER_AUTH_SECRET="$$(cat /run/secrets/paperclip_auth_secret)"
         PAPERCLIP_AGENT_JWT_SECRET="$$(cat /run/secrets/paperclip_agent_jwt_secret)"
@@ -38,6 +38,7 @@ services:
         PENNYWORTH_CLICKHOUSE_MCP_TOKEN="$$(cat /run/secrets/clickhouse_mcp_token)"
         PENNYWORTH_CLOUDFLARE_MCP_TOKEN="$$(cat /run/secrets/cloudflare_mcp_token)"
         PENNYWORTH_JIRA_MCP_TOKEN="$$(cat /run/secrets/jira_mcp_token)"
+        PENNYWORTH_BUILDKITE_MCP_TOKEN="$$(cat /run/secrets/buildkite_mcp_token)"
         PENNYWORTH_BOARD_TOKEN="$$(cat /run/secrets/board_internal_token)"
         PENNYWORTH_WHATSAPP_MCP_TOKEN="$$(cat /run/secrets/whatsapp_mcp_token 2>/dev/null || true)"
         PENNYWORTH_CALENDAR_WRITE_TOKEN="$$(cat /run/secrets/calendar_write_token 2>/dev/null || true)"
@@ -81,6 +82,8 @@ services:
       - cloudflare_mcp_token
       # Jira and Confluence (D-69): the Assistant's reads and Jira writes, the Writer's reads (enabled_tools).
       - jira_mcp_token
+      # The Assistant's Buildkite reads (D-82).
+      - buildkite_mcp_token
       # The board's internal API, for the Assistant's task_schedule / task_recurring (D-25).
       - board_internal_token
     pids_limit: 2048
@@ -405,6 +408,37 @@ services:
       - backplane
       - egress
 
+  # Buildkite through its hosted MCP server's read-only endpoint (BUILDKITE_MCP_URL, mcp.buildkite.com/mcp/readonly):
+  # pipelines, builds, jobs and their logs, for the runner's Engineer jobs and the Assistant (D-82). Signed in from
+  # the board with Buildkite's read scope only (services/buildkite-mcp/src/policy.ts), so Buildkite refuses every change.
+  buildkite-mcp:
+    <<: *hardening
+    build: ./services/buildkite-mcp
+    image: pennyworth/buildkite-mcp:local
+    user: "${PUID:-1000}:${PGID:-100}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    environment:
+      BUILDKITE_MCP_URL: "${BUILDKITE_MCP_URL:-}"
+      BUILDKITE_STATE_DIR: /state
+      MCP_TOKEN_FILE: /run/secrets/buildkite_mcp_token
+      # The board's sign-in endpoints: state, and starting or finishing a sign-in.
+      BUILDKITE_AUTH_TOKEN_FILE: /run/secrets/buildkite_auth_token
+    volumes:
+      # Read-write: the registered client and the token pair, refreshed here.
+      - ${PENNYWORTH_SECRETS_DIR}/buildkite:/state
+    secrets:
+      - buildkite_mcp_token
+      - buildkite_auth_token
+    dns: [1.1.1.1, 8.8.8.8]   # see paperclip
+    ports:
+      # Loopback only, for the runner's Engineer jobs on the host: /mcp, bearer token.
+      - "127.0.0.1:3130:8093"
+    networks:
+      - backplane
+      - egress
+
   # GitHub issues and pull requests: read, and comment or open issues in GITHUB_COMMENT_ORGS (D-39, D-42). Holds
   # the user's gh token; services/github-mcp/src/github.ts allows only those requests.
   github-mcp:
@@ -469,6 +503,7 @@ services:
       - cloudflare_auth_token # Cloudflare sign-in state and sign-in only (D-64); not the MCP token
       - jira_auth_token     # Jira's accounts: state, adding and removing one (D-69); not the MCP tokens
       - primer_auth_token   # Primer sign-in state and sign-in only (D-66); not the MCP tokens
+      - buildkite_auth_token # Buildkite sign-in state and sign-in only (D-82); not the MCP token
     ports:
       - "127.0.0.1:3120:3120"
       # LAN listener; loopback-only unless .env sets BOARD_LAN_BIND=0.0.0.0 (e.g. with BOARD_LAN_PORT=80).
@@ -544,6 +579,10 @@ secrets:
     file: ${PENNYWORTH_SECRETS_DIR}/cloudflare_mcp_token
   cloudflare_auth_token:
     file: ${PENNYWORTH_SECRETS_DIR}/cloudflare_auth_token
+  buildkite_mcp_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/buildkite_mcp_token
+  buildkite_auth_token:
+    file: ${PENNYWORTH_SECRETS_DIR}/buildkite_auth_token
   jira_mcp_token:
     file: ${PENNYWORTH_SECRETS_DIR}/jira_mcp_token
   jira_mcp_read_token:

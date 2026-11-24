@@ -2,7 +2,7 @@ import type { AddressInfo } from "node:net";
 import pino from "pino";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
-import { ClickHouseAuth, CloudflareAuth, GleanAuth, GrafanaAuth } from "../src/mcpauth.js";
+import { BuildkiteAuth, ClickHouseAuth, CloudflareAuth, GleanAuth, GrafanaAuth } from "../src/mcpauth.js";
 import type { Paperclip } from "../src/paperclip.js";
 import { Store } from "../src/store.js";
 
@@ -88,7 +88,7 @@ describe("Glean sign-in routes", () => {
   });
 });
 
-describe("Grafana, ClickHouse and Cloudflare sign-in routes", () => {
+describe("Grafana, ClickHouse, Cloudflare and Buildkite sign-in routes", () => {
   const seen: { path: string; body: unknown }[] = [];
   const grafana = new GrafanaAuth("http://grafana", "t", undefined, (async (u: string | URL, init?: RequestInit) => {
     const path = new URL(String(u)).pathname;
@@ -112,8 +112,15 @@ describe("Grafana, ClickHouse and Cloudflare sign-in routes", () => {
     if (path === "/auth/finish") return json({ ok: true });
     return json({}, 404);
   }) as typeof fetch);
-  // No Glean: its bare /callback must not reach Grafana, ClickHouse or Cloudflare.
-  const app = createApp({ paperclip: {} as Paperclip, store: new Store(":memory:"), log: pino({ level: "silent" }), staticDir: "/nonexistent", timezone: "UTC", grafana, clickhouse, cloudflare, allowedHosts: ["localhost:3120", "127.0.0.1:3120"], mode: "local" });
+  const buildkite = new BuildkiteAuth("http://buildkite", "t", undefined, (async (u: string | URL, init?: RequestInit) => {
+    const path = new URL(String(u)).pathname;
+    seen.push({ path: `buildkite${path}`, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    if (path === "/auth/start") return json({ url: "https://mcp.buildkite.com/oauth/authorize?state=s" });
+    if (path === "/auth/finish") return json({ ok: true });
+    return json({}, 404);
+  }) as typeof fetch);
+  // No Glean: its bare /callback must not reach Grafana, ClickHouse, Cloudflare or Buildkite.
+  const app = createApp({ paperclip: {} as Paperclip, store: new Store(":memory:"), log: pino({ level: "silent" }), staticDir: "/nonexistent", timezone: "UTC", grafana, clickhouse, cloudflare, buildkite, allowedHosts: ["localhost:3120", "127.0.0.1:3120"], mode: "local" });
   let base = "";
   beforeAll(async () => {
     await new Promise<void>((r) => app.listen(0, "127.0.0.1", r));
@@ -150,6 +157,14 @@ describe("Grafana, ClickHouse and Cloudflare sign-in routes", () => {
     expect(seen.at(-1)).toEqual({ path: "clickhouse/auth/start", body: { redirect_uri: "http://localhost:3120/clickhouse/callback" } });
     expect(await get("/clickhouse/callback?state=s&code=good")).toMatchObject({ status: 302, location: "/" });
     expect(seen.at(-1)).toEqual({ path: "clickhouse/auth/finish", body: { state: "s", code: "good" } });
+  });
+
+  it("sends the laptop to Buildkite with its own callback (D-82)", async () => {
+    const r = await get("/buildkite/connect");
+    expect(r).toMatchObject({ status: 302, location: expect.stringMatching(/^https:\/\/mcp\.buildkite\.com\//) });
+    expect(seen.at(-1)).toEqual({ path: "buildkite/auth/start", body: { redirect_uri: "http://localhost:3120/buildkite/callback" } });
+    expect(await get("/buildkite/callback?state=s&code=good")).toMatchObject({ status: 302, location: "/" });
+    expect(seen.at(-1)).toEqual({ path: "buildkite/auth/finish", body: { state: "s", code: "good" } });
   });
 
   it("sends the laptop to Cloudflare with its own callback (D-64)", async () => {

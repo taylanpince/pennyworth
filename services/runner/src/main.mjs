@@ -1788,7 +1788,7 @@ async function startJob({ issue, instructions, event = false }) {
     const memoryText = await recallMemory(boardApi, { scope: memoryOf, engine: engine.kind, log: (m, f) => log(m, { issue: issue.identifier, ...f }) });
     const memory = memoryText && (!resumed || state.get(`memory:${issue.id}`) !== memoryHash(memoryText)) ? memoryText : "";
     if (memoryText) state.set(`memory:${issue.id}`, memoryHash(memoryText));
-    // Private reads for Claude Code and Codex (D-48, D-51, D-57, D-64, D-69), and the Slack messages the task came from.
+    // Private reads for Claude Code and Codex (D-48, D-51, D-57, D-64, D-69, D-82), and the Slack messages the task came from.
     const observe = observing
       ? {
           grafana: existsSync(cfg.grafanaTokenFile),
@@ -1797,6 +1797,7 @@ async function startJob({ issue, instructions, event = false }) {
           clickhouse: existsSync(cfg.clickhouseTokenFile),
           cloudflare: existsSync(cfg.cloudflareTokenFile),
           jira: existsSync(cfg.jiraTokenFile),
+          buildkite: existsSync(cfg.buildkiteTokenFile),
           sources: slackSources(`${full.description ?? ""}\n${parent?.description ?? ""}\n${instructions}`),
           gcp: { state: gcp.state, detail: gcp.detail, projects: cfg.gcp.projects },
           aws: aws ? { state: aws.state, detail: aws.detail, accounts: aws.accounts, unavailable: aws.unavailable, writeRoles: aws.writeRoles } : undefined,

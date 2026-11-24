@@ -183,6 +183,25 @@ describe("engines, modes and shells", () => {
     assert.doesNotMatch(observeSection("Taylan", { clickhouse: false, grafana: true }), /ClickHouse/);
   });
 
+  // D-82: Buildkite, read scope only, for Claude Code and Codex only.
+  it("gives Claude Code and Codex Buildkite, never OpenRouter", () => {
+    const dir = mkdtempSync(join(tmpdir(), "reads-"));
+    for (const f of ["claude", "or", "buildkite"]) writeFileSync(join(dir, f), `${f}-token\n`);
+    const c = { ...cfg, claudeTokenFile: join(dir, "claude"), claudeConfigDir: join(dir, "home"), openrouterKeyFile: join(dir, "or"), primerTokenFile: join(dir, "missing"), buildkiteMcpUrl: "http://127.0.0.1:3130/mcp", buildkiteTokenFile: join(dir, "buildkite"), sandbox: { extra_writable_roots: [] } };
+    const claude = buildCommand({ cfg: c, engine: { kind: "claude" }, worktree: "/w" });
+    const servers = JSON.parse(claude.argv[claude.argv.indexOf("--mcp-config") + 1]).mcpServers;
+    assert.deepEqual(servers, { buildkite: { type: "http", url: "http://127.0.0.1:3130/mcp", headers: { Authorization: "Bearer ${BUILDKITE_MCP_TOKEN}" } } });
+    assert.equal(claude.env.BUILDKITE_MCP_TOKEN, "buildkite-token");
+    assert.ok(!claude.argv.join(" ").includes("buildkite-token"), "tokens only in the environment");
+    const codex = buildCommand({ cfg: c, engine: { kind: "codex" }, worktree: "/w", lastMessageFile: "/x" }).argv;
+    assert.ok(codex.includes('mcp_servers.buildkite.url="http://127.0.0.1:3130/mcp"'));
+    const or = buildCommand({ cfg: c, engine: { kind: "openrouter", model: "z-ai/glm" }, worktree: "/w" });
+    assert.equal(or.env.BUILDKITE_MCP_TOKEN, undefined);
+    assert.doesNotMatch(or.env.OPENCODE_CONFIG_CONTENT, /buildkite|3130/);
+    assert.match(observeSection("Taylan", { buildkite: true }), /\*\*Buildkite\*\*.*tail_logs.*read scope only/);
+    assert.doesNotMatch(observeSection("Taylan", { buildkite: false, grafana: true }), /Buildkite/);
+  });
+
   // D-64: Cloudflare, read scopes only, for Claude Code and Codex only.
   it("gives Claude Code and Codex Cloudflare, never OpenRouter", () => {
     const dir = mkdtempSync(join(tmpdir(), "reads-"));

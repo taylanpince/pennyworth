@@ -60,6 +60,10 @@ mcp_servers:
   jira:
     url: http://jira-mcp:8092/mcp
     bearer_token_env_var: PENNYWORTH_JIRA_MCP_TOKEN
+  # Buildkite: pipelines, builds, jobs and their logs, read scope only (D-82).
+  buildkite:
+    url: http://buildkite-mcp:8093/mcp
+    bearer_token_env_var: PENNYWORTH_BUILDKITE_MCP_TOKEN
   paperclip_tasks:
     command: node
     args: [/opt/pennyworth/paperclip-tasks-mcp.mjs]
@@ -201,7 +205,7 @@ agents:
     timeout_sec: 3600
     # Public web pages and search via OpenAI's cached index only (D-19).
     web_search: cached
-    mcp_servers: [slack, telegram, google_workspace, primer, glean, github, clickhouse, cloudflare, jira, paperclip_tasks, ops_mcp]
+    mcp_servers: [slack, telegram, google_workspace, primer, glean, github, clickhouse, cloudflare, jira, buildkite, paperclip_tasks, ops_mcp]
     enabled_tools:
       # Reads only, on request (D-29); the scout tools stay with the Telegram Scout.
       telegram: [list_allowed_chats, read_chat_history, search_chat_history, get_new_messages]
@@ -217,6 +221,8 @@ agents:
       clickhouse: [get_organizations, get_services_list, get_service_details, list_databases, list_tables, run_select_query]
       # Read scopes only: Cloudflare refuses every change (D-64).
       cloudflare: [search, execute, docs, whoami]
+      # Read scope only: Buildkite refuses retries and every other change (D-82).
+      buildkite: [current_user, user_token_organization, list_pipelines, get_pipeline, list_builds, get_build, get_build_test_engine_runs, list_jobs, get_job, search_logs, tail_logs, read_logs, list_artifacts_for_build, list_artifacts_for_job, get_artifact, list_annotations, list_tests, get_test, list_test_runs, get_test_run, get_failed_executions]
       # Reads, and Jira issues opened, edited, moved and commented on, only when asked (D-69). Never deletes.
       jira: [getAccessibleAtlassianResources, atlassianUserInfo, search, getJiraIssue, listJiraIssueComments, searchJiraIssuesUsingJql, getConfluenceContent, searchConfluence, discover, executeRead, createJiraIssue, editJiraIssue, transitionJiraIssue, addOrEditJiraIssueComment]
       # task_create_engineer_task: Engineer sub-tasks that wait for the user's go-ahead (D-24).

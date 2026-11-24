@@ -108,7 +108,7 @@ export const observes = (kind) => kind === "claude" || kind === "codex";
 /**
  * The private reads for Claude Code and Codex (observes): Grafana (D-48), Slack and Glean (D-51),
  * the user's own messages and the company's documents, ClickHouse (D-57), production data, Cloudflare (D-64), its
- * accounts and zones, and Jira and Confluence (D-69) on every Atlassian account the user added. Each is an MCP server on loopback that serves
+ * accounts and zones, Jira and Confluence (D-69) on every Atlassian account the user added, and Buildkite (D-82), its builds and logs. Each is an MCP server on loopback that serves
  * reads only, with a token the job gets through the environment, never on the command line. Skipped
  * until set up. OpenRouter never gets them: its prompts go to third-party model providers.
  */
@@ -121,6 +121,7 @@ const PRIVATE_READS = [
   // execute may page through many API requests.
   { name: "cloudflare", url: "cloudflareMcpUrl", tokenFile: "cloudflareTokenFile", env: "CLOUDFLARE_MCP_TOKEN", toolTimeout: 180 },
   { name: "jira", url: "jiraMcpUrl", tokenFile: "jiraTokenFile", env: "JIRA_MCP_TOKEN" },
+  { name: "buildkite", url: "buildkiteMcpUrl", tokenFile: "buildkiteTokenFile", env: "BUILDKITE_MCP_TOKEN" },
 ];
 export function privateReads(cfg) {
   if (cfg.localCad) return [];
@@ -220,7 +221,7 @@ function engineCommand({ cfg, engine, worktree, sessionId, lastMessageFile, gcp,
     mkdirSync(cfg.claudeConfigDir, { recursive: true, mode: 0o700 });
     // Headless, no prompts (the codex sandbox is the write boundary), and nothing from your own
     // Claude setup: a runner-owned config dir, no settings files (yours or the repo's: no hooks),
-    // no MCP servers but the read-only endpoints (Primer; Grafana, Slack, Glean, ClickHouse, Cloudflare, Jira), and no claude.ai connectors.
+    // no MCP servers but the read-only endpoints (Primer; Grafana, Slack, Glean, ClickHouse, Cloudflare, Jira, Buildkite), and no claude.ai connectors.
     const mcpServers = {
       ...(p ? { primer: { type: "http", url: p.url, headers: { Authorization: "Bearer ${PRIMER_MCP_TOKEN}" } } } : {}),
       ...Object.fromEntries(reads.map((r) => [r.name, { type: "http", url: r.url, headers: { Authorization: `Bearer \${${r.env}}` } }])),

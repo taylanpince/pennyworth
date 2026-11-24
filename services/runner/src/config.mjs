@@ -94,6 +94,9 @@ export function loadConfig() {
     // Jira and Confluence reads for Claude Code and Codex jobs (D-69): jira-mcp's /mcp/read, with a token of its own.
     jiraMcpUrl: env.JIRA_RUNNER_URL ?? cfg.jira?.url ?? "http://127.0.0.1:3129/mcp/read",
     jiraTokenFile: join(secrets, "jira_mcp_read_token"),
+    // Buildkite reads for Claude Code and Codex jobs (D-82): buildkite-mcp's loopback port.
+    buildkiteMcpUrl: env.BUILDKITE_RUNNER_URL ?? cfg.buildkite?.url ?? "http://127.0.0.1:3130/mcp",
+    buildkiteTokenFile: join(secrets, "buildkite_mcp_token"),
     gcp: {
       credentialsFile: gcpCredentials,
       projects: (cfg.gcp?.projects ?? []).filter(Boolean),

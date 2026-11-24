@@ -147,6 +147,18 @@ else
   printf '  skip  cloudflare (CLOUDFLARE_MCP_URL not set)\n'
 fi
 
+# Buildkite for the runner's Engineer jobs and the Assistant (D-82), on loopback; listing tools signs in.
+bk_health="$(curl -s -m 10 http://127.0.0.1:3130/healthz 2>/dev/null)"
+if echo "$bk_health" | grep -q '"ok":true'; then
+  bktoken="$(cat "${PENNYWORTH_SECRETS_DIR:-/nonexistent}/buildkite_mcp_token" 2>/dev/null)"
+  check "buildkite (read tools)" sh -c "curl -fsS -m 30 -X POST http://127.0.0.1:3130/mcp -H 'Authorization: Bearer $bktoken' -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}' | grep -q read_logs"
+elif [ -n "${BUILDKITE_MCP_URL:-}" ]; then
+  # Set up but not signed in, or Buildkite stopped accepting the sign-in.
+  check "buildkite sign-in" sh -c "echo '$(echo "$bk_health" | cut -c1-140)' | grep -o '\"detail\":\"[^\"]*' | cut -d'\"' -f4 | grep . || echo 'buildkite-mcp unreachable'; exit 1"
+else
+  printf '  skip  buildkite (BUILDKITE_MCP_URL not set)\n'
+fi
+
 # Jira and Confluence on every Atlassian account added in Settings (D-69), on loopback; listing tools signs in.
 jira_health="$(curl -s -m 30 http://127.0.0.1:3129/healthz 2>/dev/null)"
 if echo "$jira_health" | grep -q '"ok":true'; then

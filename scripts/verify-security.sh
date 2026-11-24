@@ -116,6 +116,15 @@ for c in $containers; do
       [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
         && pass "cloudflare-mcp: only its own token directory mounted" || fail "cloudflare-mcp has unexpected mounts: $mounts"
       ;;
+    *buildkite-mcp*)
+      # Loopback only, for the runner's Engineer jobs (D-82); bearer token required.
+      [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = '{"8093/tcp":[{"HostIp":"127.0.0.1","HostPort":"3130"}]}' ] \
+        && pass "buildkite-mcp: published on 127.0.0.1:3130 only" || fail "buildkite-mcp ports are not loopback 3130 only"
+      [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3130/mcp)" = "401" ] \
+        && pass "buildkite-mcp: loopback endpoint requires the token" || fail "buildkite-mcp: loopback endpoint answers without the token"
+      [ "$(echo "$mounts" | tr ';' '\n' | grep -c '|/state|')" = "1" ] && ! echo "$mounts" | tr ';' '\n' | grep -v '/run/secrets' | grep -v '|/state|' | grep -q . \
+        && pass "buildkite-mcp: only its own token directory mounted" || fail "buildkite-mcp has unexpected mounts: $mounts"
+      ;;
     *jira-mcp*)
       # Loopback only, for the runner's Engineer jobs: /mcp/read with its own token, reads only (D-51, D-69).
       [ "$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')" = '{"8092/tcp":[{"HostIp":"127.0.0.1","HostPort":"3129"}]}' ] \
@@ -192,6 +201,9 @@ for a in config/paperclip.yaml config/paperclip.example.yaml; do
   # Cloudflare (D-64): every account and zone, for the Assistant only, never the scouts.
   cf_agents="$(node -e 'const fs=require("node:fs"),yaml=require("./services/ops-mcp/node_modules/yaml"); const c=yaml.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(Object.entries(c.agents??{}).filter(([,a])=>(a.mcp_servers??[]).includes("cloudflare")).map(([k])=>k+": ").sort().join(""))' "$a")"
   { [ -z "$cf_agents" ] || [ "$cf_agents" = "assistant: " ]; } && pass "$a: Cloudflare is disabled or limited to the Assistant" || fail "$a: Cloudflare given to: $cf_agents"
+  # Buildkite (D-82): build logs, for the Assistant only, never the scouts.
+  bk_agents="$(node -e 'const fs=require("node:fs"),yaml=require("./services/ops-mcp/node_modules/yaml"); const c=yaml.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(Object.entries(c.agents??{}).filter(([,a])=>(a.mcp_servers??[]).includes("buildkite")).map(([k])=>k+": ").sort().join(""))' "$a")"
+  { [ -z "$bk_agents" ] || [ "$bk_agents" = "assistant: " ]; } && pass "$a: Buildkite is disabled or limited to the Assistant" || fail "$a: Buildkite given to: $bk_agents"
   # Jira (D-69): the Assistant (reads and Jira writes) and the Writer (reads only), never the scouts; every agent
   # with it lists its tools, and only the Assistant's list has writes.
   jira_agents="$(node -e 'const fs=require("node:fs"),yaml=require("./services/ops-mcp/node_modules/yaml"); const c=yaml.parse(fs.readFileSync(process.argv[1],"utf8")); const W=/^(createJiraIssue|editJiraIssue|transitionJiraIssue|addOrEditJiraIssueComment|executeWrite|executeDestructive)$/; process.stdout.write(Object.entries(c.agents??{}).filter(([,a])=>(a.mcp_servers??[]).includes("jira")).map(([k,a])=>{const t=a.enabled_tools?.jira; return k+(Array.isArray(t)?(t.some(n=>W.test(n))?"=writes":"=reads"):"=all")+" "}).sort().join(""))' "$a")"
@@ -242,6 +254,14 @@ grep -qF 'export const READ_SCOPE = /^(user:read|account:read|[a-z0-9_-]+\.(read
   && grep -q 'const reads = readScopes(supported);' services/cloudflare-mcp/src/signin.ts && grep -q 'const writes = granted ? writeScopes(granted) : \[\];' services/cloudflare-mcp/src/signin.ts \
   && [ "$(sed -n 's/^export const READ_TOOLS = \[\(.*\)\];/\1/p' services/cloudflare-mcp/src/policy.ts | tr -d '" ')" = "search,execute,docs,whoami" ] \
   && pass "cloudflare-mcp asks for Cloudflare's read scopes only and refuses a sign-in with more (services/cloudflare-mcp/src/policy.ts)" || fail "cloudflare-mcp: scopes, the sign-in check or the tool list changed"
+# Buildkite (D-82): the read-only endpoint and the read scope only, a sign-in granted more is refused, and no tool
+# that changes anything or hands out a token, a job's environment or a secret.
+grep -qF 'export const READ_SCOPE = "read";' services/buildkite-mcp/src/policy.ts \
+  && grep -q 'const reads = readScopes(supported);' services/buildkite-mcp/src/signin.ts && grep -q 'const writes = granted ? writeScopes(granted) : \[\];' services/buildkite-mcp/src/signin.ts \
+  && grep -qF 'const NEVER = /(creat|update|delete|cancel|rebuild|retry|unblock|pause|resume|set_default|write|^access_token$|secret|_env$)/i;' services/buildkite-mcp/src/policy.ts \
+  && ! sed -n '/^export const READ_TOOLS = \[/,/^\];/p' services/buildkite-mcp/src/policy.ts | grep -qE '"(access_token|get_job_env|[a-z_]*secret[a-z_]*|(create|update|delete|cancel|rebuild|retry|unblock)_[a-z_]*)"' \
+  && { [ -z "${BUILDKITE_MCP_URL:-}" ] || echo "$BUILDKITE_MCP_URL" | grep -qE '/readonly$'; } \
+  && pass "buildkite-mcp asks for Buildkite's read scope only, on the read-only endpoint, and exposes reads only (services/buildkite-mcp/src/policy.ts)" || fail "buildkite-mcp: scope, the sign-in check, the tool list or BUILDKITE_MCP_URL changed"
 # Sign-ins from Settings (D-66): the runner sends back only an https link, a plain code and a prompt (strict schema),
 # never a tool's output, and Codex signs in to a fresh home so a sign-in can't remove the current one.
 grep -qF '.refine((u) => u.startsWith("https://"), "https links only")' services/board/src/signins.ts \

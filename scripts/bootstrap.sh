@@ -69,6 +69,8 @@ gen_secret cloudflare_auth_token # the board's Cloudflare sign-in state and sign
 gen_secret jira_mcp_token        # the Assistant and the Writer (D-69)
 gen_secret jira_mcp_read_token   # the runner's Engineer jobs, /mcp/read on 127.0.0.1:3129 (D-69)
 gen_secret jira_auth_token       # the board's Jira accounts: state, adding and removing one
+gen_secret buildkite_mcp_token   # the runner's Engineer jobs, on 127.0.0.1:3130, and the Assistant (D-82)
+gen_secret buildkite_auth_token  # the board's Buildkite sign-in state and sign-in
 gen_secret github_mcp_token
 gen_secret whatsapp_auth_token
 gen_secret whatsapp_mcp_token
@@ -85,6 +87,7 @@ mkdir -p "$PENNYWORTH_SECRETS_DIR/grafana" && chmod 0700 "$PENNYWORTH_SECRETS_DI
 mkdir -p "$PENNYWORTH_SECRETS_DIR/clickhouse" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/clickhouse"
 mkdir -p "$PENNYWORTH_SECRETS_DIR/cloudflare" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/cloudflare"
 mkdir -p "$PENNYWORTH_SECRETS_DIR/jira" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/jira"
+mkdir -p "$PENNYWORTH_SECRETS_DIR/buildkite" && chmod 0700 "$PENNYWORTH_SECRETS_DIR/buildkite"
 
 echo "Config"
 mkdir -p "$config_dir"

@@ -753,6 +753,38 @@ export function CloudflareBanner({ cloudflare, canConnect }: { cloudflare: Board
 }
 
 /**
+ * Buildkite sign-in (D-82): a banner when Pennyworth isn't signed in to Buildkite yet, or it stopped
+ * accepting the sign-in, with Connect / Reconnect on the laptop (it returns to its loopback address).
+ */
+export function BuildkiteBanner({ buildkite, canConnect }: { buildkite: Board["buildkite"]; canConnect: boolean }) {
+  if (!buildkite?.configured || (buildkite.state !== "missing" && buildkite.state !== "expired")) return null;
+  const since = new Date(buildkite.since);
+  return (
+    <div className="alert" role="alert">
+      <div className="alert-row">
+        <span>
+          {buildkite.state === "missing" ? (
+            <>Buildkite isn't connected yet. Alfred and the Engineers can't read it until it is.</>
+          ) : (
+            <>
+              Buildkite sign-in stopped working on {since.toLocaleDateString(undefined, { weekday: "long" })} at{" "}
+              {since.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}. Alfred and the Engineers can't read it.
+            </>
+          )}
+        </span>
+        {canConnect ? (
+          <a className="btn" href="/buildkite/connect">
+            {buildkite.state === "missing" ? "Connect" : "Reconnect"}
+          </a>
+        ) : (
+          <span className="alert-hint">Connect from the board on your computer.</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * Jira sign-in (D-69): a banner when no Atlassian account is connected yet, or one of them stopped
  * working, naming it. Reconnecting signs in as that account again (Settings lists them all).
  */

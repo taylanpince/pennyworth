@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-81) for why things are the way they are. This file covers how to work on the system and the traps already found.
+Guidance for coding agents working on **Pennyworth**, a personal executive assistant built on Paperclip. Read `README.md` for the user-facing overview, `docs/SPECS.md` for the original spec, and `docs/DECISIONS.md` (D-1 to D-82) for why things are the way they are. This file covers how to work on the system and the traps already found.
 
 ## System map
 
@@ -9,7 +9,7 @@ host (NixOS, user taylan)
 ├── pennyworth-runner (systemd --user, node, runs AS THE USER)   services/runner/
 │     polls Paperclip: engineer tasks → Codex/Claude Code/OpenRouter jobs in per-task workspaces under ~/pennyworth/tasks (D-41);
 │                      what a job makes for others (Primer document, .pennyworth/out/) is attached to its task (D-54),
-│                      Claude Code and Codex jobs read Grafana and Google Cloud (D-48), Slack and Glean (D-51), ClickHouse (D-57), AWS (D-59), Cloudflare (D-64), Jira and Confluence (D-69), read-only,
+│                      Claude Code and Codex jobs read Grafana and Google Cloud (D-48), Slack and Glean (D-51), ClickHouse (D-57), AWS (D-59), Cloudflare (D-64), Jira and Confluence (D-69), Buildkite (D-82), read-only,
 │                      or a merge queue for the PRs a task lists, in code (D-46)
 │                      its own PRs watched: reviews and failed checks start the author's next turn (D-71),
 │                      and reviewed by Linus on two models from other families at once, fixes and re-reviews in rounds (D-72, D-78);
@@ -42,6 +42,8 @@ host (NixOS, user taylan)
     ├── jira-mcp             proxy to Atlassian's Rovo MCP, one sign-in per Atlassian account (Polygon's, a client's own), routed by site: Jira and
     │                        Confluence reads; Jira create/edit/comment/transition/link for the Assistant on the user's word; never deletes;
     │                        reads only on 127.0.0.1:3129/mcp/read, with their own token, for Engineer jobs; Settings sign-in (D-69)
+    ├── buildkite-mcp        proxy to Buildkite's hosted MCP, its read-only endpoint, signed in with the read scope only: pipelines, builds,
+    │                        jobs and their logs, for Engineer jobs on 127.0.0.1:3130 and the Assistant; board sign-in (D-82)
     ├── github-mcp           GitHub issues/PRs with the user's gh token: read; when asked, in GITHUB_COMMENT_ORGS: comment, open issues (on a project board),
     │                        close/label/assign issues, review PRs, re-run failed CI (D-39, D-42, D-46)
     └── board                127.0.0.1:3120 task board: buckets/rank in its SQLite, everything else via Paperclip as the user (D-22);
@@ -88,6 +90,7 @@ npm test --prefix services/github-mcp
 npm test --prefix services/grafana-mcp
 npm test --prefix services/clickhouse-mcp
 npm test --prefix services/cloudflare-mcp
+npm test --prefix services/buildkite-mcp
 npm test --prefix services/jira-mcp
 npm test --prefix services/runner                  # node --test; test/flow.test.mjs runs the real runner against a fake Paperclip and fake engines
 npm test --prefix services/board                   # vitest (server); npm run typecheck --prefix services/board covers the web app
@@ -97,7 +100,7 @@ npm run eval:busy --prefix services/runner         # comments that arrive during
 npx tsc --noEmit -p services/<svc>/tsconfig.json   # typecheck TS services
 
 # deploy
-docker compose up -d --build <ops-mcp|google-workspace-mcp|slack-mcp|telegram-mcp|primer-mcp|glean-mcp|github-mcp|grafana-mcp|clickhouse-mcp|cloudflare-mcp|jira-mcp|board>   # after code changes
+docker compose up -d --build <ops-mcp|google-workspace-mcp|slack-mcp|telegram-mcp|primer-mcp|glean-mcp|github-mcp|grafana-mcp|clickhouse-mcp|cloudflare-mcp|jira-mcp|buildkite-mcp|board>   # after code changes
 docker compose up -d paperclip                     # after compose env/entrypoint changes (--build after services/paperclip changes)
 node scripts/paperclip-setup.mjs                   # after config/paperclip.yaml or config/agents/*.md changes (idempotent)
 systemctl --user restart pennyworth-runner         # after services/runner changes
@@ -117,7 +120,7 @@ scripts/backup.sh --verify                         # restore the latest off-mach
   docker compose exec -T paperclip node /tmp/mcp-call.mjs http://ops-mcp:8080/mcp <tool> '<json>' "$(cat ~/.config/pennyworth/ops_mcp_token)"
   ```
 
-  Use `--list` in place of the tool name to list tools. The tokens for the other servers are `google_mcp_token`, `slack_mcp_token`, `telegram_mcp_token` (`http://telegram-mcp:8083/mcp`), `primer_mcp_token` (`http://primer-mcp:8084/mcp`), `glean_mcp_token` (`http://glean-mcp:8085/mcp`), `github_mcp_token` (`http://github-mcp:8086/mcp`), `grafana_mcp_token` (`http://grafana-mcp:8087/mcp`), `clickhouse_mcp_token` (`http://clickhouse-mcp:8088/mcp`), `cloudflare_mcp_token` (`http://cloudflare-mcp:8091/mcp`) and `jira_mcp_token` (`http://jira-mcp:8092/mcp`).
+  Use `--list` in place of the tool name to list tools. The tokens for the other servers are `google_mcp_token`, `slack_mcp_token`, `telegram_mcp_token` (`http://telegram-mcp:8083/mcp`), `primer_mcp_token` (`http://primer-mcp:8084/mcp`), `glean_mcp_token` (`http://glean-mcp:8085/mcp`), `github_mcp_token` (`http://github-mcp:8086/mcp`), `grafana_mcp_token` (`http://grafana-mcp:8087/mcp`), `clickhouse_mcp_token` (`http://clickhouse-mcp:8088/mcp`), `cloudflare_mcp_token` (`http://cloudflare-mcp:8091/mcp`), `jira_mcp_token` (`http://jira-mcp:8092/mcp`) and `buildkite_mcp_token` (`http://buildkite-mcp:8093/mcp`).
 - **Paperclip API as the user:** `Authorization: Bearer $(cat ~/.config/pennyworth/paperclip_board_key)`. The company ID is in `config/system.yaml`.
 - **Agent run logs:** `data/paperclip/instances/default/data/run-logs/<company>/<agent>/<run>.ndjson`. The `chunk` fields contain Codex JSON events.
 - **Runner:** `journalctl --user -u pennyworth-runner`, plus job logs in `~/.local/state/pennyworth-runner/logs/`.
@@ -297,6 +300,12 @@ scripts/backup.sh --verify                         # restore the latest off-mach
 - **The scopes are the boundary, not the tools.** Cloudflare's API MCP server is Code Mode: `execute` runs any JavaScript against the whole API, so there is no read-only tool list to keep. The sign-in asks for Cloudflare's read scopes only (`READ_SCOPE` in `services/cloudflare-mcp/src/policy.ts`, from the server's own `scopes_supported`), and a sign-in granted anything more is refused. Never add a write, `run`, `purge`, `edit` or `admin` scope, and never sign it in with an API token instead: the token's permissions would be the only check.
 - **The sign-in is for every account the user can see.** With several accounts, a call needs its `account_id`: the prompts say to list accounts first.
 - **The authorize URL is long** (about 4,400 characters with 200 scopes). Cloudflare takes it; if a future scope list makes it fail, narrow by product, not by dropping the refusal check.
+
+### Buildkite (D-82)
+
+- **Three locks, keep all of them.** The sign-in asks for Buildkite's `read` scope and refuses one granted `write` (`services/buildkite-mcp/src/policy.ts`), `BUILDKITE_MCP_URL` is the `/mcp/readonly` endpoint, and `READ_TOOLS`/`NEVER` expose reads only. Never sign it in with an API token instead: its scopes would be the only check.
+- **Some reads hand out secrets:** `access_token` returns the token itself, `get_job_env` a job's environment, and the cluster secret tools what their names say. They stay off the list; check what a new read returns before adding it (jira-mcp's rule).
+- **Retrying a failed job is a write.** Agents name the job and the user retries it. If that becomes an agent's job, make it one write on the user's word, checked by `authorize()`, not the `write` scope on the proxy.
 
 ### Jira and Confluence (D-69)
 

@@ -78,7 +78,7 @@ export interface ConnectionInputs {
   whatsapp?: { state?: string } | null;
   whatsappEnabled: boolean;
   /** The OAuth proxies the board can sign in (D-38, D-48, D-57, D-64): null when set up but not answering. */
-  proxies: Partial<Record<"glean" | "grafana" | "clickhouse" | "cloudflare" | "jira" | "primer", McpAuthStatus | null>>;
+  proxies: Partial<Record<"glean" | "grafana" | "clickhouse" | "cloudflare" | "jira" | "primer" | "buildkite", McpAuthStatus | null>>;
   host?: HostReport;
 }
 
@@ -181,12 +181,13 @@ export function connectionsView(i: ConnectionInputs): Connection[] {
     });
   }
 
-  const proxies: ["glean" | "grafana" | "clickhouse" | "cloudflare" | "jira" | "primer", string, string, string, string][] = [
+  const proxies: ["glean" | "grafana" | "clickhouse" | "cloudflare" | "jira" | "primer" | "buildkite", string, string, string, string][] = [
     ["primer", "Primer", "PRIMER_MCP_URL", "The org's documents: reading, and publishing when you ask.", "Alfred, Ursula and the Engineers"],
     ["glean", "Glean", "GLEAN_MCP_URL", "The company's search across Slack, Drive, Confluence, Jira, GitHub and people.", "Alfred, Ursula and the Engineers"],
     ["grafana", "Grafana", "GRAFANA_URL", "Logs, metrics, traces, dashboards and alerts, with read and query scopes only.", "the Engineers"],
     ["clickhouse", "ClickHouse", "CLICKHOUSE_MCP_URL", "ClickHouse Cloud: services, schemas and checked SELECT queries.", "Alfred and the Engineers"],
     ["cloudflare", "Cloudflare", "CLOUDFLARE_MCP_URL", "Every Cloudflare account and zone you can see, with read scopes only.", "Alfred and the Engineers"],
+    ["buildkite", "Buildkite", "BUILDKITE_MCP_URL", "Pipelines, builds, jobs and their logs, artifacts and test results, with the read scope only.", "Alfred and the Engineers"],
     ["jira", "Jira and Confluence", "JIRA_MCP_URL", "Every Atlassian account you add, a client's own Jira too: reads, and Jira issues opened, edited, commented on or moved when you ask Alfred. Never deletes.", "Alfred, Ursula and the Engineers"],
   ];
   for (const [id, name, env, purpose, usedBy] of proxies) out.push({ id, name, group: "board", purpose, usedBy, ...mcpProxy(id, id in i.proxies ? i.proxies[id] : undefined, env) });
