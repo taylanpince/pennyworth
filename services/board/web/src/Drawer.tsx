@@ -30,6 +30,9 @@ export function Drawer({ refId, focus, board, onClose, onChanged, onMove, onSnoo
   // `load` (and the effect below) stable, so the open task isn't blanked and rebuilt on every refresh.
   const assignees = useRef(board.assignees);
   assignees.current = board.assignees;
+  const loaded = useRef(false);
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
 
   const load = useCallback(async () => {
     try {
@@ -41,6 +44,8 @@ export function Drawer({ refId, focus, board, onClose, onChanged, onMove, onSnoo
         return;
       }
       setIssue(v), setError("");
+      // The first load marked the task and its agents' parts read: show that on the board now.
+      if (!loaded.current) (loaded.current = true), onChangedRef.current();
     } catch (e) {
       if (live.current) setError((e as Error).message);
     }

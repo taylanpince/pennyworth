@@ -74,6 +74,15 @@ class MouseOrPenSensor extends PointerSensor {
   }));
 }
 
+/** Cards read just now lose their dot. */
+function readNow(read: { ref: string; until: number }[]) {
+  const now = Date.now();
+  const refs = new Set(read.filter((r) => r.until > now).map((r) => r.ref));
+  return (c: Card): Card => (c.unread && (refs.has(c.identifier) || refs.has(c.id)) ? { ...c, unread: false } : c);
+}
+
+const mapItems = (items: Items, f: (c: Card) => Card) => Object.fromEntries(BUCKETS.map((b) => [b, items[b].map(f)])) as Items;
+
 function parseRoute(): Route {
   const h = decodeURIComponent(location.hash.replace(/^#\/?/, ""));
   // #/t/PEN-12 opens a task; #/t/PEN-12/PEN-15 opens it on the agent working in PEN-15 (D-45).
@@ -150,6 +159,8 @@ export function App() {
   const itemsRef = useRef<Items | null>(null);
   itemsRef.current = items;
   const dragFrom = useRef<Bucket | null>(null);
+  // The task open now, and the one just closed for a few seconds: read here, whatever a poll already under way says.
+  const read = useRef<{ ref: string; until: number }[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
   const addRef = useRef<HTMLInputElement>(null);
 
@@ -166,10 +177,12 @@ export function App() {
       const b = await api.board();
       if (n !== seq.current) return;
       setSlackTeams(b.slackTeams ?? {});
-      setBoard(b);
+      const seen = readNow(read.current);
+      const buckets = mapItems(b.buckets, seen);
+      setBoard({ ...b, buckets, done: b.done.map(seen), recurring: b.recurring.map(seen) });
       setError("");
       setNeedsPairing(false);
-      if (force || Date.now() > holdUntil.current) setItems(b.buckets);
+      if (force || Date.now() > holdUntil.current) setItems(buckets);
     } catch (e) {
       if (n !== seq.current) return;
       if (e instanceof PairRequired) setNeedsPairing(true);
@@ -200,6 +213,17 @@ export function App() {
       window.removeEventListener("hashchange", hash);
     };
   }, [refresh]);
+
+  // Opening a task reads it: its dot goes at once, not on the next poll.
+  const openRef = route.kind === "task" ? route.ref : null;
+  useEffect(() => {
+    if (!openRef) return;
+    read.current = [...read.current.filter((r) => r.ref !== openRef && r.until > Date.now()), { ref: openRef, until: Infinity }];
+    const seen = readNow(read.current);
+    setItems((cur) => (cur ? mapItems(cur, seen) : cur));
+    setBoard((b) => (b ? { ...b, buckets: mapItems(b.buckets, seen), done: b.done.map(seen), recurring: b.recurring.map(seen) } : b));
+    return () => void (read.current = read.current.map((r) => (r.ref === openRef ? { ...r, until: Date.now() + 15_000 } : r)));
+  }, [openRef]);
 
   // Mobile starts on Triage when there's something to sort, else Today.
   const startedTab = useRef(false);
