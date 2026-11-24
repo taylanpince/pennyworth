@@ -161,7 +161,9 @@ describe("sign-ins from Settings (D-66)", () => {
     await tick();
     assert.deepEqual(reports.at(-1), { session: "0".repeat(24), status: "waiting", url: manual, prompt: { label: "The code Claude shows after you approve", secret: false } });
     await r.handle({ session: "0".repeat(24), kind: "input", text: "abc#def" });
-    assert.deepEqual(p.stdin.written, ["abc#def\r"]);
+    assert.deepEqual(p.stdin.written, ["abc#def"]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.deepEqual(p.stdin.written, ["abc#def", "\r"]);
     p.say("\r\n Your OAuth token (valid for 1 year):\r\n\r\n sk-ant-oat01-" + "x".repeat(60) + "\r\n");
     await tick();
     await tick();
@@ -169,6 +171,34 @@ describe("sign-ins from Settings (D-66)", () => {
     assert.equal(reports.at(-1).status, "done");
     assert.ok(p.killed);
     assert.ok(!JSON.stringify(reports).includes("sk-ant"), "the token never goes to the board");
+  });
+
+  it("claude: submits a full-length paste separately, and never submits after cancellation", async () => {
+    const { cfg, reports, procs, spawnImpl } = setup();
+    const r = new SignInRunner(cfg, (u) => reports.push(u), { spawnImpl });
+    const code = "a".repeat(100) + "#" + "b".repeat(43);
+    await r.handle({ session: "a".repeat(24), kind: "start", provider: "claude" });
+    await r.handle({ session: "a".repeat(24), kind: "input", text: code });
+    assert.deepEqual(procs[0].stdin.written, [code]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.deepEqual(procs[0].stdin.written, [code, "\r"]);
+    await r.handle({ session: "a".repeat(24), kind: "cancel" });
+    await r.handle({ session: "b".repeat(24), kind: "start", provider: "claude" });
+    await r.handle({ session: "b".repeat(24), kind: "input", text: code });
+    await r.handle({ session: "b".repeat(24), kind: "cancel" });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.deepEqual(procs[1].stdin.written, [code]);
+    assert.ok(!JSON.stringify(reports).includes(code));
+  });
+
+  it("claude: a clean exit without a token is not a completed sign-in", async () => {
+    const { cfg, reports, procs, spawnImpl } = setup();
+    const r = new SignInRunner(cfg, (u) => reports.push(u), { spawnImpl });
+    await r.handle({ session: "c".repeat(24), kind: "start", provider: "claude" });
+    procs[0].exit(0);
+    await tick();
+    assert.equal(reports.at(-1).status, "failed");
+    assert.match(reports.at(-1).message, /without issuing a token/);
   });
 
   it("openrouter: asks for the key, checks it with OpenRouter, saves it, and lets a wrong one be retried", async () => {

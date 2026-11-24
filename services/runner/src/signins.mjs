@@ -192,7 +192,13 @@ export function drivers(cfg, deps = {}) {
           error: /invalid code|oauth error|failed to exchange/i.test(out) ? "Claude didn't accept the code. Start again." : undefined,
         };
       },
-      input: (text) => `${text.trim()}\r`,
+      // Claude treats a full-length code plus Enter in one read as a paste, swallowing Enter.
+      // Let its input handler finish the paste before sending the submit key separately.
+      input: (text) => text.trim(),
+      submit: "\r",
+      async finish() {
+        throw new Error("Claude exited without issuing a token. Start again.");
+      },
       async onToken(token) {
         writeSecret(cfg.claudeTokenFile, token);
         return "Saved. Claude jobs use it from their next run (it lasts a year).";
@@ -293,6 +299,11 @@ export class SignInRunner {
     s.answered = true;
     s.child.stdin.write(s.d.input(text));
     this.send(s, { status: "waiting", url: undefined, code: undefined, prompt: undefined, message: "Checking…" });
+    if (s.d.submit) {
+      s.submitTimer = setTimeout(() => {
+        if (!s.done && s.child.exitCode === null) s.child.stdin.write(s.d.submit);
+      }, 250);
+    }
   }
 
   async closed(s, code) {
@@ -317,6 +328,7 @@ export class SignInRunner {
     if (s.done) return;
     s.done = true;
     clearTimeout(s.timer);
+    clearTimeout(s.submitTimer);
     if (s.child && s.child.exitCode === null) s.child.kill("SIGTERM");
     try {
       s.cleanup?.();
