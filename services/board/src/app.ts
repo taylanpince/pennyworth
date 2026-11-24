@@ -336,6 +336,8 @@ export function createApp(opts: AppOptions): Server {
       // The crew works in sub-tasks of the user's task (D-45).
       issue.assigneeUserId === ctx.me ? pc.children(issue.id).catch(() => []) : Promise.resolve([] as Issue[]),
     ]);
+    // Opening a task reads it and its agents' parts at once; its subtasks are tasks of their own.
+    for (const i of [issue, ...kids.filter((k) => !isSubtask(k, issue))]) store.markSeen(i.id);
     const crewInput = { assignees: ctx.assignees, seen: (id: string) => store.seenAt(id), working: busy.map, jobs: latestJobs(shared.runner) };
     const crew = crewOf(issue, kids, crewInput);
     // Its subtasks (D-68), each with its own crew. Their parts come from the board's lists, not a read per subtask.
@@ -354,7 +356,6 @@ export function createApp(opts: AppOptions): Server {
         }),
       ),
     );
-    store.markSeen(issue.id);
     const placement = store.placements().get(issue.id);
     const rec = store.recurring(issue.id);
     return {

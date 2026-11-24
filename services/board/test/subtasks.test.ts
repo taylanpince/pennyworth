@@ -86,6 +86,21 @@ describe("subtasks on the board (D-68)", () => {
     expect(cards[0]!.crew!.map((m) => m.agent)).toEqual([ADA]);
   });
 
+  it("opening a task reads its agents' parts, not its subtasks", async () => {
+    const at = new Date().toISOString();
+    issues.push(make({ parentId: task.id, assigneeAgentId: ADA, lastActivityAt: at }));
+    a1.lastActivityAt = at;
+    const states = async () => {
+      const board = await call("GET", "/api/board");
+      return (Object.values(board.json.buckets).flat() as { crew?: { state: string }[] }[])[0]!.crew!.map((m) => m.state);
+    };
+    expect(await states()).toEqual(["needs"]);
+    const view = await call("GET", `/api/issues/${task.identifier}`);
+    expect(view.json.crew.map((m: { state: string }) => m.state)).toEqual(["done"]);
+    expect(view.json.subtasks.map((s: { unread: boolean }) => s.unread)).toEqual([true, false]);
+    expect(await states()).toEqual(["done"]);
+  });
+
   it("adds a subtask, but never under a subtask", async () => {
     const res = await call("POST", `/api/issues/${task.identifier}/subtasks`, { title: "A3: isolate signers" });
     expect(res.status).toBe(200);
