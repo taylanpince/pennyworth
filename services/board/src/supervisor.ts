@@ -49,7 +49,8 @@ export function supervisorInstructions(instructions: string, why: string): strin
 }
 
 /** Why an assignment can't be made, or undefined when it can. */
-export function supervisorRefusal({ issue, agentName, assignees, parts, recent, now = Date.now() }: { issue: Issue; agentName: string; assignees: Assignee[]; parts: Issue[]; recent: SupervisorAssignment[]; now?: number }): string | undefined {
+export function supervisorRefusal({ issue, bucket, agentName, assignees, parts, recent, now = Date.now() }: { issue: Issue; bucket: Bucket; agentName: string; assignees: Assignee[]; parts: Issue[]; recent: SupervisorAssignment[]; now?: number }): string | undefined {
+  if (bucket === "triage") return `${issue.identifier} is in Triage: the user hasn't sorted it yet`;
   const agent = assignees.find((a) => a.kind !== "me" && a.persona?.name.toLowerCase() === agentName.toLowerCase());
   if (!agent) return `no crew member is called ${agentName}: ${assignees.flatMap((a) => (a.kind !== "me" && a.persona ? [a.persona.name] : [])).join(", ")}`;
   if (sourceOf(issue) === "supervisor") return `${issue.identifier} is your own report`;
@@ -75,9 +76,9 @@ export function sourceOf(issue: Issue): string {
 const DAY = 24 * HOUR;
 const age = (iso: string, now: number) => Math.max(0, Math.floor((now - Date.parse(iso)) / DAY));
 
-/** The board for her: each column in the user's order, each card with what she needs to judge it. */
+/** The board for her: each column she may assign from (never Triage: the user hasn't sorted it), in the user's order, each card with what she needs to judge it. */
 export function supervisorView(buckets: Record<Bucket, Card[]>, issues: Map<string, Issue>, now = Date.now()) {
-  const order: Bucket[] = ["today", "tomorrow", "triage", "backlog", "later"];
+  const order: Bucket[] = ["today", "tomorrow", "backlog", "later"];
   return order.map((bucket) => ({
     column: bucket,
     tasks: (buckets[bucket] ?? []).map((c) => {

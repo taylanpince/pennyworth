@@ -593,7 +593,7 @@ export function createApp(opts: AppOptions): Server {
         const input = parse(SupervisorAssignSchema, body);
         const { ctx, issue } = await ownIssue(input.task);
         if (!usersOwn(issue, ctx) || closedIssue(issue)) throw new HttpError(400, "only the user's open tasks");
-        const refusal = supervisorRefusal({ issue, agentName: input.agent, assignees: ctx.assignees, parts: await pc.children(issue.id), recent: supervisorAssignments(store) });
+        const refusal = supervisorRefusal({ issue, bucket: store.placements().get(issue.id)?.bucket ?? "triage", agentName: input.agent, assignees: ctx.assignees, parts: await pc.children(issue.id), recent: supervisorAssignments(store) });
         if (refusal) throw new HttpError(400, refusal);
         const agent = ctx.assignees.find((a) => a.persona?.name.toLowerCase() === input.agent.toLowerCase())!;
         const part = await addToCrew(ctx, issue, agent, supervisorInstructions(input.instructions, input.why), {}, SUPERVISOR_MARKER);
