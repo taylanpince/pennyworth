@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { roleCredentials, writeProfiles } from "./aws.mjs";
@@ -66,6 +66,7 @@ export function drivers(cfg, deps = {}) {
   const exec = deps.run ?? run;
   const llm = (argv) => inDevshells(cfg.devshells.flake, [cfg.devshells.engine_shell], argv);
   let codexLogin;
+  let claudeLogin;
   const gh = {
     async command() {
       const status = await exec(["gh", "auth", "status", "--hostname", "github.com"]);
@@ -174,29 +175,41 @@ export function drivers(cfg, deps = {}) {
       command() {
         // setup-token is a TUI: give it a terminal (wide, so the link isn't wrapped) and a config dir of its own.
         const home = mkdtempSync(join(tmpdir(), "pennyworth-claude-signin-"));
+        claudeLogin = home;
         const tty = "stty cols 4000 rows 50; exec claude setup-token";
         // macOS ships BSD script: file first, then the command.
         const script = (deps.platform ?? process.platform) === "darwin" ? ["script", "-q", "/dev/null", "sh", "-c", tty] : ["script", "-qfec", tty, "/dev/null"];
         return {
-          argv: llm(script),
+          argv: llm(cfg.claudeAuth === "login" ? ["claude", "auth", "login", "--claudeai"] : script),
           env: { CLAUDE_CONFIG_DIR: home, BROWSER: "true" },
           cleanup: () => rmSync(home, { recursive: true, force: true }),
         };
       },
       read(out) {
         const token = lastMatch(out, /sk-ant-oat01-[A-Za-z0-9_-]{20,}/)?.[0];
-        if (token) return { token };
+        if (token && cfg.claudeAuth !== "login") return { token };
         return {
           url: lastMatch(out, /https:\/\/claude\.(?:com|ai)\/[^\s"'\x07\x1b]*oauth\/authorize\?[^\s"'\x07\x1b]*redirect_uri=https%3A%2F%2Fplatform\.claude\.com[^\s"'\x07\x1b]*/)?.[0],
           prompt: /paste\s*code/i.test(out) ? { label: "The code Claude shows after you approve", secret: false } : undefined,
-          error: /invalid code|oauth error|failed to exchange/i.test(out) ? "Claude didn't accept the code. Start again." : undefined,
+          error: /invalid code|oauth error|failed to exchange|login failed/i.test(out) ? "Claude didn't accept the code. Start again." : undefined,
         };
       },
       // Claude treats a full-length code plus Enter in one read as a paste, swallowing Enter.
       // Let its input handler finish the paste before sending the submit key separately.
-      input: (text) => text.trim(),
-      submit: "\r",
+      input: (text) => cfg.claudeAuth === "login" ? `${text.trim()}\n` : text.trim(),
+      submit: cfg.claudeAuth === "login" ? undefined : "\r",
       async finish() {
+        if (cfg.claudeAuth === "login") {
+          const file = join(claudeLogin, ".credentials.json");
+          const raw = existsSync(file) ? readFileSync(file, "utf8") : "";
+          let credential;
+          try { credential = JSON.parse(raw).claudeAiOauth; } catch {}
+          if (!credential?.accessToken || !credential?.refreshToken) throw new Error("Claude exited without saving a login. Start again.");
+          mkdirSync(cfg.claudeConfigDir, { recursive: true, mode: 0o700 });
+          // Copy credentials only: never adopt hooks, plugins or settings from a user's Claude home.
+          writeSecret(join(cfg.claudeConfigDir, ".credentials.json"), raw);
+          return "Signed in. Claude jobs use this login from their next run.";
+        }
         throw new Error("Claude exited without issuing a token. Start again.");
       },
       async onToken(token) {

@@ -47,6 +47,19 @@ function fakeFetch(seen, { githubStatus = 200, openrouterLabel = "work" } = {}) 
 }
 
 describe("connection checks for Settings", () => {
+  it("checks Claude's configured login rather than an unused setup token", async () => {
+    const { cfg, dir, home } = setup();
+    cfg.claudeAuth = "login";
+    cfg.claudeConfigDir = join(dir, "claude");
+    mkdirSync(cfg.claudeConfigDir);
+    writeFileSync(cfg.claudeTokenFile, "unused-token");
+    const check = async () => (await checkConnections(cfg, { home, exec: async () => "octo", aws: async () => ({}) })).find((c) => c.id === "claude");
+    assert.equal((await check()).state, "missing");
+    writeFileSync(join(cfg.claudeConfigDir, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "access", refreshToken: "refresh" } }));
+    assert.equal((await check()).state, "ok");
+    assert.ok(!(JSON.stringify(await check()).includes("refresh")));
+  });
+
   it("checks channel reads when Slack's profile tool lacks scopes, without leaking channel data", async () => {
     const { secrets, home, cfg } = setup();
     writeFileSync(join(secrets, "slack_mcp_read_token"), "secret-value");

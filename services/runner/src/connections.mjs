@@ -141,6 +141,12 @@ export async function checkConnections(cfg, { fetchImpl = fetch, exec = run, aws
       return { state: "ok", accounts: results };
     }),
     add("claude", async () => {
+      if (cfg.claudeAuth === "login") {
+        let credential;
+        try { credential = JSON.parse(read(join(cfg.claudeConfigDir, ".credentials.json"))).claudeAiOauth; } catch {}
+        if (!credential?.accessToken || !credential?.refreshToken) return { state: "missing", detail: "no saved Claude login: reconnect from Settings" };
+        return { state: "ok", detail: "login saved; it's checked when a Claude job runs" };
+      }
       if (!read(cfg.claudeTokenFile)) return { state: "missing", detail: "no token: run claude setup-token" };
       return { state: "ok", detail: "token saved; it's checked when a Claude job runs" };
     }),

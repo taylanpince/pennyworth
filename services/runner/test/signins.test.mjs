@@ -140,6 +140,37 @@ describe("sign-ins from Settings (D-66)", () => {
     assert.deepEqual(reports.at(-1), { session: "f".repeat(24), status: "waiting", url: "https://auth.openai.com/codex/device", code: "Q7RT-9KXPL" });
   });
 
+  it("claude login: stages credentials, keeps the existing login on failure, and copies no settings", async () => {
+    const { cfg, reports, procs, spawnImpl, dir } = setup({ claudeAuth: "login" });
+    cfg.claudeConfigDir = join(dir, "runner-claude");
+    mkdirSync(cfg.claudeConfigDir);
+    const target = join(cfg.claudeConfigDir, ".credentials.json");
+    writeFileSync(target, "old");
+    writeFileSync(join(cfg.claudeConfigDir, "settings.json"), "trusted");
+    const r = new SignInRunner(cfg, (u) => reports.push(u), { spawnImpl });
+    const session = "e".repeat(24);
+    await r.handle({ session, kind: "start", provider: "claude" });
+    assert.deepEqual(procs[0].argv, ["claude", "auth", "login", "--claudeai"]);
+    await r.handle({ session, kind: "input", text: "code#state" });
+    assert.deepEqual(procs[0].stdin.written, ["code#state\n"]);
+    procs[0].exit(0);
+    await tick();
+    assert.equal(reports.at(-1).status, "failed");
+    assert.equal(readFileSync(target, "utf8"), "old");
+    await r.handle({ session, kind: "start", provider: "claude" });
+    const staged = procs[1].env.CLAUDE_CONFIG_DIR;
+    const saved = JSON.stringify({ claudeAiOauth: { accessToken: "access", refreshToken: "refresh" } });
+    writeFileSync(join(staged, ".credentials.json"), saved);
+    writeFileSync(join(staged, "settings.json"), "unwanted hooks");
+    procs[1].exit(0);
+    await tick();
+    assert.equal(reports.at(-1).status, "done");
+    assert.equal(readFileSync(target, "utf8"), saved);
+    assert.equal(statSync(target).mode & 0o777, 0o600);
+    assert.equal(readFileSync(join(cfg.claudeConfigDir, "settings.json"), "utf8"), "trusted");
+    assert.ok(!JSON.stringify(reports).includes("refresh"));
+  });
+
   it("claude: gives setup-token a terminal with the script syntax of the platform", async () => {
     const tty = "stty cols 4000 rows 50; exec claude setup-token";
     for (const [platform, script] of [["linux", ["script", "-qfec", tty, "/dev/null"]], ["darwin", ["script", "-q", "/dev/null", "sh", "-c", tty]]]) {
